@@ -1,56 +1,83 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
-echo "🚀 Starting Home Server..."
+echo "🚀 Starting Home Server (no tmux mode)..."
 
-# Prevent Android from killing processes
 termux-wake-lock
+export NODE_OPTIONS="--max-old-space-size=192"
 
-# Limit Node memory (IMPORTANT)
-export NODE_OPTIONS="--max-old-space-size=256"
+# --- Helper: wait for port ---
+wait_for_port() {
+  local port=$1
+  local name=$2
 
-# --- Cleanup old processes ---
-pkill sshd 2>/dev/null
+  echo "⏳ Waiting for $name on port $port..."
+
+  for i in {1..20}; do
+    if ss -tuln | grep -q ":$port"; then
+      echo "✅ $name is running"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "❌ $name failed to start"
+  exit 1
+}
+
+# --- Cleanup ---
+echo "🧹 Cleaning old processes..."
 pkill node 2>/dev/null
 pkill filebrowser 2>/dev/null
 pkill nginx 2>/dev/null
 pkill ttyd 2>/dev/null
 
-# Kill old tmux session
-tmux kill-session -t homeserver 2>/dev/null
-
-# --- Create tmux session ---
-tmux new-session -d -s homeserver
+# ⚠️ Do NOT kill sshd
+# pkill sshd
 
 # --- SSH ---
-tmux send-keys -t homeserver "sshd" C-m
+echo "🔐 Checking SSH..."
+pgrep sshd > /dev/null || sshd
 sleep 1
 
-# --- Backend (Express) ---
-tmux split-window -h -t homeserver
-tmux send-keys -t homeserver "cd ~/home-server/server && node index.js > backend.log 2>&1" C-m
-sleep 2
+# --- Backend ---
+echo "🟢 Starting Backend..."
+cd ~/home-server/server
+node index.js > backend.log 2>&1 &
+wait_for_port 4000 "Backend"
 
 # --- Filebrowser ---
-tmux split-window -v -t homeserver
-tmux send-keys -t homeserver "filebrowser -d ~/filebrowser.db -r ~/nas -p 8080 -a 0.0.0.0 > filebrowser.log 2>&1" C-m
-sleep 2
+echo "📁 Starting Filebrowser..."
+filebrowser -d ~/filebrowser.db -r ~/nas -p 8080 -a 0.0.0.0 > filebrowser.log 2>&1 &
+wait_for_port 8080 "Filebrowser"
 
 # --- Nginx ---
-tmux split-window -v -t homeserver
-tmux send-keys -t homeserver "nginx -c ~/home-server/nginx.conf" C-m
-sleep 2
+echo "🌐 Starting Nginx..."
+nginx -c ~/home-server/nginx.conf
+wait_for_port 8088 "Nginx"
 
-# --- Terminal (ttyd) ---
-tmux split-window -v -t homeserver
-tmux send-keys -t homeserver "ttyd -p 7681 bash -l" C-m
-sleep 2
+# --- Terminal ---
+echo "💻 Starting Terminal..."
+ttyd -p 7681 bash -l > ttyd.log 2>&1 &
+wait_for_port 7681 "Terminal"
 
-# --- Next.js (PRODUCTION MODE) ---
-tmux split-window -v -t homeserver
-tmux send-keys -t homeserver "cd ~/home-server/dashboard && npm run build && npm start > frontend.log 2>&1" C-m
+# 🧠 Delay before frontend
+echo "⏳ Waiting before frontend..."
+sleep 10
 
-# --- Attach ---
-echo "✅ All services started"
-echo "🌐 Access: http://192.168.1.69:8088"
+# --- Frontend (NO BUILD) ---
+echo "⚛️ Starting Frontend..."
+cd ~/home-server/dashboard
+npm start > frontend.log 2>&1 &
 
-tmux attach -t homeserver
+wait_for_port 3000 "Frontend" || echo "⚠️ Frontend failed (system still usable)"
+
+# --- Done ---
+echo ""
+echo "✅ Home Server Started"
+echo "🌐 Dashboard: http://192.168.1.69:8088"
+echo "📁 Files:     http://192.168.1.69:8088/files"
+echo "💻 Terminal:  http://192.168.1.69:8088/term"
+echo ""
+
+# --- Keep script alive ---
+wait
