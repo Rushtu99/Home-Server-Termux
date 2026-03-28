@@ -6,14 +6,33 @@ npm-debug.log*
 .next/
 out/
 
-# Logs
+# Runtime logs and state
 *.log
+logs/
+runtime/
+*.pid
+nginx.pid
+
+# Filebrowser DB
+filebrowser.db
+dashboard/filebrowser.db
+
+# Research tooling
+research/
+tools/
+
+# Local validation artifacts
+.auth*
+.dash.cookies
+.files.*
+.term.*
+.verify.*
+.ttyd.out
+nohup.out
+log.txt
 
 # OS
 .DS_Store
 
 # Termux / temp
 *.tmp
-
-# Filebrowser DB (optional)
-filebrowser.db
