@@ -1,26 +1,58 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0c0d14;
+  --foreground: #eceaf1;
+  --panel-bg: #111827;
+  --panel-border: #352357;
+  --panel-glow: rgba(38, 22, 61, 0.4);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-sora);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Sora", "Segoe UI", sans-serif;
+  height: 100vh;
+  margin: 0;
+  overflow: hidden;
+}
+
+html {
+  height: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.tool-page {
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  padding: 16px;
+  background: radial-gradient(120% 100% at 10% 0%, #1a1230 0%, #0d0f18 52%, #090b12 100%);
+}
+
+.tool-header {
+  margin: 0 0 12px;
+  color: #f1f2f8;
+  font-size: 1.5rem;
+}
+
+.tool-frame {
+  width: 100%;
+  height: calc(100vh - 90px);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: #0d1118;
+  box-shadow: 0 0 0 1px rgba(0, 245, 255, 0.08), 0 14px 30px var(--panel-glow);
 }

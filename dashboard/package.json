@@ -2,13 +2,13 @@
   "name": "dashboard",
   "version": "0.1.0",
   "private": true,
-"scripts": {
-  "dev": "next dev --webpack --hostname 0.0.0.0",
-  "build": "next build --webpack",
-  "start": "next start -H 0.0.0.0"
-},
+  "description": "Home server operations dashboard",
+  "scripts": {
+    "dev": "next dev --webpack --hostname 0.0.0.0",
+    "build": "next build --webpack",
+    "start": "next start -H 0.0.0.0"
+  },
   "dependencies": {
-    "axios": "^1.14.0",
     "next": "16.2.1",
     "react": "19.2.4",
     "react-dom": "19.2.4"

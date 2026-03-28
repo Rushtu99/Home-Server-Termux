@@ -1,19 +1,17 @@
 'use client';
+import { useMemo } from 'react';
 
 export default function TerminalPage() {
-  return (
-    <div style={{ height: '100vh', width: '100%' }}>
-      <h1 style={{ padding: '10px' }}>💻 Terminal</h1>
+  const gatewayBase = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:8088`;
+  }, []);
 
-      <iframe
-        src="/term/"
-        style={{
-          width: '100%',
-          height: '90%',
-          border: 'none',
-          background: 'black',
-        }}
-      />
+  return (
+    <div className="tool-page">
+      <h1 className="tool-header">Terminal</h1>
+      <iframe title="Terminal" src={`${gatewayBase}/term/`} className="tool-frame" />
     </div>
   );
 }

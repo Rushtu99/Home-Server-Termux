@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# Bot guidance:
+# - Keep this script aligned with server/index.js service definitions.
+# - Prefer deterministic startup order with explicit port checks.
+
+set -euo pipefail
+
+echo "Starting Home Server (WSL mode)..."
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOME_SERVER_DIR="${HOME_SERVER_DIR:-$SCRIPT_DIR}"
+FILEBROWSER_ROOT="${FILEBROWSER_ROOT:-$HOME}"
+BUILD_NODE_OPTIONS="${BUILD_NODE_OPTIONS:---max-old-space-size=512}"
+RUNTIME_NODE_OPTIONS="${RUNTIME_NODE_OPTIONS:---max-old-space-size=256}"
+export NODE_OPTIONS="$RUNTIME_NODE_OPTIONS"
+
+wait_for_port() {
+  local port="$1"
+  local name="$2"
+
+  echo "Waiting for $name on port $port..."
+
+  for _ in {1..30}; do
+    if ss -tuln | grep -q ":$port\\b"; then
+      echo "$name is running"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "$name failed to start"
+  return 1
+}
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Please run start-wsl.sh as your normal user, not root."
+  exit 1
+fi
+
+echo "Fixing local permissions for cache files..."
+chmod -R u+rwX "$HOME_SERVER_DIR/dashboard" "$HOME_SERVER_DIR/server" 2>/dev/null || true
+
+echo "Cleaning old processes..."
+pkill -f "node index.js" 2>/dev/null || true
+pkill -f "next dev --webpack --hostname 0.0.0.0" 2>/dev/null || true
+pkill -f "next start -H 0.0.0.0" 2>/dev/null || true
+pkill -f "next-server" 2>/dev/null || true
+pkill nginx 2>/dev/null || true
+pkill filebrowser 2>/dev/null || true
+pkill ttyd 2>/dev/null || true
+
+echo "Starting Backend..."
+cd "$HOME_SERVER_DIR/server" || exit 1
+if [ ! -d "node_modules" ]; then
+  npm install --no-audit --no-fund >/dev/null 2>&1
+fi
+node index.js > backend.log 2>&1 &
+wait_for_port 4000 "Backend" || exit 1
+
+echo "Building Frontend..."
+cd "$HOME_SERVER_DIR/dashboard" || exit 1
+if [ ! -d "node_modules" ]; then
+  npm install --no-audit --no-fund >/dev/null 2>&1
+fi
+rm -rf .next
+FRONTEND_MODE="prod"
+if ! NODE_OPTIONS="$BUILD_NODE_OPTIONS" npm run build > frontend-build.log 2>&1; then
+  echo "Frontend build failed, falling back to dev mode. Check $HOME_SERVER_DIR/dashboard/frontend-build.log"
+  FRONTEND_MODE="dev"
+fi
+
+if [ "$FRONTEND_MODE" = "prod" ]; then
+  echo "Starting Frontend (production mode)..."
+  NODE_OPTIONS="$RUNTIME_NODE_OPTIONS" npm start > frontend.log 2>&1 &
+else
+  echo "Starting Frontend (dev fallback mode)..."
+  NODE_OPTIONS="$RUNTIME_NODE_OPTIONS" npm run dev > frontend.log 2>&1 &
+fi
+wait_for_port 3000 "Frontend" || exit 1
+
+if command -v nginx >/dev/null 2>&1; then
+  echo "Starting Nginx..."
+  mkdir -p "$HOME_SERVER_DIR/logs"
+  nginx -p "$HOME_SERVER_DIR" -c "$HOME_SERVER_DIR/nginx.conf" >/dev/null 2>&1 || true
+  wait_for_port 8088 "Nginx" || echo "Nginx failed to start"
+else
+  echo "Skipping Nginx (command not found)"
+fi
+
+if command -v filebrowser >/dev/null 2>&1; then
+  echo "Starting Filebrowser..."
+  filebrowser config set -d "$HOME_SERVER_DIR/filebrowser.db" --auth.method=noauth >/dev/null 2>&1 || true
+  filebrowser -d "$HOME_SERVER_DIR/filebrowser.db" -r "$FILEBROWSER_ROOT" -p 8080 -a 127.0.0.1 -b /files --noauth > filebrowser.log 2>&1 &
+  wait_for_port 8080 "Filebrowser" || echo "Filebrowser failed to start"
+fi
+
+if command -v ttyd >/dev/null 2>&1; then
+  echo "Starting ttyd..."
+  ttyd -W -i 127.0.0.1 -p 7681 bash -l > ttyd.log 2>&1 &
+  wait_for_port 7681 "ttyd" || echo "ttyd failed to start"
+fi
+
+HOST_IP=$(hostname -I 2>/dev/null | cut -d " " -f1)
+if [ -z "$HOST_IP" ]; then
+  HOST_IP="127.0.0.1"
+fi
+
+echo ""
+echo "Home Server Started (WSL)"
+echo "Dashboard direct: http://$HOST_IP:3000"
+echo "Dashboard via Nginx: http://$HOST_IP:8088"
+echo "API direct: http://$HOST_IP:4000/api/status"
+echo ""
+
+wait

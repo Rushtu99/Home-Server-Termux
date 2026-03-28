@@ -8,12 +8,21 @@ out/
 
 # Logs
 *.log
+logs/
 
 # OS
 .DS_Store
 
 # Termux / temp
 *.tmp
+*.pid
+nginx.pid
 
 # Filebrowser DB (optional)
 filebrowser.db
+dashboard/filebrowser.db
+
+# Web research artifacts
+research/
+# TOols
+tools/
