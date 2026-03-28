@@ -39,10 +39,17 @@ export default function Dashboard() {
 
   const fetchAll = async () => {
     try {
-      const [svc, m] = await Promise.all([
-        fetch(`${API}/services`).then(r => r.json()),
-        fetch(`${API}/monitor`).then(r => r.json()),
+      const [svcRes, monitorRes] = await Promise.all([
+        fetch(`${API}/services`),
+        fetch(`${API}/monitor`),
       ]);
+
+      if (!svcRes.ok || !monitorRes.ok) {
+        throw new Error('Failed to fetch dashboard data');
+      }
+
+      const svc = await svcRes.json();
+      const m = await monitorRes.json();
 
       setServices(svc);
       setMonitor(m);
@@ -65,7 +72,10 @@ export default function Dashboard() {
         body: JSON.stringify({ service, action }),
       });
 
-      if (!res.ok) console.error('Control failed');
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload.success === false) {
+        console.error('Control failed', payload);
+      }
     } catch (err) {
       console.error(err);
     }
