@@ -3,6 +3,7 @@
 USER_HOME="${USER_HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
 DRIVES_DIR="${DRIVES_DIR:-$USER_HOME/Drives}"
+DRIVES_STATE_DIR="${DRIVES_STATE_DIR:-$DRIVES_DIR/.state}"
 DRIVES_C_DIR="${DRIVES_C_DIR:-$DRIVES_DIR/C}"
 DRIVES_D_DIR="${DRIVES_D_DIR:-$DRIVES_DIR/D}"
 DRIVES_E_DIR="${DRIVES_E_DIR:-$DRIVES_DIR/E}"
@@ -36,7 +37,7 @@ block_device_exists() {
 }
 
 prepare_drives_root() {
-    mkdir -p "$DRIVES_DIR" "$DRIVES_PS4_DIR" "$MOUNT_RUNTIME_DIR"
+    mkdir -p "$DRIVES_DIR" "$DRIVES_STATE_DIR" "$MOUNT_RUNTIME_DIR"
 
     if [ ! -e "$DRIVES_C_DIR" ]; then
         mkdir -p "$DRIVES_C_DIR"

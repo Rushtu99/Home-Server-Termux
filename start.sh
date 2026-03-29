@@ -51,11 +51,19 @@ NGINX_PID_PATH="${NGINX_PID_PATH:-$RUNTIME_DIR/nginx.pid}"
 FILEBROWSER_DB_PATH="${FILEBROWSER_DB_PATH:-$RUNTIME_DIR/filebrowser.db}"
 SERVER_NODE_OPTIONS="${SERVER_NODE_OPTIONS:---max-old-space-size=192}"
 DASHBOARD_NODE_OPTIONS="${DASHBOARD_NODE_OPTIONS:---max-old-space-size=384}"
+BACKEND_BIND_HOST="${BACKEND_BIND_HOST:-127.0.0.1}"
+FILEBROWSER_BIND_HOST="${FILEBROWSER_BIND_HOST:-127.0.0.1}"
+TTYD_BIND_HOST="${TTYD_BIND_HOST:-127.0.0.1}"
+SSHD_BIND_HOST="${SSHD_BIND_HOST:-127.0.0.1}"
+SSHD_PORT="${SSHD_PORT:-8022}"
+ENABLE_SSHD="${ENABLE_SSHD:-false}"
+DRIVE_AGENT_CMD="${DRIVE_AGENT_CMD:-/data/data/com.termux/files/usr/bin/termux-drive-agent}"
 
 BACKEND_PID_PATH="${BACKEND_PID_PATH:-$RUNTIME_DIR/backend.pid}"
 FILEBROWSER_PID_PATH="${FILEBROWSER_PID_PATH:-$RUNTIME_DIR/filebrowser.pid}"
 FRONTEND_PID_PATH="${FRONTEND_PID_PATH:-$RUNTIME_DIR/frontend.pid}"
 TTYD_PID_PATH="${TTYD_PID_PATH:-$RUNTIME_DIR/ttyd.pid}"
+SSHD_PID_PATH="${SSHD_PID_PATH:-$RUNTIME_DIR/sshd.pid}"
 
 mkdir -p "$LOG_DIR" "$RUNTIME_DIR" "$MOUNT_RUNTIME_DIR"
 START_LOG="$LOG_DIR/start.log"
@@ -100,27 +108,33 @@ wait_for_port() {
     local port="$1"
     local name="$2"
     local pid_file="${3:-}"
+    local host="${4:-127.0.0.1}"
     local attempts=0
     local pid=""
 
-    log_info "Waiting for $name on port $port"
+    log_info "Waiting for $name on $host:$port"
     while true; do
-        if port_is_open "$port"; then
-            log_info "$name is up on port $port"
+        if command -v nc >/dev/null 2>&1; then
+            nc -z "$host" "$port" >/dev/null 2>&1 && {
+                log_info "$name is up on $host:$port"
+                return 0
+            }
+        elif [ "$host" = "127.0.0.1" ] && port_is_open "$port"; then
+            log_info "$name is up on $host:$port"
             return 0
         fi
 
         if [ -n "$pid_file" ] && [ -f "$pid_file" ]; then
             pid="$(cat "$pid_file" 2>/dev/null || true)"
             if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-                log_error "$name exited before opening port $port"
+                log_error "$name exited before opening $host:$port"
                 return 1
             fi
         fi
 
         attempts=$((attempts + 1))
         if [ $((attempts % 5)) -eq 0 ]; then
-            log_info "Still waiting for $name on port $port"
+            log_info "Still waiting for $name on $host:$port"
         fi
         sleep 1
     done
@@ -215,18 +229,45 @@ stop_drive_watcher() {
     fi
 }
 
+run_drive_agent_scan() {
+    if [ ! -x "$DRIVE_AGENT_CMD" ]; then
+        log_info "termux-drive-agent not installed; only C will be present until the agent is added"
+        return 0
+    fi
+
+    if "$DRIVE_AGENT_CMD" scan >/dev/null 2>&1; then
+        log_info "termux-drive-agent synced removable drive state"
+    else
+        log_warn "termux-drive-agent scan failed; check ~/.termux/logs/termux-drive-agent.log"
+    fi
+}
+
+stop_repo_sshd() {
+    stop_pidfile_process "sshd" "$SSHD_PID_PATH"
+
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        return 0
+    fi
+
+    if pgrep sshd >/dev/null 2>&1; then
+        log_info "Stopping public sshd instances to keep nginx as the only exposed entrypoint"
+        pkill sshd >/dev/null 2>&1 || true
+    fi
+}
+
 start_background_command() {
     local name="$1"
     local port="$2"
     local pid_file="$3"
     local command_string="$4"
+    local host="${5:-127.0.0.1}"
     local pid=""
 
     log_info "Starting $name"
     bash -lc "$command_string" &
     pid=$!
     printf '%s\n' "$pid" > "$pid_file"
-    wait_for_port "$port" "$name" "$pid_file"
+    wait_for_port "$port" "$name" "$pid_file" "$host"
 }
 
 detect_host_ip() {
@@ -256,8 +297,7 @@ warn_conflicting_boot_scripts
 
 stop_drive_watcher
 prepare_drives_root
-report_mount_status "D" "$DRIVES_D_DIR" "ntfs" "$(mount_external_drive "D" "$DRIVES_D_DIR" "ntfs" "$D_SOURCE" "$D_UUID" "$D_LABEL")"
-report_mount_status "E" "$DRIVES_E_DIR" "exfat" "$(mount_external_drive "E" "$DRIVES_E_DIR" "exfat" "$E_SOURCE" "$E_UUID" "$E_LABEL")"
+run_drive_agent_scan
 
 if command -v termux-wake-lock >/dev/null 2>&1; then
     termux-wake-lock
@@ -268,32 +308,47 @@ stop_pidfile_process "backend" "$BACKEND_PID_PATH"
 stop_pidfile_process "frontend" "$FRONTEND_PID_PATH"
 stop_pidfile_process "filebrowser" "$FILEBROWSER_PID_PATH"
 stop_pidfile_process "ttyd" "$TTYD_PID_PATH"
+stop_pidfile_process "sshd" "$SSHD_PID_PATH"
 stop_repo_nginx
 
 stop_matching_process "backend" "$PROJECT/server/index.js"
+stop_matching_process "backend" "node $PROJECT/server/index.js"
 stop_matching_process "frontend" "next start -H 0.0.0.0"
+stop_matching_process "frontend" "next start -H 127.0.0.1"
 stop_matching_process "frontend" "next dev --webpack --hostname 0.0.0.0"
+stop_matching_process "frontend" "next dev --webpack --hostname 127.0.0.1"
 stop_matching_process "frontend" "next-server"
 stop_matching_process "filebrowser" "filebrowser -d $FILEBROWSER_DB_PATH"
-stop_matching_process "ttyd" "ttyd -W -i 127.0.0.1 -p 7681 -w $PROJECT"
+stop_matching_process "ttyd" "ttyd -W -i $TTYD_BIND_HOST -p 7681 -w $PROJECT"
 
 log_info "Checking SSH"
-if command -v sshd >/dev/null 2>&1; then
-    pgrep sshd >/dev/null 2>&1 || sshd
+if [ "$ENABLE_SSHD" = "true" ] && command -v sshd >/dev/null 2>&1; then
+    stop_repo_sshd
+    start_background_command \
+        "sshd" \
+        "$SSHD_PORT" \
+        "$SSHD_PID_PATH" \
+        "mkdir -p '$LOG_DIR'; exec sshd -D -E '$LOG_DIR/sshd.log' -o ListenAddress='$SSHD_BIND_HOST' -o Port='$SSHD_PORT' > '$LOG_DIR/sshd-stdout.log' 2>&1" \
+        "$SSHD_BIND_HOST"
+else
+    stop_repo_sshd
+    log_info "sshd disabled in single-port mode"
 fi
 
 start_background_command \
     "Backend" \
     4000 \
     "$BACKEND_PID_PATH" \
-    "mkdir -p '$LOG_DIR'; cd '$PROJECT/server' && export NODE_OPTIONS='$SERVER_NODE_OPTIONS'; exec node '$PROJECT/server/index.js' > '$LOG_DIR/backend.log' 2>&1"
+    "mkdir -p '$LOG_DIR'; cd '$PROJECT/server' && export NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST'; exec node '$PROJECT/server/index.js' > '$LOG_DIR/backend.log' 2>&1" \
+    "$BACKEND_BIND_HOST"
 
 if command -v filebrowser >/dev/null 2>&1; then
     start_background_command \
         "FileBrowser" \
         8080 \
         "$FILEBROWSER_PID_PATH" \
-        "mkdir -p '$RUNTIME_DIR' '$LOG_DIR' '$FILESYSTEM_ROOT'; filebrowser config set -d '$FILEBROWSER_DB_PATH' --auth.method=noauth >/dev/null 2>&1 || true; exec filebrowser -d '$FILEBROWSER_DB_PATH' -r '$FILESYSTEM_ROOT' -p 8080 -a 127.0.0.1 -b /files --noauth > '$LOG_DIR/filebrowser.log' 2>&1"
+        "mkdir -p '$RUNTIME_DIR' '$LOG_DIR' '$FILESYSTEM_ROOT'; filebrowser config set -d '$FILEBROWSER_DB_PATH' --auth.method=noauth >/dev/null 2>&1 || true; exec filebrowser -d '$FILEBROWSER_DB_PATH' -r '$FILESYSTEM_ROOT' -p 8080 -a '$FILEBROWSER_BIND_HOST' -b /files --noauth > '$LOG_DIR/filebrowser.log' 2>&1" \
+        "$FILEBROWSER_BIND_HOST"
 else
     log_warn "Skipping FileBrowser (command not found)"
 fi
@@ -312,7 +367,8 @@ if command -v ttyd >/dev/null 2>&1; then
         "ttyd" \
         7681 \
         "$TTYD_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; exec ttyd -W -i 127.0.0.1 -p 7681 -w '$PROJECT' bash -l > '$LOG_DIR/ttyd.log' 2>&1"
+        "mkdir -p '$LOG_DIR'; exec ttyd -W -i '$TTYD_BIND_HOST' -p 7681 -w '$PROJECT' bash -l > '$LOG_DIR/ttyd.log' 2>&1" \
+        "$TTYD_BIND_HOST"
 else
     log_warn "Skipping ttyd (command not found)"
 fi
@@ -322,13 +378,15 @@ if [ -f "$PROJECT/dashboard/.next/BUILD_ID" ]; then
         "Frontend" \
         3000 \
         "$FRONTEND_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS'; exec npm start > '$LOG_DIR/frontend.log' 2>&1"
+        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS'; exec npm start > '$LOG_DIR/frontend.log' 2>&1" \
+        "127.0.0.1"
 else
     start_background_command \
         "Frontend" \
         3000 \
         "$FRONTEND_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS'; exec npm run dev > '$LOG_DIR/frontend.log' 2>&1"
+        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS'; exec npm run dev > '$LOG_DIR/frontend.log' 2>&1" \
+        "127.0.0.1"
 fi
 
 HOST_IP="$(detect_host_ip)"

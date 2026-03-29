@@ -10,6 +10,7 @@ const net = require('net');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 const jwt = require('jsonwebtoken');
 const ftp = require('basic-ftp');
+const { createAppDb, normalizeUsername, verifyPassword } = require('./app-db');
 
 const ENV_FILE = path.resolve(__dirname, '.env');
 if (typeof loadEnvFile === 'function' && fs.existsSync(ENV_FILE)) {
@@ -54,16 +55,30 @@ const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'Dr
 const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
 const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || path.join(FILEBROWSER_ROOT, 'PS4');
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
+const APP_DB_PATH = process.env.APP_DB_PATH || path.join(RUNTIME_DIR, 'app.db');
 const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pid');
 const FILEBROWSER_DB = process.env.FILEBROWSER_DB_PATH || path.join(RUNTIME_DIR, 'filebrowser.db');
 const FILEBROWSER_PID = process.env.FILEBROWSER_PID_PATH || path.join(RUNTIME_DIR, 'filebrowser.pid');
 const TTYD_PID = process.env.TTYD_PID_PATH || path.join(RUNTIME_DIR, 'ttyd.pid');
 const FTP_PID = process.env.FTP_PID_PATH || path.join(RUNTIME_DIR, 'ftp.pid');
+const SSHD_PID = process.env.SSHD_PID_PATH || path.join(RUNTIME_DIR, 'sshd.pid');
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const PORT = Number(process.env.PORT || 4000);
-const DASHBOARD_USER = process.env.DASHBOARD_USER || 'admin';
-const DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
-const ADMIN_ACTION_PASSWORD = process.env.ADMIN_ACTION_PASSWORD || DASHBOARD_PASS;
+const BACKEND_BIND_HOST = process.env.BACKEND_BIND_HOST || '127.0.0.1';
+const FILEBROWSER_BIND_HOST = process.env.FILEBROWSER_BIND_HOST || '127.0.0.1';
+const TTYD_BIND_HOST = process.env.TTYD_BIND_HOST || '127.0.0.1';
+const FTP_BIND_HOST = process.env.FTP_BIND_HOST || '127.0.0.1';
+const FTP_SERVER_PORT = Number(process.env.FTP_SERVER_PORT || 2121);
+const DRIVE_AGENT_CMD = process.env.DRIVE_AGENT_CMD || '/data/data/com.termux/files/usr/bin/termux-drive-agent';
+const DRIVE_STATE_PATH = process.env.DRIVE_STATE_PATH || path.join(FILEBROWSER_ROOT, '.state', 'drives.json');
+const DRIVE_EVENTS_PATH = process.env.DRIVE_EVENTS_PATH || path.join(FILEBROWSER_ROOT, '.state', 'drive-events.jsonl');
+const DRIVE_REFRESH_INTERVAL_MS = Math.max(60000, Number(process.env.DRIVE_REFRESH_INTERVAL_MS || 60000) || 60000);
+const SSHD_BIND_HOST = process.env.SSHD_BIND_HOST || '127.0.0.1';
+const SSHD_PORT = Number(process.env.SSHD_PORT || 8022);
+const ENABLE_SSHD = process.env.ENABLE_SSHD === 'true';
+const BOOTSTRAP_DASHBOARD_USER = normalizeUsername(process.env.DASHBOARD_USER || 'admin') || 'admin';
+const BOOTSTRAP_DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
+const ADMIN_ACTION_PASSWORD = process.env.ADMIN_ACTION_PASSWORD || BOOTSTRAP_DASHBOARD_PASS;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
 const TOKEN_TTL = process.env.TOKEN_TTL || '12h';
 const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'hs_jwt';
@@ -91,6 +106,16 @@ const stopPidfileProcess = (pidPath, fallback = '') =>
 const checkPidfileProcess = (pidPath, fallback = '') =>
   `test -f "${pidPath}" && kill -0 "$(cat "${pidPath}")" >/dev/null 2>&1${fallback ? ` || ${fallback}` : ''}`;
 const detachCommand = (pidPath, command) => `nohup sh -c '${command}' >/dev/null 2>&1 & echo $! > "${pidPath}"`;
+const appDb = createAppDb({ dbPath: APP_DB_PATH });
+const adminBootstrap = appDb.bootstrapAdmin({
+  username: BOOTSTRAP_DASHBOARD_USER,
+  password: BOOTSTRAP_DASHBOARD_PASS,
+  role: 'admin',
+});
+
+if (adminBootstrap.seeded) {
+  console.info(`[auth] Seeded initial admin user '${adminBootstrap.username}' in ${APP_DB_PATH}`);
+}
 
 if (CORS_ORIGIN) {
   const allowList = CORS_ORIGIN
@@ -128,39 +153,48 @@ const SERVICES = {
     stop: `if [ -f "${NGINX_PID}" ]; then ${NGINX_CMD} -s quit >/dev/null 2>&1 || true; fi; pkill -f '${NGINX_MATCH}' 2>/dev/null || true; rm -f "${NGINX_PID}"`,
     restart: `if [ -f "${NGINX_PID}" ]; then ${NGINX_CMD} -s quit >/dev/null 2>&1 || true; fi; pkill -f '${NGINX_MATCH}' 2>/dev/null || true; rm -f "${NGINX_PID}"; mkdir -p "${ROOT_DIR}/logs" "${RUNTIME_DIR}" && ${NGINX_CMD}`,
     check: `test -f "${NGINX_PID}" && kill -0 "$(cat "${NGINX_PID}")"`,
+    host: '127.0.0.1',
     port: 8088,
     binary: 'nginx',
   },
   filebrowser: {
-    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
+    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a "${FILEBROWSER_BIND_HOST}" -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
     stop: stopPidfileProcess(FILEBROWSER_PID),
-    restart: `${stopPidfileProcess(FILEBROWSER_PID)}; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
+    restart: `${stopPidfileProcess(FILEBROWSER_PID)}; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a "${FILEBROWSER_BIND_HOST}" -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
     check: checkPidfileProcess(FILEBROWSER_PID),
+    host: FILEBROWSER_BIND_HOST,
     port: 8080,
     binary: 'filebrowser',
   },
   ttyd: {
-    start: `mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
+    start: `mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i "${TTYD_BIND_HOST}" -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
     stop: stopPidfileProcess(TTYD_PID),
-    restart: `${stopPidfileProcess(TTYD_PID)}; mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
+    restart: `${stopPidfileProcess(TTYD_PID)}; mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i "${TTYD_BIND_HOST}" -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
     check: checkPidfileProcess(TTYD_PID),
+    host: TTYD_BIND_HOST,
     port: 7681,
     binary: 'ttyd',
   },
   sshd: {
-    start: 'sshd',
-    stop: 'pkill sshd 2>/dev/null || true',
-    restart: 'pkill sshd 2>/dev/null || true; sshd',
-    check: 'pgrep sshd',
-    port: 8022,
+    start: ENABLE_SSHD
+      ? `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" && ${detachCommand(SSHD_PID, `exec sshd -D -E "${ROOT_DIR}/logs/sshd.log" -o ListenAddress="${SSHD_BIND_HOST}" -o Port="${SSHD_PORT}" > "${ROOT_DIR}/logs/sshd-stdout.log" 2>&1`)}`
+      : 'echo "sshd disabled in single-port mode"',
+    stop: stopPidfileProcess(SSHD_PID),
+    restart: ENABLE_SSHD
+      ? `${stopPidfileProcess(SSHD_PID)}; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" && ${detachCommand(SSHD_PID, `exec sshd -D -E "${ROOT_DIR}/logs/sshd.log" -o ListenAddress="${SSHD_BIND_HOST}" -o Port="${SSHD_PORT}" > "${ROOT_DIR}/logs/sshd-stdout.log" 2>&1`)}`
+      : 'echo "sshd disabled in single-port mode"',
+    check: checkPidfileProcess(SSHD_PID),
+    host: SSHD_BIND_HOST,
+    port: SSHD_PORT,
     binary: 'sshd',
   },
   ftp: {
-    start: `mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec python3 -m pyftpdlib -p 2121 -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; elif command -v busybox >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec busybox tcpsvd -vE 0.0.0.0 2121 busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
+    start: `mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec python3 -m pyftpdlib -i "${FTP_BIND_HOST}" -p "${FTP_SERVER_PORT}" -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; elif command -v busybox >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec busybox tcpsvd -vE "${FTP_BIND_HOST}" "${FTP_SERVER_PORT}" busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
     stop: stopPidfileProcess(FTP_PID),
-    restart: `${stopPidfileProcess(FTP_PID)}; mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec python3 -m pyftpdlib -p 2121 -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; elif command -v busybox >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec busybox tcpsvd -vE 0.0.0.0 2121 busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
+    restart: `${stopPidfileProcess(FTP_PID)}; mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec python3 -m pyftpdlib -i "${FTP_BIND_HOST}" -p "${FTP_SERVER_PORT}" -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; elif command -v busybox >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec busybox tcpsvd -vE "${FTP_BIND_HOST}" "${FTP_SERVER_PORT}" busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
     check: checkPidfileProcess(FTP_PID),
-    port: 2121,
+    host: FTP_BIND_HOST,
+    port: FTP_SERVER_PORT,
     binary: 'python3',
   },
 };
@@ -174,7 +208,7 @@ const loginAttempts = new Map();
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 const MAX_DEBUG_EVENTS = 300;
 let cpuSnapshot = null;
-let verboseLoggingEnabled = false;
+let verboseLoggingEnabled = appDb.getBooleanSetting('logging.verboseEnabled', false);
 const serviceStateCache = {};
 let ftpProviderCache = {
   checkedAt: 0,
@@ -310,6 +344,15 @@ const commandExists = async (cmd) => {
   }
 };
 
+const fileIsExecutable = (filePath) => {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const detectFtpProvider = async (forceRefresh = false) => {
   const now = Date.now();
   if (!forceRefresh && now - ftpProviderCache.checkedAt < 10000) {
@@ -344,6 +387,10 @@ const getControlledServiceNames = async () => {
 
   for (const name of Object.keys(SERVICES)) {
     if (name === 'nginx') {
+      continue;
+    }
+
+    if (name === 'sshd' && !ENABLE_SSHD) {
       continue;
     }
 
@@ -415,7 +462,7 @@ const checkService = async (svc) => {
     return true;
   }
 
-  return isPortOpen(svc.port);
+  return isPortOpen(svc.port, svc.host || '127.0.0.1');
 };
 
 const waitForServiceState = async (svc, shouldBeRunning, attempts = 10, delayMs = 300) => {
@@ -438,6 +485,10 @@ const pollServiceStateTransitions = async () => {
   }
 
   for (const [name, svc] of Object.entries(SERVICES)) {
+    if (name === 'sshd' && !ENABLE_SSHD) {
+      continue;
+    }
+
     if (name === 'ftp' && !(await detectFtpProvider())) {
       continue;
     }
@@ -468,8 +519,8 @@ if (JWT_SECRET === 'change-this-in-production' || JWT_SECRET.length < 32) {
   console.warn('[security] JWT_SECRET is using an insecure default or is too short; set a long random secret in server/.env');
 }
 
-if (DASHBOARD_PASS === 'admin123') {
-  console.warn('[security] DASHBOARD_PASS is using the default credential; change it in server/.env');
+if (adminBootstrap.seeded && BOOTSTRAP_DASHBOARD_PASS === 'admin123') {
+  console.warn('[security] DASHBOARD_PASS is using the default bootstrap credential; change it in server/.env before first run');
 }
 
 const pruneLoginAttempts = () => {
@@ -544,14 +595,16 @@ const invalidateSessionFromToken = (token) => {
   }
 };
 
-const createSession = (req) => {
+const createSession = (req, user) => {
   pruneSessions();
 
   const sessionId = crypto.randomUUID();
   const now = Date.now();
   const session = {
     id: sessionId,
-    username: DASHBOARD_USER,
+    role: user.role,
+    userId: user.id,
+    username: user.username,
     createdAtMs: now,
     lastSeenAtMs: now,
     ip: normalizeIp(req.ip || req.socket?.remoteAddress || ''),
@@ -561,7 +614,7 @@ const createSession = (req) => {
   activeSessions.set(sessionId, session);
 
   const sessionsForUser = [...activeSessions.values()]
-    .filter((entry) => entry.username === DASHBOARD_USER)
+    .filter((entry) => entry.userId === user.id)
     .sort((a, b) => a.lastSeenAtMs - b.lastSeenAtMs);
 
   while (sessionsForUser.length > MAX_ACTIVE_SESSIONS) {
@@ -997,6 +1050,64 @@ const getLogsSnapshot = () => ({
   verboseLoggingEnabled,
 });
 
+const readJsonFile = (filePath, fallbackValue) => {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallbackValue;
+  }
+};
+
+const readJsonLines = (filePath, limit = 80) => {
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(-limit)
+      .reverse()
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
+const normalizeDriveEntry = (entry = {}) => ({
+  device: String(entry.device || ''),
+  dirName: String(entry.dirName || ''),
+  error: String(entry.error || ''),
+  filesystem: String(entry.filesystem || ''),
+  letter: String(entry.letter || ''),
+  mountPoint: String(entry.mountPoint || ''),
+  name: String(entry.name || ''),
+  rawMountPoint: String(entry.rawMountPoint || ''),
+  state: String(entry.state || 'unknown'),
+  uuid: String(entry.uuid || ''),
+});
+
+const getDriveSnapshot = async () => {
+  const agentInstalled = fileIsExecutable(DRIVE_AGENT_CMD) || await commandExists(DRIVE_AGENT_CMD);
+  const rawManifest = readJsonFile(DRIVE_STATE_PATH, {});
+
+  return {
+    agentInstalled,
+    checkedAt: new Date().toISOString(),
+    events: readJsonLines(DRIVE_EVENTS_PATH, 80),
+    manifest: {
+      generatedAt: typeof rawManifest.generatedAt === 'string' ? rawManifest.generatedAt : null,
+      intervalMs: Math.max(60000, Number(rawManifest.intervalMs || DRIVE_REFRESH_INTERVAL_MS) || DRIVE_REFRESH_INTERVAL_MS),
+      drives: Array.isArray(rawManifest.drives) ? rawManifest.drives.map(normalizeDriveEntry) : [],
+    },
+    refreshIntervalMs: DRIVE_REFRESH_INTERVAL_MS,
+  };
+};
+
 const getDashboardSnapshot = async () => {
   const [services, monitor, storage] = await Promise.all([
     getServicesSnapshot(),
@@ -1121,8 +1232,8 @@ app.use((req, res, next) => {
   next();
 });
 
-const issueToken = (sessionId) => jwt.sign(
-  { sub: DASHBOARD_USER, role: 'admin', jti: sessionId },
+const issueToken = (session) => jwt.sign(
+  { sub: session.username, role: session.role, uid: session.userId, jti: session.id },
   JWT_SECRET,
   { algorithm: 'HS256', expiresIn: TOKEN_TTL }
 );
@@ -1178,10 +1289,14 @@ const loginHandler = (req, res) => {
     return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
   }
 
-  const validUser = secureCompare(username || '', DASHBOARD_USER);
-  const validPass = secureCompare(password || '', DASHBOARD_PASS);
+  const authUser = appDb.findUserByUsername(username);
+  const validPass = Boolean(
+    authUser &&
+    !authUser.isDisabled &&
+    verifyPassword(password || '', authUser.passwordHash)
+  );
 
-  if (!validUser || !validPass) {
+  if (!validPass) {
     const usernameHint = (username || '(empty)').slice(0, 2);
     const attempt = registerLoginFailure(req);
     pushDebugEvent('warn', 'Dashboard login failed', { usernameHint: `${usernameHint}***` }, true);
@@ -1194,11 +1309,11 @@ const loginHandler = (req, res) => {
   clearLoginFailures(req);
   invalidateSessionFromToken(readToken(req));
 
-  const session = createSession(req);
-  const token = issueToken(session.id);
+  const session = createSession(req, authUser);
+  const token = issueToken(session);
   setAuthCookie(res, token, req);
 
-  pushDebugEvent('info', 'Dashboard login success', { username: DASHBOARD_USER }, true);
+  pushDebugEvent('info', 'Dashboard login success', { username: authUser.username, role: authUser.role }, true);
   return res.json({
     success: true,
     expiresIn: TOKEN_TTL,
@@ -1207,7 +1322,7 @@ const loginHandler = (req, res) => {
       idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
       absoluteTimeoutMs: SESSION_ABSOLUTE_TIMEOUT_MS,
     },
-    user: { username: DASHBOARD_USER, role: 'admin' },
+    user: { username: authUser.username, role: authUser.role },
   });
 };
 
@@ -1220,8 +1335,8 @@ const meHandler = (req, res) => {
       lastSeenAt: req.session ? new Date(req.session.lastSeenAtMs).toISOString() : null,
     },
     user: {
-      username: req.user?.sub || DASHBOARD_USER,
-      role: req.user?.role || 'admin',
+      username: req.user?.sub || req.session?.username || BOOTSTRAP_DASHBOARD_USER,
+      role: req.user?.role || req.session?.role || 'admin',
     },
   });
 };
@@ -1349,6 +1464,7 @@ const loggingGetHandler = (req, res) => {
 
 const loggingPostHandler = (req, res) => {
   verboseLoggingEnabled = Boolean(req.body?.enabled);
+  appDb.setSetting('logging.verboseEnabled', verboseLoggingEnabled ? 'true' : 'false');
   pushDebugEvent('info', verboseLoggingEnabled ? 'Verbose logging enabled' : 'Verbose logging disabled', null, true);
   res.json({
     success: true,
@@ -1364,6 +1480,28 @@ const dashboardHandler = async (req, res) => {
   } catch (err) {
     pushDebugEvent('error', 'Dashboard snapshot failed', { error: String(err) }, true);
     res.status(500).json({ error: 'Unable to build dashboard snapshot' });
+  }
+};
+
+const drivesHandler = async (req, res) => {
+  res.json(await getDriveSnapshot());
+};
+
+const drivesCheckHandler = async (req, res) => {
+  const agentInstalled = fileIsExecutable(DRIVE_AGENT_CMD) || await commandExists(DRIVE_AGENT_CMD);
+  if (!agentInstalled) {
+    return res.status(503).json({ error: 'termux-drive-agent is not installed', agentInstalled: false });
+  }
+
+  try {
+    await runCommand(`${DRIVE_AGENT_CMD} scan`);
+    const payload = await getDriveSnapshot();
+    pushDebugEvent('info', 'Drive agent scan requested', { count: payload.manifest.drives.length }, true);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    const error = String(err || 'Drive scan failed');
+    pushDebugEvent('error', 'Drive agent scan failed', { error }, true);
+    return res.status(500).json({ error, ...(await getDriveSnapshot()) });
   }
 };
 
@@ -1507,6 +1645,10 @@ app.get('/logging', requireAuth, loggingGetHandler);
 app.get('/api/logging', requireAuth, loggingGetHandler);
 app.post('/logging', requireAuth, loggingPostHandler);
 app.post('/api/logging', requireAuth, loggingPostHandler);
+app.get('/drives', requireAuth, drivesHandler);
+app.get('/api/drives', requireAuth, drivesHandler);
+app.post('/drives/check', requireAuth, drivesCheckHandler);
+app.post('/api/drives/check', requireAuth, drivesCheckHandler);
 app.get('/ftp/defaults', requireAuth, ftpDefaultsHandler);
 app.get('/api/ftp/defaults', requireAuth, ftpDefaultsHandler);
 app.post('/ftp/list', requireAuth, ftpListHandler);
@@ -1533,9 +1675,9 @@ app.use((err, req, res, next) => {
 
 /* ---------------- START ---------------- */
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Backend running on port ${PORT}`);
-  pushDebugEvent('info', 'Backend loaded', { port: PORT }, true);
+app.listen(PORT, BACKEND_BIND_HOST, () => {
+  console.log(`🚀 Backend running on ${BACKEND_BIND_HOST}:${PORT}`);
+  pushDebugEvent('info', 'Backend loaded', { host: BACKEND_BIND_HOST, port: PORT }, true);
 });
 
 setInterval(() => {

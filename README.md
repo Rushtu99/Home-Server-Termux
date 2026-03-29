@@ -9,13 +9,13 @@ Termux-first home server stack for Android, with optional Linux/WSL contributor 
 - Services: FileBrowser, ttyd, sshd, optional local FTP server, remote FTP client tab
 
 ## Runtime Ports
-- `3000` dashboard frontend
-- `4000` backend API
-- `8088` nginx gateway
-- `8080` FileBrowser, bound to localhost
-- `7681` ttyd, bound to localhost
-- `8022` sshd
-- `2121` common remote FTP port for PS4 GoldHEN and the optional local FTP server provider
+- `8088` nginx gateway, intended as the only network-exposed entrypoint
+- `3000` dashboard frontend, bound to loopback
+- `4000` backend API, bound to loopback
+- `8080` FileBrowser, bound to loopback
+- `7681` ttyd, bound to loopback
+- `8022` sshd, disabled by default in single-port mode
+- `2121` optional local FTP server, bound to loopback when enabled
 
 ## Quick Start (Termux)
 ```bash
@@ -26,9 +26,10 @@ bash start.sh
 
 `start.sh` loads `server/.env`, prepares `~/Drives` as the file-system root, and:
 - bind-mounts Android shared storage at `~/Drives/C`
-- auto-mounts the first detected external NTFS partition at `~/Drives/D` with `ntfs-3g`
-- auto-mounts the first detected external exFAT partition at `~/Drives/E` and remaps permissions through `bindfs`
-- keeps `~/Drives/PS4` as the local mirror target for the PS4 FTP client
+- keeps removable-drive ownership outside the repo through `termux-drive-agent`
+- treats `C` as the only always-present drive until the external agent detects and mounts removable storage
+- binds the dashboard/backend/helper services to loopback so nginx on `:8088` is the default public entrypoint
+- triggers the external `termux-drive-agent` to refresh removable drive mounts and write `~/Drives/.state/drives.json`
 
 FileBrowser serves `~/Drives`, and ttyd opens in `~/home-server`.
 Run `start.sh` from the normal Termux app user, not from a root shell.
@@ -39,18 +40,14 @@ If Android enumerates your external disks differently, you can override the sour
 D_SOURCE=/dev/block/sde1 E_SOURCE=/dev/block/sdf1 bash start.sh
 ```
 
-The default automount now prefers stable identifiers instead of shifting device names:
-- `D` prefers UUID `16BA8F9DBA8F784F` and label `Rushtu 4TB`
-- `E` prefers UUID `8097-A8C4` and label `T exFAT 2TB`
-
-You can override those in `server/.env` or the shell with `D_UUID`, `E_UUID`, `D_LABEL`, and `E_LABEL`.
-
 ## Drive Mounting
-`start.sh` mounts the drives once during startup:
-- NTFS to `~/Drives/D` with `ntfs-3g`
-- exFAT to `~/Drives/E` through `bindfs`
+`termux-drive-agent` now owns removable-drive detection and mount cleanup:
+- it installs to `/data/data/com.termux/files/usr/bin/termux-drive-agent`
+- it writes `~/Drives/.state/drives.json` and `~/Drives/.state/drive-events.jsonl`
+- it names connected removable drives as `D (Label)`, `E (Label)`, `F (Label)`, and so on
+- it removes those directories when the underlying device disconnects or is unmounted
 
-If Android has not exposed the disks as block devices yet, rerun `bash start.sh` after reconnecting the drives.
+`start.sh` only prepares `C` and asks the external agent for one sync pass. The continuous 60s retry loop is expected to come from the Termux:Boot launcher at `~/.termux/boot/termux-drive-agent.sh`.
 
 For boot-time startup with Termux:Boot, run:
 
@@ -79,11 +76,12 @@ This requires `tools/agent-browser-workspace` to exist locally. Output is writte
 
 ## Auth and Security
 - Dashboard login uses JWT.
-- Backend uses the httpOnly auth cookie for the dashboard and tracks active sessions server-side.
+- Backend uses the httpOnly auth cookie for the dashboard, stores users/settings in the embedded SQLite app DB, and tracks active sessions server-side.
 - nginx protects `/files` and `/term` through `auth_request` against `/api/auth/verify`.
 - Service control requires `ADMIN_ACTION_PASSWORD`.
 - nginx is excluded from dashboard controls to avoid self-lockout.
-- FileBrowser and ttyd stay on loopback so only nginx is externally exposed.
+- Dashboard, backend, FileBrowser, ttyd, and the optional local FTP server stay on loopback so only nginx is externally exposed by default.
+- sshd is disabled by default via `ENABLE_SSHD=false`; if you re-enable it, it binds to loopback unless you override `SSHD_BIND_HOST`.
 - Login attempts are rate-limited and sessions expire on idle and absolute timeouts.
 
 ## Backend Environment
@@ -93,11 +91,24 @@ Start from `server/.env.example`:
 PORT=4000
 CORS_ORIGIN=
 EXEC_SHELL=
+BACKEND_BIND_HOST=127.0.0.1
 FILEBROWSER_ROOT=/data/data/com.termux/files/home/Drives
+FILEBROWSER_BIND_HOST=127.0.0.1
 RUNTIME_DIR=/data/data/com.termux/files/home/home-server/runtime
+APP_DB_PATH=/data/data/com.termux/files/home/home-server/runtime/app.db
 FILEBROWSER_DB_PATH=/data/data/com.termux/files/home/home-server/runtime/filebrowser.db
 SERVER_NODE_OPTIONS=--max-old-space-size=192
 DASHBOARD_NODE_OPTIONS=--max-old-space-size=384
+TTYD_BIND_HOST=127.0.0.1
+FTP_BIND_HOST=127.0.0.1
+FTP_SERVER_PORT=2121
+DRIVE_AGENT_CMD=/data/data/com.termux/files/usr/bin/termux-drive-agent
+DRIVE_STATE_PATH=/data/data/com.termux/files/home/Drives/.state/drives.json
+DRIVE_EVENTS_PATH=/data/data/com.termux/files/home/Drives/.state/drive-events.jsonl
+DRIVE_REFRESH_INTERVAL_MS=60000
+ENABLE_SSHD=false
+SSHD_BIND_HOST=127.0.0.1
+SSHD_PORT=8022
 DRIVE_DETECT_RETRIES=6
 DRIVE_DETECT_DELAY=1
 JWT_SECRET=replace-with-a-long-random-secret
@@ -116,6 +127,10 @@ FTP_CLIENT_PORT=2121
 FTP_CLIENT_USER=anonymous
 FTP_CLIENT_SECURE=false
 ```
+
+`DASHBOARD_USER` and `DASHBOARD_PASS` now act as first-run bootstrap credentials for the embedded app DB. Once the initial admin user is seeded, later logins come from `runtime/app.db`.
+
+Removable disks are now expected to be managed by the external `termux-drive-agent`, which installs to `/data/data/com.termux/files/usr/bin/termux-drive-agent` and writes a manifest plus event log under `~/Drives/.state/`.
 
 ## Validation Commands
 ```bash
