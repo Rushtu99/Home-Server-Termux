@@ -597,11 +597,6 @@ export default function Dashboard() {
       return;
     }
 
-    if (!controlPassword.trim()) {
-      setControlStatus('Enter admin password to continue');
-      return;
-    }
-
     const { service, action } = controlTarget;
     const key = `${service}:${action}`;
     setControlStatus('');
@@ -611,7 +606,11 @@ export default function Dashboard() {
       const res = await authFetch(`${API}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service, action, adminPassword: controlPassword }),
+        body: JSON.stringify({
+          service,
+          action,
+          ...(controlPassword.trim() ? { adminPassword: controlPassword } : {}),
+        }),
       });
 
       if (res.status === 401) {
@@ -1627,7 +1626,7 @@ export default function Dashboard() {
             >
               <h3 id="control-dialog-title" style={{ marginTop: 0 }}>Confirm Service Action</h3>
               <p id="control-dialog-copy" style={styles.smallLabel}>
-                Enter admin password to <strong>{controlTarget.action}</strong> <strong>{controlTarget.service}</strong>.
+                Confirm you want to <strong>{controlTarget.action}</strong> <strong>{controlTarget.service}</strong>. Admin session access is required. The password field is optional step-up confirmation.
               </p>
               <TextField
                 id="control-password"

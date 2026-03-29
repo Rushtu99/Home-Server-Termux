@@ -40,10 +40,13 @@ type DrivePayload = {
 };
 
 type FsEntry = {
+  accessLevel?: 'deny' | 'read' | 'write' | string;
   editable: boolean;
   modifiedAt: string;
   name: string;
   path: string;
+  shareId?: number;
+  shareSourceType?: string;
   size: number;
   type: string;
 };
@@ -58,6 +61,14 @@ type FsPayload = {
   entries: FsEntry[];
   path: string;
   root: string;
+  share: null | {
+    accessLevel: 'deny' | 'read' | 'write' | string;
+    id: number;
+    isReadOnly: boolean;
+    name: string;
+    pathKey: string;
+    sourceType: string;
+  };
 };
 
 type FsClipboard = {
@@ -84,6 +95,7 @@ const EMPTY_FS: FsPayload = {
   entries: [],
   path: '',
   root: '',
+  share: null,
 };
 
 const formatTimestamp = (value: string | null) => {
@@ -138,16 +150,27 @@ const normalizeFsPayload = (payload: Partial<FsPayload> | null | undefined): FsP
     : [{ label: 'Drives', path: '' }],
   entries: Array.isArray(payload?.entries)
     ? payload.entries.map((entry) => ({
+        accessLevel: String(entry?.accessLevel || ''),
         editable: entry?.editable !== false,
         modifiedAt: String(entry?.modifiedAt || ''),
         name: String(entry?.name || ''),
         path: String(entry?.path || ''),
+        shareId: entry?.shareId ? Number(entry.shareId) : undefined,
+        shareSourceType: entry?.shareSourceType ? String(entry.shareSourceType) : undefined,
         size: Number(entry?.size || 0),
         type: String(entry?.type || 'file'),
       }))
     : [],
   path: String(payload?.path || ''),
   root: String(payload?.root || ''),
+  share: payload?.share ? {
+    accessLevel: String(payload.share.accessLevel || ''),
+    id: Number(payload.share.id || 0),
+    isReadOnly: Boolean(payload.share.isReadOnly),
+    name: String(payload.share.name || ''),
+    pathKey: String(payload.share.pathKey || ''),
+    sourceType: String(payload.share.sourceType || 'folder'),
+  } : null,
 });
 
 const topLevelName = (value: string) => value.split('/').filter(Boolean)[0] || value;
@@ -161,6 +184,7 @@ export default function FilesPage() {
   const [manualBusy, setManualBusy] = useState(false);
   const [browserBusy, setBrowserBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [driveAccessDenied, setDriveAccessDenied] = useState(false);
   const [showDriveLog, setShowDriveLog] = useState(false);
   const [selectedPath, setSelectedPath] = useState('');
   const [search, setSearch] = useState('');
@@ -170,10 +194,15 @@ export default function FilesPage() {
 
   const loadDriveState = async () => {
     const res = await fetch(`${API}/drives`, { credentials: 'include' });
+    if (res.status === 403) {
+      setDriveAccessDenied(true);
+      return EMPTY_PAYLOAD;
+    }
     if (!res.ok) {
       throw new Error(res.status === 401 ? 'Login required to read drive state' : 'Unable to read drive state');
     }
 
+    setDriveAccessDenied(false);
     return normalizeDrivePayload(await res.json());
   };
 
@@ -187,15 +216,16 @@ export default function FilesPage() {
 
       const suffix = query.toString() ? `?${query.toString()}` : '';
       const res = await fetch(`${API}/fs/list${suffix}`, { credentials: 'include' });
+      const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(res.status === 401 ? 'Login required to read files' : 'Unable to load files');
+        throw new Error(String(payload?.error || (res.status === 401 ? 'Login required to read files' : 'Unable to load files')));
       }
 
-      const payload = normalizeFsPayload(await res.json());
+      const normalizedPayload = normalizeFsPayload(payload);
       startTransition(() => {
-        setBrowser(payload);
+        setBrowser(normalizedPayload);
         setBrowserError('');
-        if (!options?.preserveSelection || !payload.entries.some((entry) => entry.path === selectedPath)) {
+        if (!options?.preserveSelection || !normalizedPayload.entries.some((entry) => entry.path === selectedPath)) {
           setSelectedPath('');
         }
       });
@@ -254,6 +284,11 @@ export default function FilesPage() {
         credentials: 'include',
       });
 
+      if (res.status === 403) {
+        setDriveAccessDenied(true);
+        setLoadError('Drive management is available to admins only.');
+        return;
+      }
       if (!res.ok) {
         throw new Error(res.status === 401 ? 'Login required to run a drive check' : 'Drive check failed');
       }
@@ -286,16 +321,30 @@ export default function FilesPage() {
   };
 
   const createFolder = async () => {
-    const name = window.prompt('Folder name');
+    const label = browser.path === '' ? 'Share name' : 'Folder name';
+    const name = window.prompt(label);
     if (!name) {
       return;
     }
 
     try {
-      await runFsCommand('/fs/mkdir', { name, path: browser.path });
+      if (browser.path === '') {
+        const res = await fetch(`${API}/shares`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(String(payload?.error || 'Unable to create share'));
+        }
+      } else {
+        await runFsCommand('/fs/mkdir', { name, path: browser.path });
+      }
       await loadDirectory(browser.path, { preserveSelection: true });
     } catch (error) {
-      setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to create folder'));
+      setBrowserError(String(error instanceof Error ? error.message : error || `Unable to create ${browser.path === '' ? 'share' : 'folder'}`));
     }
   };
 
@@ -423,7 +472,9 @@ export default function FilesPage() {
   };
 
   const drives = driveState.manifest.drives;
-  const statusText = !driveState.agentInstalled
+  const statusText = driveAccessDenied
+    ? 'Drive management is admin-only. Share browsing remains available for accounts with share access.'
+    : !driveState.agentInstalled
     ? 'termux-drive-agent is not installed yet. Only C will appear until the agent is available.'
     : drives.length > 0
       ? `${drives.length} removable drive${drives.length === 1 ? '' : 's'} detected.`
@@ -435,6 +486,9 @@ export default function FilesPage() {
     : browser.entries;
   const directoryCount = filteredEntries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink').length;
   const fileCount = filteredEntries.length - directoryCount;
+  const canWriteCurrentFolder = browser.path === ''
+    ? false
+    : browser.share?.accessLevel === 'write' && browser.share?.isReadOnly !== true;
   const quickLinks = browser.path === ''
     ? browser.entries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink')
     : browser.entries
@@ -449,9 +503,11 @@ export default function FilesPage() {
           <p>Custom explorer over `~/Drives`, with drive-state controls, direct uploads, and local file actions instead of the embedded FileBrowser UI.</p>
         </div>
         <div className="tool-toolbar__actions">
-          <button className="ui-button ui-button--primary" type="button" onClick={runManualCheck} disabled={manualBusy}>
-            {manualBusy ? 'Checking…' : 'Check Drives'}
-          </button>
+          {!driveAccessDenied ? (
+            <button className="ui-button ui-button--primary" type="button" onClick={runManualCheck} disabled={manualBusy}>
+              {manualBusy ? 'Checking…' : 'Check Drives'}
+            </button>
+          ) : null}
           <button className="ui-button" type="button" onClick={() => void loadDirectory(browser.path, { preserveSelection: true })} disabled={browserBusy}>
             {browserBusy ? 'Refreshing…' : 'Refresh Folder'}
           </button>
@@ -466,15 +522,18 @@ export default function FilesPage() {
               <p className="tool-banner__meta">Last agent scan: {formatTimestamp(driveState.manifest.generatedAt)}</p>
               <p className="tool-banner__meta">Last page refresh: {formatTimestamp(driveState.checkedAt)}</p>
             </div>
-            <div className="tool-inline-actions">
-              <button className="ui-button" type="button" onClick={() => setShowDriveLog((value) => !value)}>
-                {showDriveLog ? 'Hide Drive Log' : 'Show Drive Log'}
-              </button>
-            </div>
+            {!driveAccessDenied ? (
+              <div className="tool-inline-actions">
+                <button className="ui-button" type="button" onClick={() => setShowDriveLog((value) => !value)}>
+                  {showDriveLog ? 'Hide Drive Log' : 'Show Drive Log'}
+                </button>
+              </div>
+            ) : null}
           </div>
           {loadError ? <p className="status-message status-message--error">{loadError}</p> : null}
         </div>
 
+        {!driveAccessDenied ? (
         <div className="tool-card-grid">
           <article className="tool-card">
             <p className="tool-card__eyebrow">Internal</p>
@@ -497,8 +556,9 @@ export default function FilesPage() {
             </article>
           ))}
         </div>
+        ) : null}
 
-        {showDriveLog ? (
+        {showDriveLog && !driveAccessDenied ? (
           <div className="tool-log-shell">
             {driveState.events.length === 0 ? (
               <p className="tool-banner__meta">No drive agent events yet.</p>
@@ -543,7 +603,7 @@ export default function FilesPage() {
                   onClick={() => void loadDirectory(entry.path)}
                 >
                   <span>{entry.name}</span>
-                  <small>{entry.type === 'directory' || entry.type === 'symlink' ? 'folder' : 'file'}</small>
+                  <small>{browser.path === '' ? (entry.shareSourceType || 'share') : (entry.type === 'directory' || entry.type === 'symlink' ? 'folder' : 'file')}</small>
                 </button>
               ))}
             </div>
@@ -601,8 +661,10 @@ export default function FilesPage() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
-                <button className="ui-button" type="button" onClick={createFolder}>New Folder</button>
-                <button className="ui-button" type="button" onClick={handleUploadTrigger} disabled={uploadBusy}>
+                <button className="ui-button" type="button" onClick={createFolder} disabled={browser.path !== '' && !canWriteCurrentFolder}>
+                  {browser.path === '' ? 'New Share' : 'New Folder'}
+                </button>
+                <button className="ui-button" type="button" onClick={handleUploadTrigger} disabled={uploadBusy || !canWriteCurrentFolder}>
                   {uploadBusy ? 'Uploading…' : 'Upload File'}
                 </button>
                 <button className="ui-button" type="button" onClick={renameSelected} disabled={!selectedEntry || !selectedEntry.editable}>
@@ -631,6 +693,7 @@ export default function FilesPage() {
 
             <div className="fs-meta">
               <span>{browser.root || 'Resolving root…'}</span>
+              {browser.share ? <span>{browser.share.name} · {browser.share.accessLevel}{browser.share.isReadOnly ? ' · read-only share' : ''}</span> : <span>Shared folders</span>}
               <span>{filteredEntries.length} visible entr{filteredEntries.length === 1 ? 'y' : 'ies'}</span>
             </div>
 
@@ -644,7 +707,7 @@ export default function FilesPage() {
                   <small>Paste into {browser.breadcrumbs[browser.breadcrumbs.length - 1]?.label || 'current folder'}</small>
                 </div>
                 <div className="fs-browser-actions">
-                  <button className="ui-button ui-button--primary" type="button" onClick={() => void pasteClipboard()}>
+                  <button className="ui-button ui-button--primary" type="button" onClick={() => void pasteClipboard()} disabled={!canWriteCurrentFolder}>
                     Paste Here
                   </button>
                   <button className="ui-button" type="button" onClick={() => setClipboard(null)}>
@@ -681,7 +744,7 @@ export default function FilesPage() {
 
                       <div className="fs-browser-meta">
                         <span>{isDirectory ? '—' : formatBytes(entry.size)}</span>
-                        <span>{entry.editable ? 'editable' : 'protected'}</span>
+                        <span>{browser.path === '' ? `${entry.shareSourceType || 'share'} · ${entry.accessLevel || 'read'}` : entry.editable ? 'editable' : 'protected'}</span>
                       </div>
 
                       <div className="fs-browser-actions">

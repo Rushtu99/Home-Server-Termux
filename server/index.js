@@ -219,6 +219,9 @@ const timedCache = {
   storage: { expiresAt: 0, value: null, promise: null },
 };
 
+const ADMIN_ROLES = new Set(['admin']);
+const RECYCLE_BIN_NAME = '.recycle-bin';
+
 eventLoopDelay.enable();
 
 const pushDebugEvent = (level, message, meta = undefined, force = false) => {
@@ -236,6 +239,30 @@ const pushDebugEvent = (level, message, meta = undefined, force = false) => {
   if (debugEvents.length > MAX_DEBUG_EVENTS) {
     debugEvents.splice(0, debugEvents.length - MAX_DEBUG_EVENTS);
   }
+};
+
+const getRequestActor = (req) => ({
+  ip: normalizeIp(req?.ip || req?.socket?.remoteAddress || ''),
+  role: String(req?.user?.role || req?.session?.role || 'guest'),
+  sessionId: String(req?.session?.id || ''),
+  userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 200),
+  username: String(req?.user?.sub || req?.session?.username || 'anonymous'),
+});
+
+const mergeAuditMeta = (req, meta = undefined) => {
+  const actor = getRequestActor(req);
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    return { actor };
+  }
+
+  return {
+    actor,
+    ...meta,
+  };
+};
+
+const pushAuditEvent = (req, level, message, meta = undefined, force = true) => {
+  pushDebugEvent(level, message, mergeAuditMeta(req, meta), force);
 };
 
 const buildMarkdownLog = (limit = 60) => {
@@ -515,6 +542,10 @@ const pollServiceStateTransitions = async () => {
 
 if (JWT_SECRET === 'change-this-in-production' || JWT_SECRET.length < 32) {
   console.warn('[security] JWT_SECRET is using an insecure default or is too short; set a long random secret in server/.env');
+}
+
+if (!String(process.env.APP_AUTH_SECRET || '').trim()) {
+  console.warn('[security] APP_AUTH_SECRET is not set; FTP favourite secrets will fall back to JWT_SECRET-derived encryption');
 }
 
 if (adminBootstrap.seeded && BOOTSTRAP_DASHBOARD_PASS === 'admin123') {
@@ -1174,7 +1205,7 @@ const normalizeLocalRelativePath = (inputPath = '') =>
     .filter((part) => part && part !== '.' && part !== '..')
     .join(path.sep);
 
-const FS_HIDDEN_NAMES = new Set(['.state', 'filebrowser.db']);
+const FS_HIDDEN_NAMES = new Set(['.state', 'filebrowser.db', RECYCLE_BIN_NAME]);
 
 const ensureWithinRoot = (rootDir, candidatePath) => {
   const resolvedRoot = path.resolve(rootDir);
@@ -1198,13 +1229,140 @@ const resolveFsPath = (inputPath = '') => {
 
 const relativeSegments = (relativePath = '') => normalizeLocalRelativePath(relativePath).split(path.sep).filter(Boolean);
 
-const isProtectedFsPath = (relativePath = '') => {
+const buildHttpError = (statusCode, message) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+const accessLevelRank = {
+  deny: 0,
+  read: 1,
+  write: 2,
+};
+
+const normalizeAccessLevel = (value = '', fallbackValue = 'deny') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(accessLevelRank, normalized) ? normalized : fallbackValue;
+};
+
+const syncManagedShares = async () => {
+  const driveNames = await getDriveNames();
+  const ftpMountNames = new Set(appDb.listFtpFavourites().map((entry) => getFtpFavouriteRuntime(entry).mountName).filter(Boolean));
+  const topLevelEntries = fs.readdirSync(FILEBROWSER_ROOT, { encoding: 'utf8' }).filter((name) => !FS_HIDDEN_NAMES.has(name));
+  return appDb.syncShares(topLevelEntries.map((name) => ({
+    description: '',
+    isHidden: false,
+    isReadOnly: false,
+    name,
+    pathKey: name,
+    sourceType: ftpMountNames.has(name) ? 'remote' : driveNames.has(name) ? 'drive' : 'folder',
+  })));
+};
+
+const resolveShareAccessLevel = (share, req) => {
+  if (!share) {
+    return 'deny';
+  }
+
+  const role = getRequestRole(req);
+  if (share.isHidden && !ADMIN_ROLES.has(role)) {
+    return 'deny';
+  }
+
+  const username = String(req?.user?.sub || req?.session?.username || '').trim().toLowerCase();
+  const permissions = Array.isArray(share.permissions) ? share.permissions : [];
+  const userPermissions = permissions.filter((entry) => entry.subjectType === 'user' && String(entry.subjectKey || '').toLowerCase() === username);
+  if (userPermissions.length > 0) {
+    return normalizeAccessLevel(userPermissions[0].accessLevel);
+  }
+
+  const rolePermissions = permissions.filter((entry) => entry.subjectType === 'role' && String(entry.subjectKey || '').toLowerCase() === role);
+  if (rolePermissions.length > 0) {
+    return normalizeAccessLevel(rolePermissions[0].accessLevel);
+  }
+
+  return ADMIN_ROLES.has(role) ? 'write' : 'deny';
+};
+
+const getShareContext = async (relativePath = '', req) => {
+  const pathSegments = relativeSegments(relativePath);
+  if (pathSegments.length === 0) {
+    const shares = await syncManagedShares();
+    return {
+      accessLevel: 'read',
+      share: null,
+      shares,
+      topLevelPath: '',
+    };
+  }
+
+  const topLevelPath = pathSegments[0];
+  const shares = await syncManagedShares();
+  const share = shares.find((entry) => entry.pathKey === topLevelPath) || null;
+  if (!share) {
+    throw buildHttpError(404, 'Share not found');
+  }
+
+  const accessLevel = resolveShareAccessLevel(share, req);
+  if (accessLevel === 'deny') {
+    throw buildHttpError(403, 'You do not have access to this share');
+  }
+
+  return {
+    accessLevel,
+    share,
+    shares,
+    topLevelPath,
+  };
+};
+
+const ensureShareAccess = async (relativePath = '', req, requiredLevel = 'read') => {
+  const context = await getShareContext(relativePath, req);
+  if (relativeSegments(relativePath).length === 0) {
+    return context;
+  }
+
+  const normalizedRequiredLevel = normalizeAccessLevel(requiredLevel, 'read');
+  if ((accessLevelRank[context.accessLevel] || 0) < (accessLevelRank[normalizedRequiredLevel] || 0)) {
+    throw buildHttpError(403, normalizedRequiredLevel === 'write' ? 'This share is read-only for your account' : 'You do not have access to this share');
+  }
+
+  if (normalizedRequiredLevel === 'write' && context.share?.isReadOnly) {
+    throw buildHttpError(403, 'This share is read-only');
+  }
+
+  return context;
+};
+
+const getManagedFsRootNames = async () => {
+  const shares = await syncManagedShares();
+  return new Set(shares.map((entry) => entry.pathKey).filter(Boolean));
+};
+
+const isRecycleBinPath = (segments = []) => segments[0] === RECYCLE_BIN_NAME || segments[1] === RECYCLE_BIN_NAME;
+
+const shouldHideFsEntry = (relativePath = '') => {
+  const segments = relativeSegments(relativePath);
+  return segments[0] === RECYCLE_BIN_NAME || segments[1] === RECYCLE_BIN_NAME || (segments.length === 1 && FS_HIDDEN_NAMES.has(segments[0]));
+};
+
+const isProtectedFsPath = async (relativePath = '') => {
   const segments = relativeSegments(relativePath);
   if (segments.length === 0) {
     return true;
   }
 
-  return segments.length === 1 && (segments[0] === 'C' || FS_HIDDEN_NAMES.has(segments[0]));
+  if (segments.length === 1 && FS_HIDDEN_NAMES.has(segments[0])) {
+    return true;
+  }
+
+  if (isRecycleBinPath(segments)) {
+    return true;
+  }
+
+  const managedRoots = await getManagedFsRootNames();
+  return segments.length === 1 && managedRoots.has(segments[0]);
 };
 
 const getDriveNames = async () => {
@@ -1212,20 +1370,65 @@ const getDriveNames = async () => {
   return new Set(['C', ...snapshot.manifest.drives.map((drive) => drive.dirName).filter(Boolean)]);
 };
 
-const buildFsBreadcrumbs = (relativePath = '') => {
+const buildFsBreadcrumbs = (relativePath = '', share = null) => {
   const segments = relativeSegments(relativePath);
   const crumbs = [{ label: 'Drives', path: '' }];
   let currentPath = '';
 
-  for (const segment of segments) {
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
     currentPath = currentPath ? path.join(currentPath, segment) : segment;
     crumbs.push({
-      label: segment,
+      label: index === 0 && share ? share.name : segment,
       path: currentPath,
     });
   }
 
   return crumbs;
+};
+
+const withDeletedSuffix = (name, deletedAt) => {
+  const parsed = path.parse(name);
+  const suffix = `__deleted-${deletedAt}`;
+  return parsed.ext ? `${parsed.name}${suffix}${parsed.ext}` : `${name}${suffix}`;
+};
+
+const getUniqueRecycleTargetRelative = (relativePath = '') => {
+  const normalized = normalizeLocalRelativePath(relativePath);
+  const parsed = path.parse(normalized);
+  const parentRelative = parsed.dir || '';
+  const baseName = parsed.base || 'item';
+
+  let attempt = 0;
+  while (attempt < 1000) {
+    const candidateName = attempt === 0 ? baseName : `${path.parse(baseName).name}__${attempt}${path.parse(baseName).ext}`;
+    const candidateRelative = normalizeLocalRelativePath(path.join(parentRelative, candidateName));
+    if (!fs.existsSync(resolveFsPath(candidateRelative).absolutePath)) {
+      return candidateRelative;
+    }
+    attempt += 1;
+  }
+
+  throw new Error('Unable to reserve recycle-bin target');
+};
+
+const moveFsEntryToRecycleBin = (relativePath = '') => {
+  const source = resolveFsPath(relativePath);
+  const segments = relativeSegments(relativePath);
+  const deletedAt = new Date().toISOString().replace(/[:.]/g, '-');
+  const recycleRelativeBase = normalizeLocalRelativePath(path.join(
+    RECYCLE_BIN_NAME,
+    ...segments.slice(0, -1),
+    withDeletedSuffix(path.basename(relativePath), deletedAt)
+  ));
+  const recycleRelative = getUniqueRecycleTargetRelative(recycleRelativeBase);
+  const recycleAbsolute = resolveFsPath(recycleRelative).absolutePath;
+  fs.mkdirSync(path.dirname(recycleAbsolute), { recursive: true });
+  moveFsEntry(source.absolutePath, recycleAbsolute);
+  return {
+    path: recycleRelative,
+    recycledAt: new Date().toISOString(),
+  };
 };
 
 const describeFsType = (dirent, stat) => {
@@ -1244,8 +1447,36 @@ const describeFsType = (dirent, stat) => {
   return 'other';
 };
 
-const listFilesystemDirectory = async (inputPath = '') => {
+const listFilesystemDirectory = async (inputPath = '', req) => {
   const { absolutePath, relativePath } = resolveFsPath(inputPath);
+  const shareContext = await getShareContext(relativePath, req);
+
+  if (!relativePath) {
+    const entries = shareContext.shares
+      .filter((share) => !share.isHidden || ADMIN_ROLES.has(getRequestRole(req)))
+      .map((share) => ({
+        accessLevel: resolveShareAccessLevel(share, req),
+        editable: false,
+        modifiedAt: share.updatedAt || new Date().toISOString(),
+        name: share.name,
+        path: share.pathKey,
+        shareId: share.id,
+        shareSourceType: share.sourceType,
+        size: 0,
+        type: 'directory',
+      }))
+      .filter((entry) => entry.accessLevel !== 'deny')
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+    return {
+      breadcrumbs: buildFsBreadcrumbs(relativePath),
+      entries,
+      path: relativePath,
+      root: FILEBROWSER_ROOT,
+      share: null,
+    };
+  }
+
   if (!fs.existsSync(absolutePath)) {
     throw new Error('Directory not found');
   }
@@ -1255,21 +1486,22 @@ const listFilesystemDirectory = async (inputPath = '') => {
     throw new Error('Path is not a directory');
   }
 
-  const driveNames = await getDriveNames();
+  const managedRoots = await getManagedFsRootNames();
   const names = fs.readdirSync(absolutePath, { encoding: 'utf8' });
   const entries = names
-    .filter((name) => !FS_HIDDEN_NAMES.has(name))
+    .filter((name) => !shouldHideFsEntry(relativePath ? path.join(relativePath, name) : name))
     .map((name) => {
       const childAbsolute = path.join(absolutePath, name);
       const childRelative = relativePath ? path.join(relativePath, name) : name;
       const dirent = fs.lstatSync(childAbsolute);
       const resolvedStat = dirent.isSymbolicLink() ? fs.statSync(childAbsolute) : dirent;
       const type = describeFsType(dirent, resolvedStat);
-      const topLevel = relativeSegments(childRelative)[0] || name;
-      const protectedEntry = isProtectedFsPath(childRelative) || driveNames.has(topLevel);
+      const childSegments = relativeSegments(childRelative);
+      const protectedEntry = (childSegments.length === 1 && managedRoots.has(childSegments[0])) || shouldHideFsEntry(childRelative);
 
       return {
-        editable: !protectedEntry,
+        accessLevel: shareContext.accessLevel,
+        editable: shareContext.accessLevel === 'write' && !protectedEntry,
         modifiedAt: resolvedStat.mtime.toISOString(),
         name,
         path: childRelative,
@@ -1288,10 +1520,18 @@ const listFilesystemDirectory = async (inputPath = '') => {
     });
 
   return {
-    breadcrumbs: buildFsBreadcrumbs(relativePath),
+    breadcrumbs: buildFsBreadcrumbs(relativePath, shareContext.share),
     entries,
     path: relativePath,
     root: FILEBROWSER_ROOT,
+    share: shareContext.share ? {
+      accessLevel: shareContext.accessLevel,
+      id: shareContext.share.id,
+      isReadOnly: shareContext.share.isReadOnly,
+      name: shareContext.share.name,
+      pathKey: shareContext.share.pathKey,
+      sourceType: shareContext.share.sourceType,
+    } : null,
   };
 };
 
@@ -1299,11 +1539,6 @@ const ensureFsTargetAllowed = (relativePath = '') => {
   const segments = relativeSegments(relativePath);
   if (segments.length === 0) {
     throw new Error('Destination folder is required');
-  }
-
-  const topLevel = segments[0];
-  if (topLevel === 'C' || FS_HIDDEN_NAMES.has(topLevel)) {
-    throw new Error('This destination is protected');
   }
 };
 
@@ -1407,6 +1642,11 @@ const writeCloudMountRequest = (favourite, { includeSecrets = false } = {}) => {
   };
 
   fs.writeFileSync(runtime.helperRequestPath, `${JSON.stringify(payload, null, 2)}\n`);
+  try {
+    fs.chmodSync(runtime.helperRequestPath, 0o600);
+  } catch {
+    // Android/Termux may not honor chmod consistently across all mount contexts.
+  }
   return runtime.helperRequestPath;
 };
 
@@ -1580,8 +1820,12 @@ const getFtpFavouriteOrThrow = (id, { includeSecrets = false } = {}) => {
 };
 
 const mountFtpFavourite = async (favourite) => {
-  writeCloudMountRequest(favourite, { includeSecrets: true });
-  runCloudMountHelper(['mount', '--request', getFtpFavouriteRuntime(favourite).helperRequestPath]);
+  const requestPath = writeCloudMountRequest(favourite, { includeSecrets: true });
+  try {
+    runCloudMountHelper(['mount', '--request', requestPath]);
+  } finally {
+    writeCloudMountRequest(favourite, { includeSecrets: false });
+  }
   return getFtpMountState(favourite);
 };
 
@@ -1704,6 +1948,34 @@ const requireAuth = (req, res, next) => {
   }
 };
 
+const getRequestRole = (req) => String(req?.user?.role || req?.session?.role || 'user').toLowerCase();
+
+const buildPermissions = (req) => {
+  const role = getRequestRole(req);
+  const admin = ADMIN_ROLES.has(role);
+  return {
+    admin,
+    dashboard: admin,
+    drives: admin,
+    filesystemRead: true,
+    filesystemWrite: admin,
+    ftp: admin,
+    serviceControl: admin,
+  };
+};
+
+const requireRole = (...roles) => (req, res, next) => {
+  const role = getRequestRole(req);
+  if (roles.map((value) => String(value).toLowerCase()).includes(role)) {
+    return next();
+  }
+
+  pushAuditEvent(req, 'warn', 'Access denied', { requiredRoles: roles });
+  return res.status(403).json({ error: 'Forbidden' });
+};
+
+const requireAdmin = requireRole('admin');
+
 app.use((req, res, next) => {
   rememberConnection(req);
   next();
@@ -1799,6 +2071,7 @@ const loginHandler = (req, res) => {
       idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
       absoluteTimeoutMs: SESSION_ABSOLUTE_TIMEOUT_MS,
     },
+    permissions: buildPermissions({ user: { role: authUser.role } }),
     user: { username: authUser.username, role: authUser.role },
   });
 };
@@ -1811,6 +2084,7 @@ const meHandler = (req, res) => {
       createdAt: req.session ? new Date(req.session.createdAtMs).toISOString() : null,
       lastSeenAt: req.session ? new Date(req.session.lastSeenAtMs).toISOString() : null,
     },
+    permissions: buildPermissions(req),
     user: {
       username: req.user?.sub || req.session?.username || BOOTSTRAP_DASHBOARD_USER,
       role: req.user?.role || req.session?.role || 'admin',
@@ -1861,8 +2135,8 @@ const controlHandler = async (req, res) => {
     return res.status(400).json({ error: 'Invalid action' });
   }
 
-  if (!secureCompare(adminPassword || '', ADMIN_ACTION_PASSWORD)) {
-    pushDebugEvent('warn', 'Service control rejected (bad admin password)', { service, action }, true);
+  if (String(adminPassword || '').trim() && !secureCompare(adminPassword || '', ADMIN_ACTION_PASSWORD)) {
+    pushAuditEvent(req, 'warn', 'Service control rejected (bad admin password)', { service, action });
     return res.status(403).json({ error: 'Invalid admin password' });
   }
 
@@ -1870,12 +2144,12 @@ const controlHandler = async (req, res) => {
     const svc = SERVICES[service];
 
     if (['start', 'restart'].includes(action)) {
-      const install = await resolveServiceInstall(service, svc);
-      if (!install.available) {
-        const error = `Command '${install.label}' is not installed`;
-        pushDebugEvent('error', `${service} ${action} failed`, { error }, true);
-        return res.status(500).json({ error });
-      }
+        const install = await resolveServiceInstall(service, svc);
+        if (!install.available) {
+          const error = `Command '${install.label}' is not installed`;
+          pushAuditEvent(req, 'error', `${service} ${action} failed`, { error, service, action });
+          return res.status(500).json({ error });
+        }
     }
 
     const output = await runCommand(svc[action]);
@@ -1883,10 +2157,11 @@ const controlHandler = async (req, res) => {
     const running = await waitForServiceState(svc, expectedRunning);
     serviceStateCache[service] = classifyServiceState(running);
 
-    pushDebugEvent(
+    pushAuditEvent(
+      req,
       running === expectedRunning ? 'info' : 'warn',
       `${service} ${action} requested`,
-      { running, expectedRunning, output: output || '(no output)' }
+      { running, expectedRunning, output: output || '(no output)', service, action }
     );
     res.json({
       success: running === expectedRunning,
@@ -1899,7 +2174,7 @@ const controlHandler = async (req, res) => {
     const hint = errorText.includes('Operation not permitted')
       ? 'Permission denied while controlling service. Stop root-owned process first or run service as the same user.'
       : null;
-    pushDebugEvent('error', `${service} ${action} failed`, { error: errorText, hint }, true);
+    pushAuditEvent(req, 'error', `${service} ${action} failed`, { error: errorText, hint, service, action });
     res.status(500).json({ error: errorText, hint });
   }
 };
@@ -1943,7 +2218,7 @@ const loggingGetHandler = (req, res) => {
 const loggingPostHandler = (req, res) => {
   verboseLoggingEnabled = Boolean(req.body?.enabled);
   appDb.setSetting('logging.verboseEnabled', verboseLoggingEnabled ? 'true' : 'false');
-  pushDebugEvent('info', verboseLoggingEnabled ? 'Verbose logging enabled' : 'Verbose logging disabled', null, true);
+  pushAuditEvent(req, 'info', verboseLoggingEnabled ? 'Verbose logging enabled' : 'Verbose logging disabled');
   res.json({
     success: true,
     verboseLoggingEnabled,
@@ -1974,21 +2249,80 @@ const drivesCheckHandler = async (req, res) => {
   try {
     await runCommand(`${DRIVE_AGENT_CMD} scan`);
     const payload = await getDriveSnapshot();
-    pushDebugEvent('info', 'Drive agent scan requested', { count: payload.manifest.drives.length }, true);
+    pushAuditEvent(req, 'info', 'Drive agent scan requested', { count: payload.manifest.drives.length });
     return res.json({ success: true, ...payload });
   } catch (err) {
     const error = String(err || 'Drive scan failed');
-    pushDebugEvent('error', 'Drive agent scan failed', { error }, true);
+    pushAuditEvent(req, 'error', 'Drive agent scan failed', { error });
     return res.status(500).json({ error, ...(await getDriveSnapshot()) });
+  }
+};
+
+const sanitizeShareName = (value = '') => String(value || '').replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+
+const sharesHandler = async (req, res) => {
+  const shares = await syncManagedShares();
+  res.json({ shares });
+};
+
+const createShareHandler = async (req, res) => {
+  let createdPath = '';
+  try {
+    const name = sanitizeShareName(req.body?.name || '');
+    if (!name) {
+      return res.status(400).json({ error: 'Share name is required' });
+    }
+
+    const description = String(req.body?.description || '').trim();
+    const defaultRoleAccess = normalizeAccessLevel(req.body?.defaultRoleAccess || 'deny', 'deny');
+    const rawPathKey = normalizeLocalRelativePath(req.body?.pathKey || name);
+    const pathSegments = relativeSegments(rawPathKey);
+    if (pathSegments.length !== 1) {
+      return res.status(400).json({ error: 'Share paths must be a single top-level folder name' });
+    }
+    const pathKey = pathSegments[0];
+    if (!pathKey) {
+      return res.status(400).json({ error: 'Share path is required' });
+    }
+    if (FS_HIDDEN_NAMES.has(pathKey)) {
+      return res.status(400).json({ error: 'This share path is reserved' });
+    }
+
+    const targetPath = resolveFsPath(pathKey).absolutePath;
+    if (fs.existsSync(targetPath)) {
+      return res.status(400).json({ error: 'A share or folder with that path already exists' });
+    }
+
+    fs.mkdirSync(targetPath, { recursive: true });
+    createdPath = targetPath;
+    const share = appDb.createShare({
+      description,
+      name,
+      pathKey,
+      permissions: [
+        { subjectType: 'role', subjectKey: 'admin', accessLevel: 'write' },
+        { subjectType: 'role', subjectKey: 'user', accessLevel: defaultRoleAccess },
+      ],
+      sourceType: 'folder',
+    });
+    pushAuditEvent(req, 'info', 'Share created', { shareId: share.id, shareName: share.name, pathKey: share.pathKey });
+    res.status(201).json({ share });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to create share');
+    if (createdPath) {
+      fs.rmSync(createdPath, { recursive: true, force: true });
+    }
+    pushAuditEvent(req, 'error', 'Share creation failed', { error: message });
+    res.status(400).json({ error: message });
   }
 };
 
 const filesystemListHandler = async (req, res) => {
   try {
-    res.json(await listFilesystemDirectory(req.query.path || ''));
+    res.json(await listFilesystemDirectory(req.query.path || '', req));
   } catch (err) {
     const message = String(err?.message || err || 'Unable to list files');
-    const status = /not found/i.test(message) ? 404 : 400;
+    const status = Number(err?.statusCode) || (/not found/i.test(message) ? 404 : 400);
     pushDebugEvent('error', 'Filesystem list failed', { error: message, path: String(req.query.path || '') }, true);
     res.status(status).json({ error: message });
   }
@@ -1997,23 +2331,30 @@ const filesystemListHandler = async (req, res) => {
 const filesystemMkdirHandler = async (req, res) => {
   try {
     const parentPath = normalizeLocalRelativePath(req.body?.path || '');
+    if (!parentPath) {
+      return res.status(400).json({ error: 'Create shares from the root instead of raw folders' });
+    }
+    await ensureShareAccess(parentPath, req, 'write');
     const folderName = path.basename(String(req.body?.name || '').replace(/[\\/]+/g, ' ').trim());
     if (!folderName) {
       return res.status(400).json({ error: 'Folder name is required' });
     }
 
     const targetRelative = normalizeLocalRelativePath(path.join(parentPath, folderName));
+    if (await isProtectedFsPath(targetRelative)) {
+      return res.status(403).json({ error: 'This destination is protected' });
+    }
     const { absolutePath } = resolveFsPath(targetRelative);
     if (fs.existsSync(absolutePath)) {
       return res.status(400).json({ error: 'Target already exists' });
     }
 
     fs.mkdirSync(absolutePath, { recursive: true });
-    pushDebugEvent('info', 'Filesystem directory created', { path: targetRelative }, true);
+    pushAuditEvent(req, 'info', 'Filesystem directory created', { path: targetRelative });
     res.json({ success: true, path: targetRelative });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to create folder');
-    pushDebugEvent('error', 'Filesystem mkdir failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'Filesystem mkdir failed', { error: message });
     res.status(400).json({ error: message });
   }
 };
@@ -2025,12 +2366,16 @@ const filesystemRenameHandler = async (req, res) => {
     if (!sourceRelative || !nextName) {
       return res.status(400).json({ error: 'Path and next name are required' });
     }
-    if (isProtectedFsPath(sourceRelative)) {
+    await ensureShareAccess(sourceRelative, req, 'write');
+    if (await isProtectedFsPath(sourceRelative)) {
       return res.status(403).json({ error: 'This path cannot be renamed' });
     }
 
     const parentRelative = path.dirname(sourceRelative) === '.' ? '' : path.dirname(sourceRelative);
     const targetRelative = normalizeLocalRelativePath(path.join(parentRelative, nextName));
+    if (await isProtectedFsPath(targetRelative)) {
+      return res.status(403).json({ error: 'This destination is protected' });
+    }
     const sourcePath = resolveFsPath(sourceRelative).absolutePath;
     const targetPath = resolveFsPath(targetRelative).absolutePath;
     if (!fs.existsSync(sourcePath)) {
@@ -2041,11 +2386,11 @@ const filesystemRenameHandler = async (req, res) => {
     }
 
     fs.renameSync(sourcePath, targetPath);
-    pushDebugEvent('info', 'Filesystem entry renamed', { from: sourceRelative, to: targetRelative }, true);
+    pushAuditEvent(req, 'info', 'Filesystem entry renamed', { from: sourceRelative, to: targetRelative });
     res.json({ success: true, path: targetRelative });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to rename entry');
-    pushDebugEvent('error', 'Filesystem rename failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'Filesystem rename failed', { error: message });
     res.status(400).json({ error: message });
   }
 };
@@ -2056,7 +2401,8 @@ const filesystemDeleteHandler = async (req, res) => {
     if (!sourceRelative) {
       return res.status(400).json({ error: 'Path is required' });
     }
-    if (isProtectedFsPath(sourceRelative)) {
+    await ensureShareAccess(sourceRelative, req, 'write');
+    if (await isProtectedFsPath(sourceRelative)) {
       return res.status(403).json({ error: 'This path cannot be deleted' });
     }
 
@@ -2065,12 +2411,12 @@ const filesystemDeleteHandler = async (req, res) => {
       return res.status(404).json({ error: 'Path not found' });
     }
 
-    fs.rmSync(absolutePath, { recursive: true, force: true });
-    pushDebugEvent('info', 'Filesystem entry deleted', { path: sourceRelative }, true);
-    res.json({ success: true });
+    const recycled = moveFsEntryToRecycleBin(sourceRelative);
+    pushAuditEvent(req, 'info', 'Filesystem entry recycled', { from: sourceRelative, to: recycled.path, recycledAt: recycled.recycledAt });
+    res.json({ success: true, recycled: true, recyclePath: recycled.path });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to delete entry');
-    pushDebugEvent('error', 'Filesystem delete failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'Filesystem delete failed', { error: message });
     res.status(400).json({ error: message });
   }
 };
@@ -2081,6 +2427,7 @@ const filesystemDownloadHandler = async (req, res) => {
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
     }
+    await ensureShareAccess(relativePath, req, 'read');
 
     const { absolutePath } = resolveFsPath(relativePath);
     if (!fs.existsSync(absolutePath)) {
@@ -2092,11 +2439,11 @@ const filesystemDownloadHandler = async (req, res) => {
       return res.status(400).json({ error: 'Only file downloads are supported right now' });
     }
 
-    pushDebugEvent('info', 'Filesystem file download requested', { path: relativePath }, true);
+    pushAuditEvent(req, 'info', 'Filesystem file download requested', { path: relativePath });
     res.download(absolutePath, path.basename(absolutePath));
   } catch (err) {
     const message = String(err?.message || err || 'Unable to download file');
-    pushDebugEvent('error', 'Filesystem download failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'Filesystem download failed', { error: message });
     res.status(400).json({ error: message });
   }
 };
@@ -2104,6 +2451,10 @@ const filesystemDownloadHandler = async (req, res) => {
 const filesystemUploadHandler = async (req, res) => {
   try {
     const parentRelative = normalizeLocalRelativePath(req.query.path || '');
+    if (!parentRelative) {
+      return res.status(400).json({ error: 'Upload into a share folder, not the root' });
+    }
+    await ensureShareAccess(parentRelative, req, 'write');
     const fileName = path.basename(String(req.query.name || req.headers['x-file-name'] || '').replace(/[\\/]+/g, ' ').trim());
     if (!fileName) {
       return res.status(400).json({ error: 'A file name is required' });
@@ -2113,14 +2464,17 @@ const filesystemUploadHandler = async (req, res) => {
     }
 
     const targetRelative = normalizeLocalRelativePath(path.join(parentRelative, fileName));
+    if (await isProtectedFsPath(targetRelative)) {
+      return res.status(403).json({ error: 'This destination is protected' });
+    }
     const { absolutePath } = resolveFsPath(targetRelative);
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, req.body);
-    pushDebugEvent('info', 'Filesystem file uploaded', { path: targetRelative, size: req.body.length }, true);
+    pushAuditEvent(req, 'info', 'Filesystem file uploaded', { path: targetRelative, size: req.body.length });
     res.json({ success: true, path: targetRelative });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to upload file');
-    pushDebugEvent('error', 'Filesystem upload failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'Filesystem upload failed', { error: message });
     res.status(400).json({ error: message });
   }
 };
@@ -2137,7 +2491,9 @@ const filesystemPasteHandler = async (req, res) => {
     if (mode !== 'copy' && mode !== 'move') {
       return res.status(400).json({ error: 'Mode must be copy or move' });
     }
-    if (isProtectedFsPath(sourceRelative)) {
+    await ensureShareAccess(sourceRelative, req, mode === 'move' ? 'write' : 'read');
+    await ensureShareAccess(destinationRelative, req, 'write');
+    if (await isProtectedFsPath(sourceRelative)) {
       return res.status(403).json({ error: `This path cannot be ${mode === 'move' ? 'moved' : 'copied'}` });
     }
 
@@ -2153,6 +2509,9 @@ const filesystemPasteHandler = async (req, res) => {
     }
 
     const targetRelative = normalizeLocalRelativePath(path.join(destination.relativePath, path.basename(source.relativePath)));
+    if (await isProtectedFsPath(targetRelative)) {
+      return res.status(403).json({ error: 'This destination is protected' });
+    }
     const target = resolveFsPath(targetRelative);
     if (fs.existsSync(target.absolutePath)) {
       return res.status(400).json({ error: 'A file or folder with that name already exists in the destination' });
@@ -2167,14 +2526,14 @@ const filesystemPasteHandler = async (req, res) => {
       copyFsEntry(source.absolutePath, target.absolutePath);
     }
 
-    pushDebugEvent('info', `Filesystem entry ${mode}d`, {
+    pushAuditEvent(req, 'info', `Filesystem entry ${mode}d`, {
       from: sourceRelative,
       to: targetRelative,
-    }, true);
+    });
     res.json({ success: true, path: targetRelative });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to paste entry');
-    pushDebugEvent('error', 'Filesystem paste failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'Filesystem paste failed', { error: message });
     res.status(400).json({ error: message });
   }
 };
@@ -2184,19 +2543,19 @@ app.get('/status', requireAuth, statusHandler);
 app.get('/api/status', requireAuth, statusHandler);
 
 // Services status
-app.get('/services', requireAuth, servicesHandler);
-app.get('/api/services', requireAuth, servicesHandler);
+app.get('/services', requireAuth, requireAdmin, servicesHandler);
+app.get('/api/services', requireAuth, requireAdmin, servicesHandler);
 
 // Control services
-app.post('/control', requireAuth, controlHandler);
-app.post('/api/control', requireAuth, controlHandler);
+app.post('/control', requireAuth, requireAdmin, controlHandler);
+app.post('/api/control', requireAuth, requireAdmin, controlHandler);
 
 // Monitoring
-app.get('/monitor', requireAuth, monitorHandler);
-app.get('/api/monitor', requireAuth, monitorHandler);
+app.get('/monitor', requireAuth, requireAdmin, monitorHandler);
+app.get('/api/monitor', requireAuth, requireAdmin, monitorHandler);
 
-app.get('/dashboard', requireAuth, dashboardHandler);
-app.get('/api/dashboard', requireAuth, dashboardHandler);
+app.get('/dashboard', requireAuth, requireAdmin, dashboardHandler);
+app.get('/api/dashboard', requireAuth, requireAdmin, dashboardHandler);
 
 const ftpDefaultsHandler = (req, res) => {
   const ftpMounting = getCloudMountCapability();
@@ -2221,11 +2580,11 @@ const ftpFavouritesHandler = (req, res) => {
 const createFtpFavouriteHandler = (req, res) => {
   try {
     const favourite = appDb.createFtpFavourite(validateFtpFavouriteInput(req.body || {}));
-    pushDebugEvent('info', 'FTP favourite created', { id: favourite.id, name: favourite.name }, true);
+    pushAuditEvent(req, 'info', 'FTP favourite created', { id: favourite.id, name: favourite.name });
     res.status(201).json({ favourite: serializeFtpFavourite(favourite) });
   } catch (err) {
     const error = String(err?.message || err || 'Unable to create FTP favourite');
-    pushDebugEvent('error', 'FTP favourite creation failed', { error }, true);
+    pushAuditEvent(req, 'error', 'FTP favourite creation failed', { error });
     res.status(400).json({ error });
   }
 };
@@ -2239,12 +2598,12 @@ const updateFtpFavouriteHandler = async (req, res) => {
     }
 
     const favourite = appDb.updateFtpFavourite(existing.id, validateFtpFavouriteInput(req.body || {}, existing));
-    pushDebugEvent('info', 'FTP favourite updated', { id: favourite.id, name: favourite.name }, true);
+    pushAuditEvent(req, 'info', 'FTP favourite updated', { id: favourite.id, name: favourite.name });
     res.json({ favourite: serializeFtpFavourite(favourite) });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to update FTP favourite');
     const status = /not found/i.test(message) ? 404 : 400;
-    pushDebugEvent('error', 'FTP favourite update failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'FTP favourite update failed', { error: message });
     res.status(status).json({ error: message });
   }
 };
@@ -2257,12 +2616,12 @@ const deleteFtpFavouriteHandler = async (req, res) => {
     appDb.deleteFtpFavourite(favourite.id);
     fs.rmSync(getFtpFavouriteRuntime(favourite).helperRequestPath, { force: true });
 
-    pushDebugEvent('info', 'FTP favourite deleted', { id: favourite.id, name: favourite.name }, true);
+    pushAuditEvent(req, 'info', 'FTP favourite deleted', { id: favourite.id, name: favourite.name });
     res.json({ success: true });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to delete FTP favourite');
     const status = /not found/i.test(message) ? 404 : 400;
-    pushDebugEvent('error', 'FTP favourite deletion failed', { error: message }, true);
+    pushAuditEvent(req, 'error', 'FTP favourite deletion failed', { error: message });
     res.status(status).json({ error: message });
   }
 };
@@ -2275,15 +2634,15 @@ const mountFtpFavouriteHandler = async (req, res) => {
 
     if (!mount.mounted) {
       const error = mount.error || mount.reason || 'Mount failed on this host';
-      pushDebugEvent('error', 'FTP favourite mount failed', { id: favourite.id, name: favourite.name, error }, true);
+      pushAuditEvent(req, 'error', 'FTP favourite mount failed', { id: favourite.id, name: favourite.name, error });
       return res.status(500).json({ error, favourite: payload });
     }
 
-    pushDebugEvent('info', 'FTP favourite mounted', { id: favourite.id, name: favourite.name, mountPoint: mount.mountPoint }, true);
+    pushAuditEvent(req, 'info', 'FTP favourite mounted', { id: favourite.id, name: favourite.name, mountPoint: mount.mountPoint });
     return res.json({ success: true, favourite: payload });
   } catch (err) {
     const error = String(err?.message || err || 'Unable to mount FTP favourite');
-    pushDebugEvent('error', 'FTP favourite mount failed', { error, id: req.params.id }, true);
+    pushAuditEvent(req, 'error', 'FTP favourite mount failed', { error, id: req.params.id });
     return res.status(500).json({ error });
   }
 };
@@ -2292,14 +2651,14 @@ const unmountFtpFavouriteHandler = async (req, res) => {
   try {
     const favourite = getFtpFavouriteOrThrow(req.params.id, { includeSecrets: true });
     await unmountFtpFavourite(favourite);
-    pushDebugEvent('info', 'FTP favourite unmounted', { id: favourite.id, name: favourite.name }, true);
+    pushAuditEvent(req, 'info', 'FTP favourite unmounted', { id: favourite.id, name: favourite.name });
     res.json({
       success: true,
       favourite: serializeFtpFavourite(getFtpFavouriteOrThrow(favourite.id, { includeSecrets: false })),
     });
   } catch (err) {
     const error = String(err?.message || err || 'Unable to unmount FTP favourite');
-    pushDebugEvent('error', 'FTP favourite unmount failed', { error, id: req.params.id }, true);
+    pushAuditEvent(req, 'error', 'FTP favourite unmount failed', { error, id: req.params.id });
     res.status(500).json({ error });
   }
 };
@@ -2307,11 +2666,11 @@ const unmountFtpFavouriteHandler = async (req, res) => {
 const ftpListHandler = async (req, res) => {
   try {
     const payload = await listFtpDirectory(req.body || {});
-    pushDebugEvent('info', 'FTP directory listed', { host: payload.connection.host, path: payload.path, count: payload.entries.length });
+    pushAuditEvent(req, 'info', 'FTP directory listed', { host: payload.connection.host, path: payload.path, count: payload.entries.length }, false);
     res.json(payload);
   } catch (err) {
     const error = String(err?.message || err || 'FTP list failed');
-    pushDebugEvent('error', 'FTP list failed', { error }, true);
+    pushAuditEvent(req, 'error', 'FTP list failed', { error });
     res.status(500).json({ error });
   }
 };
@@ -2345,12 +2704,12 @@ const ftpDownloadHandler = async (req, res) => {
     await withFtpClient(resolvedPayload, async (client, access) => {
       if (recursive || entryType === 'directory') {
         const fileCount = await downloadFtpDirectoryTree(client, remotePath, localPath);
-        pushDebugEvent('info', 'FTP directory downloaded', { host: access.host, remotePath, localPath, fileCount }, true);
+        pushAuditEvent(req, 'info', 'FTP directory downloaded', { host: access.host, remotePath, localPath, fileCount });
         return;
       }
 
       await client.downloadTo(localPath, remotePath);
-      pushDebugEvent('info', 'FTP file downloaded', { host: access.host, remotePath, localPath }, true);
+      pushAuditEvent(req, 'info', 'FTP file downloaded', { host: access.host, remotePath, localPath });
     });
 
     res.json({
@@ -2361,7 +2720,7 @@ const ftpDownloadHandler = async (req, res) => {
     });
   } catch (err) {
     const error = String(err?.message || err || 'FTP download failed');
-    pushDebugEvent('error', 'FTP download failed', { error }, true);
+    pushAuditEvent(req, 'error', 'FTP download failed', { error });
     res.status(500).json({ error });
   }
 };
@@ -2388,7 +2747,7 @@ const ftpUploadHandler = async (req, res) => {
     await withFtpClient(resolvedPayload, async (client, access) => {
       await client.ensureDir(path.posix.dirname(remotePath));
       await client.uploadFrom(localResolved, remotePath);
-      pushDebugEvent('info', 'FTP file uploaded', { host: access.host, remotePath, localPath: localResolved }, true);
+      pushAuditEvent(req, 'info', 'FTP file uploaded', { host: access.host, remotePath, localPath: localResolved });
     });
 
     res.json({
@@ -2398,7 +2757,7 @@ const ftpUploadHandler = async (req, res) => {
     });
   } catch (err) {
     const error = String(err?.message || err || 'FTP upload failed');
-    pushDebugEvent('error', 'FTP upload failed', { error }, true);
+    pushAuditEvent(req, 'error', 'FTP upload failed', { error });
     res.status(500).json({ error });
   }
 };
@@ -2410,31 +2769,35 @@ const ftpMkdirHandler = async (req, res) => {
 
     await withFtpClient(resolvedPayload, async (client, access) => {
       await client.ensureDir(remotePath);
-      pushDebugEvent('info', 'FTP directory created', { host: access.host, remotePath }, true);
+      pushAuditEvent(req, 'info', 'FTP directory created', { host: access.host, remotePath });
     });
 
     res.json({ success: true, remotePath });
   } catch (err) {
     const error = String(err?.message || err || 'FTP mkdir failed');
-    pushDebugEvent('error', 'FTP mkdir failed', { error }, true);
+    pushAuditEvent(req, 'error', 'FTP mkdir failed', { error });
     res.status(500).json({ error });
   }
 };
 
-app.get('/connections', requireAuth, connectionsHandler);
-app.get('/api/connections', requireAuth, connectionsHandler);
-app.get('/storage', requireAuth, storageHandler);
-app.get('/api/storage', requireAuth, storageHandler);
-app.get('/logs', requireAuth, logsHandler);
-app.get('/api/logs', requireAuth, logsHandler);
-app.get('/logging', requireAuth, loggingGetHandler);
-app.get('/api/logging', requireAuth, loggingGetHandler);
-app.post('/logging', requireAuth, loggingPostHandler);
-app.post('/api/logging', requireAuth, loggingPostHandler);
-app.get('/drives', requireAuth, drivesHandler);
-app.get('/api/drives', requireAuth, drivesHandler);
-app.post('/drives/check', requireAuth, drivesCheckHandler);
-app.post('/api/drives/check', requireAuth, drivesCheckHandler);
+app.get('/connections', requireAuth, requireAdmin, connectionsHandler);
+app.get('/api/connections', requireAuth, requireAdmin, connectionsHandler);
+app.get('/storage', requireAuth, requireAdmin, storageHandler);
+app.get('/api/storage', requireAuth, requireAdmin, storageHandler);
+app.get('/logs', requireAuth, requireAdmin, logsHandler);
+app.get('/api/logs', requireAuth, requireAdmin, logsHandler);
+app.get('/logging', requireAuth, requireAdmin, loggingGetHandler);
+app.get('/api/logging', requireAuth, requireAdmin, loggingGetHandler);
+app.post('/logging', requireAuth, requireAdmin, loggingPostHandler);
+app.post('/api/logging', requireAuth, requireAdmin, loggingPostHandler);
+app.get('/drives', requireAuth, requireAdmin, drivesHandler);
+app.get('/api/drives', requireAuth, requireAdmin, drivesHandler);
+app.post('/drives/check', requireAuth, requireAdmin, drivesCheckHandler);
+app.post('/api/drives/check', requireAuth, requireAdmin, drivesCheckHandler);
+app.get('/shares', requireAuth, requireAdmin, sharesHandler);
+app.get('/api/shares', requireAuth, requireAdmin, sharesHandler);
+app.post('/shares', requireAuth, requireAdmin, createShareHandler);
+app.post('/api/shares', requireAuth, requireAdmin, createShareHandler);
 app.get('/fs/list', requireAuth, filesystemListHandler);
 app.get('/api/fs/list', requireAuth, filesystemListHandler);
 app.post('/fs/mkdir', requireAuth, filesystemMkdirHandler);
@@ -2449,28 +2812,28 @@ app.post('/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' })
 app.post('/api/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);
 app.post('/fs/paste', requireAuth, filesystemPasteHandler);
 app.post('/api/fs/paste', requireAuth, filesystemPasteHandler);
-app.get('/ftp/defaults', requireAuth, ftpDefaultsHandler);
-app.get('/api/ftp/defaults', requireAuth, ftpDefaultsHandler);
-app.get('/ftp/favourites', requireAuth, ftpFavouritesHandler);
-app.get('/api/ftp/favourites', requireAuth, ftpFavouritesHandler);
-app.post('/ftp/favourites', requireAuth, createFtpFavouriteHandler);
-app.post('/api/ftp/favourites', requireAuth, createFtpFavouriteHandler);
-app.put('/ftp/favourites/:id', requireAuth, updateFtpFavouriteHandler);
-app.put('/api/ftp/favourites/:id', requireAuth, updateFtpFavouriteHandler);
-app.delete('/ftp/favourites/:id', requireAuth, deleteFtpFavouriteHandler);
-app.delete('/api/ftp/favourites/:id', requireAuth, deleteFtpFavouriteHandler);
-app.post('/ftp/favourites/:id/mount', requireAuth, mountFtpFavouriteHandler);
-app.post('/api/ftp/favourites/:id/mount', requireAuth, mountFtpFavouriteHandler);
-app.post('/ftp/favourites/:id/unmount', requireAuth, unmountFtpFavouriteHandler);
-app.post('/api/ftp/favourites/:id/unmount', requireAuth, unmountFtpFavouriteHandler);
-app.post('/ftp/list', requireAuth, ftpListHandler);
-app.post('/api/ftp/list', requireAuth, ftpListHandler);
-app.post('/ftp/download', requireAuth, ftpDownloadHandler);
-app.post('/api/ftp/download', requireAuth, ftpDownloadHandler);
-app.post('/ftp/upload', requireAuth, ftpUploadHandler);
-app.post('/api/ftp/upload', requireAuth, ftpUploadHandler);
-app.post('/ftp/mkdir', requireAuth, ftpMkdirHandler);
-app.post('/api/ftp/mkdir', requireAuth, ftpMkdirHandler);
+app.get('/ftp/defaults', requireAuth, requireAdmin, ftpDefaultsHandler);
+app.get('/api/ftp/defaults', requireAuth, requireAdmin, ftpDefaultsHandler);
+app.get('/ftp/favourites', requireAuth, requireAdmin, ftpFavouritesHandler);
+app.get('/api/ftp/favourites', requireAuth, requireAdmin, ftpFavouritesHandler);
+app.post('/ftp/favourites', requireAuth, requireAdmin, createFtpFavouriteHandler);
+app.post('/api/ftp/favourites', requireAuth, requireAdmin, createFtpFavouriteHandler);
+app.put('/ftp/favourites/:id', requireAuth, requireAdmin, updateFtpFavouriteHandler);
+app.put('/api/ftp/favourites/:id', requireAuth, requireAdmin, updateFtpFavouriteHandler);
+app.delete('/ftp/favourites/:id', requireAuth, requireAdmin, deleteFtpFavouriteHandler);
+app.delete('/api/ftp/favourites/:id', requireAuth, requireAdmin, deleteFtpFavouriteHandler);
+app.post('/ftp/favourites/:id/mount', requireAuth, requireAdmin, mountFtpFavouriteHandler);
+app.post('/api/ftp/favourites/:id/mount', requireAuth, requireAdmin, mountFtpFavouriteHandler);
+app.post('/ftp/favourites/:id/unmount', requireAuth, requireAdmin, unmountFtpFavouriteHandler);
+app.post('/api/ftp/favourites/:id/unmount', requireAuth, requireAdmin, unmountFtpFavouriteHandler);
+app.post('/ftp/list', requireAuth, requireAdmin, ftpListHandler);
+app.post('/api/ftp/list', requireAuth, requireAdmin, ftpListHandler);
+app.post('/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
+app.post('/api/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
+app.post('/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
+app.post('/api/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
+app.post('/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
+app.post('/api/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
 
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
