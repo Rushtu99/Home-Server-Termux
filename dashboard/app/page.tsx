@@ -1,7 +1,8 @@
 'use client';
 
-import type { CSSProperties, FormEvent, ReactNode } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, FormEvent, InputHTMLAttributes, ReactNode } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
+import { useGatewayBase } from './useGatewayBase';
 
 const API = process.env.NEXT_PUBLIC_API || '/api';
 
@@ -113,6 +114,8 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'settings', label: 'Settings' },
 ];
 
+const TAB_KEYS = new Set<TabKey>(TABS.map(({ key }) => key));
+
 const fmtBytes = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) {
     return '0 B';
@@ -163,6 +166,7 @@ export default function Dashboard() {
   const [isCompact, setIsCompact] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -199,6 +203,8 @@ export default function Dashboard() {
   const ramCanvas = useRef<HTMLCanvasElement>(null);
   const fetchInFlightRef = useRef(false);
   const mountedRef = useRef(true);
+  const tabSyncReadyRef = useRef(false);
+  const gatewayBase = useGatewayBase();
 
   const clearSession = (message = '') => {
     if (typeof window !== 'undefined') {
@@ -210,6 +216,7 @@ export default function Dashboard() {
     }
 
     setIsAuthed(false);
+    setAuthBusy(false);
     setPassword('');
     setServices({});
     setMonitor(null);
@@ -256,6 +263,15 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedTab = params.get('tab');
+    if (requestedTab && TAB_KEYS.has(requestedTab as TabKey)) {
+      setActiveTab(requestedTab as TabKey);
+    }
+    tabSyncReadyRef.current = true;
+  }, []);
+
+  useEffect(() => {
     const updateLayout = () => {
       setIsCompact(window.innerWidth < 980);
     };
@@ -275,13 +291,38 @@ export default function Dashboard() {
       return;
     }
 
-    void fetchAll();
-    const interval = setInterval(() => {
-      void fetchAll();
-    }, 2000);
+    const refreshTelemetry = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
 
-    return () => clearInterval(interval);
-  }, [isAuthed]);
+      void fetchAll();
+    };
+
+    refreshTelemetry();
+
+    const interval = window.setInterval(refreshTelemetry, activeTab === 'home' ? 2000 : 5000);
+    document.addEventListener('visibilitychange', refreshTelemetry);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshTelemetry);
+    };
+  }, [activeTab, isAuthed]);
+
+  useEffect(() => {
+    if (!tabSyncReadyRef.current) {
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    if (activeTab === 'home') {
+      url.searchParams.delete('tab');
+    } else {
+      url.searchParams.set('tab', activeTab);
+    }
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [activeTab]);
 
   useEffect(() => {
     if (!isAuthed) {
@@ -314,24 +355,28 @@ export default function Dashboard() {
   }, [isAuthed]);
 
   useEffect(() => {
+    if (!controlTarget) {
+      return;
+    }
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setControlTarget(null);
+        setControlPassword('');
+      }
+    };
+
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [controlTarget]);
+
+  useEffect(() => {
     drawTrend(cpuCanvas.current, cpuHistory, THEME.accent, THEME.accentFill);
   }, [cpuHistory]);
 
   useEffect(() => {
     drawTrend(ramCanvas.current, ramHistory, THEME.brightYellow, 'rgba(255,228,77,0.14)');
   }, [ramHistory]);
-
-  const gatewayBase = useMemo(() => {
-    if (typeof window === 'undefined') {
-      return '';
-    }
-
-    const { protocol, hostname, host, port } = window.location;
-    if (port === '8088') {
-      return `${protocol}//${host}`;
-    }
-    return `${protocol}//${hostname}:8088`;
-  }, []);
 
   const applyDashboardPayload = (payload: DashboardPayload) => {
     setServices(payload.services || {});
@@ -378,7 +423,9 @@ export default function Dashboard() {
 
       const payload = await res.json().catch(() => null);
       if (payload) {
-        applyDashboardPayload(payload as DashboardPayload);
+        startTransition(() => {
+          applyDashboardPayload(payload as DashboardPayload);
+        });
       }
     } catch (err) {
       if (mountedRef.current) {
@@ -449,10 +496,21 @@ export default function Dashboard() {
   const totalStorage = storage.reduce((sum, mount) => sum + mount.size, 0);
   const usedStorage = storage.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
+  const controlStatusColor = !controlStatus
+    ? THEME.muted
+    : controlStatus.includes('succeeded')
+      ? THEME.ok
+      : THEME.crimsonRed;
+  const ftpStatusColor = !ftpStatus
+    ? THEME.muted
+    : ftpStatus.toLowerCase().includes('failed') || ftpStatus.toLowerCase().includes('unable') || ftpStatus.toLowerCase().includes('error')
+      ? THEME.crimsonRed
+      : THEME.ok;
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAuthError('');
+    setAuthBusy(true);
 
     try {
       const res = await fetch(`${API}/auth/login`, {
@@ -475,6 +533,10 @@ export default function Dashboard() {
       void fetchAll();
     } catch {
       setAuthError('Unable to reach auth service');
+    } finally {
+      if (mountedRef.current) {
+        setAuthBusy(false);
+      }
     }
   };
 
@@ -664,32 +726,47 @@ export default function Dashboard() {
   };
 
   if (!authChecked) {
-    return <div style={styles.loading}>Loading...</div>;
+    return <div style={styles.loading} role="status" aria-live="polite">Loading…</div>;
   }
 
   if (!isAuthed) {
     return (
-      <div style={styles.loginShell}>
-        <form style={styles.loginCard} onSubmit={login}>
+      <main id="app-main" style={styles.loginShell}>
+        <form style={styles.loginCard} onSubmit={login} noValidate>
           <h1 style={{ marginTop: 0, marginBottom: 8 }}>Dashboard Login</h1>
           <p style={{ marginTop: 0, color: THEME.muted, fontSize: 13 }}>Sign in to access the server dashboard.</p>
-          <input
-            style={styles.input}
-            placeholder="Username"
+          <TextField
+            id="login-username"
+            label="Username"
+            name="username"
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             value={username}
-            onChange={(event) => setUsername(event.target.value)}
+            onChange={setUsername}
           />
-          <input
-            style={styles.input}
-            placeholder="Password"
+          <TextField
+            id="login-password"
+            label="Password"
+            name="password"
             type="password"
+            autoComplete="current-password"
             value={password}
-            onChange={(event) => setPassword(event.target.value)}
+            onChange={setPassword}
           />
-          {authError && <p style={styles.errorText}>{authError}</p>}
-          <button style={styles.loginBtn} type="submit">Login</button>
+          <p
+            style={authError ? styles.errorText : styles.infoText}
+            role={authError ? 'alert' : 'status'}
+            aria-live="polite"
+          >
+            {authError || 'Use the account configured in server/.env.'}
+          </p>
+          <button className="ui-button ui-button--primary" style={styles.loginBtn} type="submit" disabled={authBusy}>
+            {authBusy ? 'Signing In…' : 'Log In'}
+          </button>
         </form>
-      </div>
+      </main>
     );
   }
 
@@ -697,10 +774,12 @@ export default function Dashboard() {
     <div style={{ ...styles.app, ...(isCompact ? styles.appCompact : {}) }}>
       <aside style={{ ...styles.sidebar, ...(isCompact ? styles.sidebarCompact : {}) }}>
         <div style={styles.brand}>HmSTx</div>
-        <div style={{ ...styles.navGroup, ...(isCompact ? styles.navGroupCompact : {}) }}>
+        <nav aria-label="Dashboard Sections" style={{ ...styles.navGroup, ...(isCompact ? styles.navGroupCompact : {}) }}>
           {TABS.map((tab) => (
             <button
               key={tab.key}
+              className="ui-button"
+              aria-pressed={activeTab === tab.key}
               style={{ ...styles.navBtn, ...(activeTab === tab.key ? styles.navBtnActive : {}), ...(isCompact ? styles.navBtnCompact : {}) }}
               type="button"
               onClick={() => setActiveTab(tab.key)}
@@ -708,8 +787,9 @@ export default function Dashboard() {
               {tab.label}
             </button>
           ))}
-        </div>
+        </nav>
         <button
+          className="ui-button"
           style={{ ...styles.navBtn, ...styles.logoutBtn, ...(isCompact ? styles.navBtnCompact : {}) }}
           type="button"
           onClick={() => clearSession()}
@@ -718,7 +798,7 @@ export default function Dashboard() {
         </button>
       </aside>
 
-      <main style={{ ...styles.main, ...(isCompact ? styles.mainCompact : {}) }}>
+      <main id="app-main" style={{ ...styles.main, ...(isCompact ? styles.mainCompact : {}) }}>
         {activeTab === 'home' && (
           <div>
             <div style={styles.headerBar}>
@@ -790,13 +870,17 @@ export default function Dashboard() {
                         <span style={{ ...styles.dot, background: running ? THEME.ok : THEME.crimsonRed }} />
                       </span>
                       <div style={styles.actionWrap}>
-                        <button disabled={!!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'start')}>Start</button>
-                        <button disabled={!!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'stop')}>Stop</button>
-                        <button disabled={!!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'restart')}>Restart</button>
+                        <button className="ui-button" disabled={!!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'start')}>Start</button>
+                        <button className="ui-button" disabled={!!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'stop')}>Stop</button>
+                        <button className="ui-button" disabled={!!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'restart')}>Restart</button>
                       </div>
                     </div>
                   ))}
-                  <p style={{ ...styles.smallLabel, marginTop: 8, color: controlStatus.includes('succeeded') ? THEME.ok : THEME.crimsonRed }}>
+                  <p
+                    style={{ ...styles.smallLabel, marginTop: 8, color: controlStatusColor }}
+                    role="status"
+                    aria-live="polite"
+                  >
                     {controlStatus || 'Ready'}
                   </p>
                 </article>
@@ -835,7 +919,7 @@ export default function Dashboard() {
                 <article style={styles.card}>
                   <div style={styles.logControlRow}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Debug Log</h3>
-                    <button style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
+                    <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
                       {verboseLogging ? 'Disable Verbose' : 'Enable Verbose'}
                     </button>
                   </div>
@@ -862,78 +946,104 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'terminal' && (
-          <Panel title="Terminal" subtitle="Interactive shell via ttyd.">
-            <div style={styles.panelActions}>
-              <a href={`${gatewayBase}/term/`} target="_blank" rel="noreferrer" style={styles.linkBtn}>Open Terminal In New Tab</a>
-            </div>
-            <iframe title="Embedded Terminal" src={`${gatewayBase}/term/`} style={styles.frame} />
-          </Panel>
+          <EmbeddedToolPanel
+            title="Terminal"
+            subtitle="Interactive shell via ttyd."
+            frameTitle="Embedded Terminal"
+            path="/term/"
+            gatewayBase={gatewayBase}
+            isCompact={isCompact}
+          />
         )}
 
         {activeTab === 'filesystem' && (
-          <Panel title="Filesystem" subtitle="Embedded FileBrowser instance.">
-            <div style={styles.panelActions}>
-              <a href={`${gatewayBase}/files/`} target="_blank" rel="noreferrer" style={styles.linkBtn}>Open File Manager In New Tab</a>
-            </div>
-            <iframe title="Embedded File Manager" src={`${gatewayBase}/files/`} style={styles.frame} />
-          </Panel>
+          <EmbeddedToolPanel
+            title="Filesystem"
+            subtitle="Embedded FileBrowser instance."
+            frameTitle="Embedded File Manager"
+            path="/files/"
+            gatewayBase={gatewayBase}
+            isCompact={isCompact}
+          />
         )}
 
         {activeTab === 'ftp' && (
           <Panel title="FTP Client" subtitle="Connect to your PS4 GoldHEN FTP server, browse it, and pull files into this Termux host.">
-            <div style={styles.ftpGrid}>
-              <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Connection</h3>
-                <div style={styles.ftpFormGrid}>
-                  <input style={styles.input} placeholder="PS4 host" value={ftpHost} onChange={(event) => setFtpHost(event.target.value)} />
-                  <input style={styles.input} placeholder="Port" value={ftpPort} onChange={(event) => setFtpPort(event.target.value)} />
-                  <input style={styles.input} placeholder="User" value={ftpUser} onChange={(event) => setFtpUser(event.target.value)} />
-                  <input style={styles.input} placeholder="Password" type="password" value={ftpPassword} onChange={(event) => setFtpPassword(event.target.value)} />
+              <div style={styles.ftpGrid}>
+                <div style={styles.card}>
+                  <h3 style={styles.cardTitle}>Connection</h3>
+                  <div style={styles.ftpFormGrid}>
+                    <TextField id="ftp-host" label="PS4 Host" name="ftpHost" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpHost} onChange={setFtpHost} />
+                    <TextField id="ftp-port" label="Port" name="ftpPort" autoComplete="off" inputMode="numeric" spellCheck={false} value={ftpPort} onChange={setFtpPort} />
+                    <TextField id="ftp-user" label="Username" name="ftpUser" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpUser} onChange={setFtpUser} />
+                    <TextField id="ftp-password" label="Password" name="ftpPassword" type="password" autoComplete="off" value={ftpPassword} onChange={setFtpPassword} />
+                  </div>
+                  <label style={styles.checkboxRow}>
+                    <input type="checkbox" checked={ftpSecure} onChange={(event) => setFtpSecure(event.target.checked)} />
+                    <span>Use FTPS/TLS</span>
+                  </label>
+                  <div style={styles.actionWrap}>
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory('/')}>Connect</button>
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(ftpPath)}>Refresh</button>
+                    <button className="ui-button" disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</button>
+                  </div>
+                  <p style={styles.codeLine}>Current remote path: <code>{ftpPath}</code></p>
+                  <p style={styles.codeLine}>PS4 mirror on this server: <code>{ftpDownloadRoot || '~/Drives/PS4'}</code></p>
+                  <p
+                    style={{ ...styles.smallLabel, color: ftpStatusColor }}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {ftpStatus || 'Ready'}
+                  </p>
                 </div>
-                <label style={styles.checkboxRow}>
-                  <input type="checkbox" checked={ftpSecure} onChange={(event) => setFtpSecure(event.target.checked)} />
-                  <span>Use FTPS/TLS</span>
-                </label>
-                <div style={styles.actionWrap}>
-                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory('/')}>Connect</button>
-                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(ftpPath)}>Refresh</button>
-                  <button disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</button>
-                </div>
-                <p style={styles.smallLabel}>Current remote path: <code>{ftpPath}</code></p>
-                <p style={styles.smallLabel}>PS4 mirror on this server: <code>{ftpDownloadRoot || '~/Drives/PS4'}</code></p>
-                <p style={{ ...styles.smallLabel, color: ftpStatus.toLowerCase().includes('failed') || ftpStatus.toLowerCase().includes('unable') || ftpStatus.toLowerCase().includes('error') ? THEME.crimsonRed : THEME.ok }}>
-                  {ftpStatus || 'Ready'}
-                </p>
-              </div>
 
-              <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Transfer Actions</h3>
-                <div style={styles.ftpActionGroup}>
-                  <input
-                    style={styles.input}
-                    placeholder="Local file to upload, e.g. /data/data/com.termux/files/home/Drives/C/PS4UPDATE.PUP"
-                    value={ftpUploadLocalPath}
-                    onChange={(event) => setFtpUploadLocalPath(event.target.value)}
-                  />
-                  <input
-                    style={styles.input}
-                    placeholder="Remote upload target, e.g. /data/PS4UPDATE.PUP"
-                    value={ftpUploadRemotePath}
-                    onChange={(event) => setFtpUploadRemotePath(event.target.value)}
-                  />
-                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={uploadToFtp}>Upload Local File</button>
-                </div>
-                <div style={styles.ftpActionGroup}>
-                  <input
-                    style={styles.input}
-                    placeholder="New remote folder name"
-                    value={ftpFolderName}
-                    onChange={(event) => setFtpFolderName(event.target.value)}
-                  />
-                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={createFtpFolder}>Create Folder</button>
-                </div>
-                <p style={styles.smallLabel}>GoldHEN usually exposes a plain FTP endpoint, so leave FTPS disabled unless you intentionally front it with TLS.</p>
-                <p style={styles.smallLabel}>The local FTP server controls remain available separately in service control if you install an FTP provider later.</p>
+                <div style={styles.card}>
+                  <h3 style={styles.cardTitle}>Transfer Actions</h3>
+                  <div style={styles.ftpActionGroup}>
+                    <TextField
+                      id="ftp-upload-local-path"
+                      label="Local File Path"
+                      name="ftpUploadLocalPath"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="/data/data/com.termux/files/home/Drives/C/PS4UPDATE.PUP…"
+                      value={ftpUploadLocalPath}
+                      onChange={setFtpUploadLocalPath}
+                    />
+                    <TextField
+                      id="ftp-upload-remote-path"
+                      label="Remote Upload Path"
+                      name="ftpUploadRemotePath"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="/data/PS4UPDATE.PUP…"
+                      value={ftpUploadRemotePath}
+                      onChange={setFtpUploadRemotePath}
+                    />
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={uploadToFtp}>Upload Local File</button>
+                  </div>
+                  <div style={styles.ftpActionGroup}>
+                    <TextField
+                      id="ftp-folder-name"
+                      label="New Remote Folder"
+                      name="ftpFolderName"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="NEW_FOLDER…"
+                      value={ftpFolderName}
+                      onChange={setFtpFolderName}
+                    />
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={createFtpFolder}>Create Folder</button>
+                  </div>
+                  <p style={styles.smallLabel}>GoldHEN usually exposes a plain FTP endpoint, so leave FTPS disabled unless you intentionally front it with TLS.</p>
+                  <p style={styles.smallLabel}>The local FTP server controls remain available separately in service control if you install an FTP provider later.</p>
               </div>
             </div>
 
@@ -965,9 +1075,9 @@ export default function Dashboard() {
                         <td style={styles.td}>
                           <div style={styles.actionWrap}>
                             {entry.type === 'directory' ? (
-                              <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
+                              <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
                             ) : (
-                              <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => downloadFtpEntry(entry)}>Pull To Server</button>
+                              <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => downloadFtpEntry(entry)}>Pull To Server</button>
                             )}
                           </div>
                         </td>
@@ -986,41 +1096,107 @@ export default function Dashboard() {
               <h3 style={styles.cardTitle}>Session</h3>
               <p style={styles.smallLabel}>Theme switching is fixed to a single stable palette now. Session access is cookie-based and invalidates on logout or timeout.</p>
               <div style={styles.actionWrap}>
-                <button style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
+                <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
               </div>
 
               <h3 style={{ ...styles.cardTitle, marginTop: 16 }}>Logging</h3>
               <div style={styles.actionWrap}>
-                <button style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(true)}>Enable Verbose</button>
-                <button style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(false)}>Disable Verbose</button>
+                <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(true)}>Enable Verbose</button>
+                <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(false)}>Disable Verbose</button>
               </div>
             </div>
           </Panel>
         )}
 
         {controlTarget && (
-          <div style={styles.modalOverlay}>
-            <div style={styles.modalCard}>
-              <h3 style={{ marginTop: 0 }}>Confirm Service Action</h3>
-              <p style={styles.smallLabel}>
+          <div
+            style={styles.modalOverlay}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                closeControlPopup();
+              }
+            }}
+          >
+            <div
+              style={styles.modalCard}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="control-dialog-title"
+              aria-describedby="control-dialog-copy"
+            >
+              <h3 id="control-dialog-title" style={{ marginTop: 0 }}>Confirm Service Action</h3>
+              <p id="control-dialog-copy" style={styles.smallLabel}>
                 Enter admin password to <strong>{controlTarget.action}</strong> <strong>{controlTarget.service}</strong>.
               </p>
-              <input
+              <TextField
+                id="control-password"
+                label="Admin Password"
+                name="controlPassword"
                 type="password"
-                style={styles.input}
-                placeholder="Admin password"
+                autoComplete="current-password"
                 value={controlPassword}
-                onChange={(event) => setControlPassword(event.target.value)}
+                onChange={setControlPassword}
               />
               <div style={styles.actionWrap}>
-                <button style={styles.actionBtn} type="button" onClick={executeControl}>Confirm</button>
-                <button style={styles.actionBtn} type="button" onClick={closeControlPopup}>Cancel</button>
+                <button className="ui-button ui-button--primary" style={styles.actionBtn} type="button" onClick={executeControl}>Confirm</button>
+                <button className="ui-button" style={styles.actionBtn} type="button" onClick={closeControlPopup}>Cancel</button>
               </div>
             </div>
           </div>
         )}
       </main>
     </div>
+  );
+}
+
+type TextFieldProps = {
+  autoComplete?: string;
+  autoCapitalize?: InputHTMLAttributes<HTMLInputElement>['autoCapitalize'];
+  autoCorrect?: InputHTMLAttributes<HTMLInputElement>['autoCorrect'];
+  id: string;
+  inputMode?: InputHTMLAttributes<HTMLInputElement>['inputMode'];
+  label: string;
+  name: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  spellCheck?: boolean;
+  type?: InputHTMLAttributes<HTMLInputElement>['type'];
+  value: string;
+};
+
+function TextField({
+  autoComplete = 'off',
+  autoCapitalize,
+  autoCorrect,
+  id,
+  inputMode,
+  label,
+  name,
+  onChange,
+  placeholder,
+  spellCheck = false,
+  type = 'text',
+  value,
+}: TextFieldProps) {
+  return (
+    <label htmlFor={id} style={styles.field}>
+      <span style={styles.fieldLabel}>{label}</span>
+      <input
+        className="ui-input"
+        id={id}
+        inputMode={inputMode}
+        name={name}
+        autoComplete={autoComplete}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
+        placeholder={placeholder}
+        spellCheck={spellCheck}
+        style={styles.input}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
   );
 }
 
@@ -1036,6 +1212,45 @@ function Progress({ label, value }: { label: string; value: number }) {
         <div style={{ ...styles.progressFill, width: `${safeValue}%` }} />
       </div>
     </div>
+  );
+}
+
+function EmbeddedToolPanel({
+  title,
+  subtitle,
+  frameTitle,
+  path,
+  gatewayBase,
+  isCompact,
+}: {
+  title: string;
+  subtitle: string;
+  frameTitle: string;
+  path: string;
+  gatewayBase: string;
+  isCompact: boolean;
+}) {
+  const frameSrc = gatewayBase ? `${gatewayBase}${path}` : '';
+
+  return (
+    <Panel title={title} subtitle={subtitle}>
+      <div style={styles.panelActions}>
+        {gatewayBase ? (
+          <a href={frameSrc} target="_blank" rel="noreferrer" className="ui-button" style={styles.linkBtn}>
+            Open In New Tab
+          </a>
+        ) : (
+          <span style={styles.smallLabel}>Resolving gateway…</span>
+        )}
+      </div>
+      {gatewayBase ? (
+        <iframe title={frameTitle} src={frameSrc} style={{ ...styles.frame, ...(isCompact ? styles.frameCompact : {}) }} />
+      ) : (
+        <div style={styles.framePlaceholder} role="status" aria-live="polite">
+          Gateway is still resolving. This view will load automatically.
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -1130,42 +1345,47 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 10,
     padding: 24,
   },
+  field: {
+    display: 'grid',
+    gap: 6,
+    marginBottom: 12,
+  },
+  fieldLabel: {
+    color: THEME.muted,
+    fontSize: 13,
+  },
   input: {
     width: '100%',
-    marginBottom: 10,
-    background: '#121519',
-    border: `1px solid ${THEME.border}`,
-    borderRadius: 8,
-    padding: '10px 12px',
-    color: THEME.text,
+    marginBottom: 0,
+  },
+  infoText: {
+    color: THEME.muted,
+    fontSize: 12,
+    marginTop: 0,
+    marginBottom: 12,
   },
   errorText: {
     color: THEME.crimsonRed,
     fontSize: 12,
     marginTop: 0,
+    marginBottom: 12,
   },
   loginBtn: {
     width: '100%',
-    border: `1px solid ${THEME.accent}`,
-    borderRadius: 8,
-    padding: '10px 12px',
-    background: THEME.accent,
-    color: '#131611',
     fontWeight: 600,
-    cursor: 'pointer',
   },
   app: {
     minHeight: '100dvh',
     display: 'flex',
     background: THEME.bg,
     color: THEME.text,
-    overflow: 'hidden',
-    fontFamily: 'system-ui, sans-serif',
+    overflowX: 'hidden',
+    fontFamily: 'var(--font-geist-sans), sans-serif',
   },
-  appCompact: { flexDirection: 'column' },
+  appCompact: { flexDirection: 'column', minHeight: 'auto' },
   sidebar: {
     width: 248,
-    height: '100%',
+    minHeight: '100dvh',
     borderRight: `1px solid ${THEME.border}`,
     padding: 20,
     background: '#15181c',
@@ -1173,9 +1393,11 @@ const styles: Record<string, CSSProperties> = {
   },
   sidebarCompact: {
     width: '100%',
+    minHeight: 'auto',
     borderRight: 'none',
     borderBottom: `1px solid ${THEME.border}`,
     padding: 14,
+    overflowY: 'visible',
   },
   brand: {
     fontSize: 20,
@@ -1186,14 +1408,10 @@ const styles: Record<string, CSSProperties> = {
   navGroup: { display: 'flex', flexDirection: 'column', gap: 8 },
   navGroupCompact: { flexDirection: 'row', flexWrap: 'wrap' },
   navBtn: {
-    border: '1px solid transparent',
-    borderRadius: 8,
-    background: 'transparent',
-    color: THEME.text,
     padding: '10px 12px',
     textAlign: 'left',
-    cursor: 'pointer',
     fontWeight: 500,
+    justifyContent: 'flex-start',
   },
   navBtnCompact: { flex: '1 1 118px' },
   navBtnActive: {
@@ -1202,10 +1420,10 @@ const styles: Record<string, CSSProperties> = {
     borderColor: THEME.border,
   },
   logoutBtn: { marginTop: 14 },
-  main: { flex: 1, height: '100%', padding: 24, overflowY: 'auto' },
-  mainCompact: { padding: 16 },
+  main: { flex: 1, minHeight: 0, padding: 24, overflowY: 'auto' },
+  mainCompact: { padding: 16, overflowY: 'visible' },
   title: { margin: '0 0 6px', fontSize: 28, fontWeight: 700, color: THEME.text },
-  panelSubtitle: { margin: '0 0 18px', color: THEME.muted, fontSize: 13 },
+  panelSubtitle: { margin: '0 0 18px', color: THEME.muted, fontSize: 13, maxWidth: 680 },
   headerBar: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -1259,7 +1477,13 @@ const styles: Record<string, CSSProperties> = {
     padding: 16,
   },
   cardTitle: { margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: THEME.text },
-  smallLabel: { margin: '0 0 8px', color: THEME.muted, fontSize: 12 },
+  smallLabel: { margin: '0 0 8px', color: THEME.muted, fontSize: 12, overflowWrap: 'anywhere' },
+  codeLine: {
+    margin: '0 0 8px',
+    color: THEME.muted,
+    fontSize: 12,
+    overflowWrap: 'anywhere',
+  },
   keyValueGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -1308,13 +1532,8 @@ const styles: Record<string, CSSProperties> = {
   dot: { width: 8, height: 8, borderRadius: '50%', display: 'inline-block' },
   actionWrap: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   actionBtn: {
-    border: `1px solid ${THEME.border}`,
-    background: THEME.panelRaised,
-    color: THEME.text,
-    borderRadius: 8,
     padding: '7px 10px',
     fontSize: 12,
-    cursor: 'pointer',
   },
   mountList: { display: 'grid', gap: 8 },
   mountLeft: { minWidth: 0, flex: '1 1 220px' },
@@ -1329,7 +1548,7 @@ const styles: Record<string, CSSProperties> = {
     gap: 10,
   },
   mountRight: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 },
-  mountMeta: { margin: 0, fontSize: 12, color: THEME.muted },
+  mountMeta: { margin: 0, fontSize: 12, color: THEME.muted, overflowWrap: 'anywhere' },
   logControlRow: { marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   logBoxCompact: {
     maxHeight: 220,
@@ -1374,6 +1593,7 @@ const styles: Record<string, CSSProperties> = {
     padding: '10px',
     color: THEME.text,
     verticalAlign: 'top',
+    overflowWrap: 'anywhere',
   },
   frame: {
     width: '100%',
@@ -1383,6 +1603,21 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 8,
     background: '#121519',
   },
+  frameCompact: {
+    minHeight: 520,
+    height: '70dvh',
+  },
+  framePlaceholder: {
+    minHeight: 320,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    background: '#121519',
+    color: THEME.muted,
+    display: 'grid',
+    placeItems: 'center',
+    padding: 24,
+    textAlign: 'center',
+  },
   panelActions: { marginBottom: 10 },
   ftpGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 },
   ftpFormGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 },
@@ -1390,14 +1625,9 @@ const styles: Record<string, CSSProperties> = {
   checkboxRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, color: THEME.text, fontSize: 13 },
   linkBtn: {
     display: 'inline-block',
-    border: `1px solid ${THEME.border}`,
-    background: THEME.panelRaised,
-    color: THEME.text,
     padding: '8px 12px',
-    borderRadius: 8,
     fontSize: 13,
     textDecoration: 'none',
-    cursor: 'pointer',
   },
   modalOverlay: {
     position: 'fixed',
@@ -1407,6 +1637,7 @@ const styles: Record<string, CSSProperties> = {
     placeItems: 'center',
     zIndex: 90,
     padding: 16,
+    overscrollBehavior: 'contain',
   },
   modalCard: {
     width: '100%',

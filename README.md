@@ -45,12 +45,12 @@ The default automount now prefers stable identifiers instead of shifting device 
 
 You can override those in `server/.env` or the shell with `D_UUID`, `E_UUID`, `D_LABEL`, and `E_LABEL`.
 
-## Auto-Mount On Detect
-`start.sh` launches [drive-watcher.sh](/data/data/com.termux/files/home/home-server/scripts/drive-watcher.sh), which polls on `WATCH_INTERVAL` seconds and mounts:
+## Drive Mounting
+`start.sh` mounts the drives once during startup:
 - NTFS to `~/Drives/D` with `ntfs-3g`
 - exFAT to `~/Drives/E` through `bindfs`
 
-This is polling-based, not kernel hotplug based. It works as soon as Android exposes the drives as block devices.
+If Android has not exposed the disks as block devices yet, rerun `bash start.sh` after reconnecting the drives.
 
 For boot-time startup with Termux:Boot, run:
 
@@ -98,7 +98,8 @@ RUNTIME_DIR=/data/data/com.termux/files/home/home-server/runtime
 FILEBROWSER_DB_PATH=/data/data/com.termux/files/home/home-server/runtime/filebrowser.db
 SERVER_NODE_OPTIONS=--max-old-space-size=192
 DASHBOARD_NODE_OPTIONS=--max-old-space-size=384
-WATCH_INTERVAL=5
+DRIVE_DETECT_RETRIES=6
+DRIVE_DETECT_DELAY=1
 JWT_SECRET=replace-with-a-long-random-secret
 TOKEN_TTL=12h
 DASHBOARD_USER=admin

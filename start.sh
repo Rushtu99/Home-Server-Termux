@@ -51,7 +51,6 @@ NGINX_PID_PATH="${NGINX_PID_PATH:-$RUNTIME_DIR/nginx.pid}"
 FILEBROWSER_DB_PATH="${FILEBROWSER_DB_PATH:-$RUNTIME_DIR/filebrowser.db}"
 SERVER_NODE_OPTIONS="${SERVER_NODE_OPTIONS:---max-old-space-size=192}"
 DASHBOARD_NODE_OPTIONS="${DASHBOARD_NODE_OPTIONS:---max-old-space-size=384}"
-WATCH_INTERVAL="${WATCH_INTERVAL:-5}"
 
 BACKEND_PID_PATH="${BACKEND_PID_PATH:-$RUNTIME_DIR/backend.pid}"
 FILEBROWSER_PID_PATH="${FILEBROWSER_PID_PATH:-$RUNTIME_DIR/filebrowser.pid}"
@@ -207,39 +206,13 @@ report_mount_status() {
     esac
 }
 
-start_drive_watcher() {
+stop_drive_watcher() {
     local watcher="$PROJECT/scripts/drive-watcher.sh"
-    local watcher_log="$LOG_DIR/drive-watcher.log"
-
-    if [ ! -f "$watcher" ]; then
-        log_warn "Drive watcher script not found: $watcher"
-        return 0
-    fi
 
     if pgrep -f "$watcher" >/dev/null 2>&1; then
-        log_info "Drive watcher already running"
-        return 0
+        log_info "Stopping legacy drive watcher"
+        pkill -f "$watcher" >/dev/null 2>&1 || true
     fi
-
-    PROJECT="$PROJECT" \
-    DRIVES_DIR="$DRIVES_DIR" \
-    DRIVES_C_DIR="$DRIVES_C_DIR" \
-    DRIVES_D_DIR="$DRIVES_D_DIR" \
-    DRIVES_E_DIR="$DRIVES_E_DIR" \
-    DRIVES_PS4_DIR="$DRIVES_PS4_DIR" \
-    INTERNAL_STORAGE="$INTERNAL_STORAGE" \
-    D_SOURCE="$D_SOURCE" \
-    E_SOURCE="$E_SOURCE" \
-    D_UUID="$D_UUID" \
-    E_UUID="$E_UUID" \
-    D_LABEL="$D_LABEL" \
-    E_LABEL="$E_LABEL" \
-    RUNTIME_DIR="$RUNTIME_DIR" \
-    MOUNT_RUNTIME_DIR="$MOUNT_RUNTIME_DIR" \
-    EXFAT_E_RAW_DIR="$EXFAT_E_RAW_DIR" \
-    WATCH_INTERVAL="$WATCH_INTERVAL" \
-    nohup bash "$watcher" >> "$watcher_log" 2>&1 </dev/null &
-    log_info "Drive watcher started"
 }
 
 start_background_command() {
@@ -281,10 +254,10 @@ detect_host_ip() {
 log_info "Starting Home Server"
 warn_conflicting_boot_scripts
 
+stop_drive_watcher
 prepare_drives_root
 report_mount_status "D" "$DRIVES_D_DIR" "ntfs" "$(mount_external_drive "D" "$DRIVES_D_DIR" "ntfs" "$D_SOURCE" "$D_UUID" "$D_LABEL")"
 report_mount_status "E" "$DRIVES_E_DIR" "exfat" "$(mount_external_drive "E" "$DRIVES_E_DIR" "exfat" "$E_SOURCE" "$E_UUID" "$E_LABEL")"
-start_drive_watcher
 
 if command -v termux-wake-lock >/dev/null 2>&1; then
     termux-wake-lock

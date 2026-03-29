@@ -14,9 +14,26 @@ D_UUID="${D_UUID:-16BA8F9DBA8F784F}"
 E_UUID="${E_UUID:-8097-A8C4}"
 D_LABEL="${D_LABEL:-Rushtu 4TB}"
 E_LABEL="${E_LABEL:-T exFAT 2TB}"
+DRIVE_DETECT_RETRIES="${DRIVE_DETECT_RETRIES:-6}"
+DRIVE_DETECT_DELAY="${DRIVE_DETECT_DELAY:-1}"
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
 MOUNT_RUNTIME_DIR="${MOUNT_RUNTIME_DIR:-$RUNTIME_DIR/mounts}"
 EXFAT_E_RAW_DIR="${EXFAT_E_RAW_DIR:-$MOUNT_RUNTIME_DIR/E-raw}"
+
+block_device_exists() {
+    local device="$1"
+
+    if [ -b "$device" ]; then
+        return 0
+    fi
+
+    if command -v su >/dev/null 2>&1; then
+        su -c "[ -b '$device' ]" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
+}
 
 prepare_drives_root() {
     mkdir -p "$DRIVES_DIR" "$DRIVES_PS4_DIR" "$MOUNT_RUNTIME_DIR"
@@ -55,7 +72,7 @@ resolve_external_device() {
     local expected_label="${4:-}"
     local match=""
 
-    if [ -n "$override" ] && [ -b "$override" ]; then
+    if [ -n "$override" ] && block_device_exists "$override"; then
         printf '%s\n' "$override"
         return 0
     fi
@@ -76,7 +93,7 @@ resolve_external_device() {
         match="$(su -c "blkid 2>/dev/null | awk '/TYPE=\"$fs_type\"/ { sub(/:.*/, \"\", \$1); print \$1; exit }'" 2>/dev/null || true)"
     fi
 
-    if [ -n "$match" ] && [ -b "$match" ]; then
+    if [ -n "$match" ] && block_device_exists "$match"; then
         printf '%s\n' "$match"
         return 0
     fi
@@ -101,7 +118,20 @@ mount_external_drive() {
         return 0
     fi
 
-    device="$(resolve_external_device "$fs_type" "$override" "$expected_uuid" "$expected_label" || true)"
+    local attempt=0
+
+    while [ "$attempt" -le "$DRIVE_DETECT_RETRIES" ]; do
+        device="$(resolve_external_device "$fs_type" "$override" "$expected_uuid" "$expected_label" || true)"
+        if [ -n "$device" ]; then
+            break
+        fi
+
+        if [ "$attempt" -lt "$DRIVE_DETECT_RETRIES" ]; then
+            sleep "$DRIVE_DETECT_DELAY"
+        fi
+        attempt=$((attempt + 1))
+    done
+
     if [ -z "$device" ]; then
         printf 'waiting\n'
         return 0
