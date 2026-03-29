@@ -4,32 +4,44 @@ import type { CSSProperties, FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const API = process.env.NEXT_PUBLIC_API || '/api';
-const FRONTEND_TOKEN_COOKIE = 'dashboard_token';
 
 const THEME = {
-  neonCyan: '#00f5ff',
-  brightYellow: '#ffe44d',
-  crimsonRed: '#ff3b5f',
-  darkPurple: '#26163d',
-  bg: '#0c0d14',
-  panel: '#141622',
-  text: '#f1f4ff',
-  muted: '#96a0b8',
-  ok: '#3de39f',
+  accent: '#7d936b',
+  accentFill: 'rgba(125, 147, 107, 0.12)',
+  brightYellow: '#b88b45',
+  crimsonRed: '#c45b5b',
+  darkPurple: '#2b2f36',
+  bg: '#111315',
+  panel: '#171a1e',
+  panelRaised: '#1d2126',
+  text: '#eceee7',
+  muted: '#9ca39b',
+  ok: '#6f9f70',
+  border: '#2d333a',
 };
-
-const AUTO_THEME_FILTERS = [
-  'none',
-  'hue-rotate(35deg) saturate(1.15)',
-  'hue-rotate(150deg) saturate(1.18)',
-  'hue-rotate(260deg) saturate(1.08)',
-];
 
 type TabKey = 'home' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
 type Services = Record<string, boolean>;
 
 type Monitor = {
+  cpuCores: number;
   cpuLoad: number;
+  eventLoopLagMs: number;
+  eventLoopP95Ms: number;
+  freeMem: number;
+  loadAvg1m: number;
+  loadAvg5m: number;
+  loadAvg15m: number;
+  network: {
+    rxBytes: number;
+    txBytes: number;
+    rxRate: number;
+    txRate: number;
+  };
+  processExternal: number;
+  processHeapTotal: number;
+  processHeapUsed: number;
+  processRss: number;
   totalMem: number;
   usedMem: number;
   uptime: number;
@@ -71,6 +83,23 @@ type FtpEntry = {
   permissions?: string;
 };
 
+type DashboardPayload = {
+  generatedAt: string;
+  services: Services;
+  monitor: Monitor;
+  connections: {
+    users: ConnectedUser[];
+  };
+  storage: {
+    mounts: StorageMount[];
+  };
+  logs: {
+    logs: DebugLog[];
+    markdown: string;
+    verboseLoggingEnabled: boolean;
+  };
+};
+
 type ControlTarget = {
   service: string;
   action: string;
@@ -98,6 +127,8 @@ const fmtBytes = (value: number) => {
   }
   return `${size.toFixed(idx < 2 ? 0 : 1)} ${units[idx]}`;
 };
+
+const fmtRate = (value: number) => `${fmtBytes(value)}/s`;
 
 const fmtTime = (iso: string) => {
   const d = new Date(iso);
@@ -127,21 +158,11 @@ const parentRemotePath = (targetPath: string) => {
   return `/${parts.join('/')}` || '/';
 };
 
-const setFrontendTokenCookie = (token: string) => {
-  document.cookie = `${FRONTEND_TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
-};
-
-const clearFrontendTokenCookie = () => {
-  document.cookie = `${FRONTEND_TOKEN_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
-};
-
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [isCompact, setIsCompact] = useState(false);
-  const [isNarrow, setIsNarrow] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -158,8 +179,6 @@ export default function Dashboard() {
   const [controlBusy, setControlBusy] = useState<Record<string, boolean>>({});
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [logsMarkdown, setLogsMarkdown] = useState('');
-  const [themePreset, setThemePreset] = useState('neon');
-  const [themeFxIndex, setThemeFxIndex] = useState(0);
   const [controlTarget, setControlTarget] = useState<ControlTarget>(null);
   const [controlPassword, setControlPassword] = useState('');
   const [ftpHost, setFtpHost] = useState('');
@@ -183,8 +202,6 @@ export default function Dashboard() {
 
   const clearSession = (message = '') => {
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem('dashboard-token');
-      clearFrontendTokenCookie();
       void fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
     }
 
@@ -192,7 +209,6 @@ export default function Dashboard() {
       return;
     }
 
-    setToken(null);
     setIsAuthed(false);
     setPassword('');
     setServices({});
@@ -209,47 +225,25 @@ export default function Dashboard() {
     setAuthError(message);
   };
 
-  const authFetch = (path: string, init: RequestInit = {}) => {
-    const headers = new Headers(init.headers || {});
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
-
-    return fetch(path, { ...init, headers, credentials: init.credentials || 'include' });
-  };
+  const authFetch = (path: string, init: RequestInit = {}) =>
+    fetch(path, { ...init, credentials: init.credentials || 'include' });
 
   useEffect(() => {
     const bootstrap = async () => {
-      const savedToken = typeof window !== 'undefined' ? window.localStorage.getItem('dashboard-token') : null;
-
       try {
-        const headers = savedToken ? { Authorization: `Bearer ${savedToken}` } : undefined;
-        const res = await fetch(`${API}/auth/me`, { headers, credentials: 'include' });
+        const res = await fetch(`${API}/auth/me`, { credentials: 'include' });
 
         if (!mountedRef.current) {
           return;
         }
 
         if (res.ok) {
-          if (savedToken) {
-            setToken(savedToken);
-            setFrontendTokenCookie(savedToken);
-          }
-
           setIsAuthed(true);
           setAuthError('');
-        } else if (typeof window !== 'undefined') {
-          window.localStorage.removeItem('dashboard-token');
-          clearFrontendTokenCookie();
         }
       } catch {
         if (!mountedRef.current) {
           return;
-        }
-
-        if (typeof window !== 'undefined') {
-          window.localStorage.removeItem('dashboard-token');
-          clearFrontendTokenCookie();
         }
       } finally {
         if (mountedRef.current) {
@@ -264,7 +258,6 @@ export default function Dashboard() {
   useEffect(() => {
     const updateLayout = () => {
       setIsCompact(window.innerWidth < 980);
-      setIsNarrow(window.innerWidth < 640);
     };
     updateLayout();
     window.addEventListener('resize', updateLayout);
@@ -278,24 +271,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const savedTheme = window.localStorage.getItem('dashboard-theme-preset');
-    if (savedTheme) {
-      setThemePreset(savedTheme);
-    }
-  }, []);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setThemeFxIndex((prev) => (prev + 1) % AUTO_THEME_FILTERS.length);
-    }, 20000);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
     if (!isAuthed) {
       return;
     }
@@ -303,10 +278,10 @@ export default function Dashboard() {
     void fetchAll();
     const interval = setInterval(() => {
       void fetchAll();
-    }, 3000);
+    }, 2000);
 
     return () => clearInterval(interval);
-  }, [isAuthed, token]);
+  }, [isAuthed]);
 
   useEffect(() => {
     if (!isAuthed) {
@@ -336,10 +311,10 @@ export default function Dashboard() {
     };
 
     void bootstrapFtp();
-  }, [isAuthed, token]);
+  }, [isAuthed]);
 
   useEffect(() => {
-    drawTrend(cpuCanvas.current, cpuHistory, THEME.neonCyan, 'rgba(0,245,255,0.14)');
+    drawTrend(cpuCanvas.current, cpuHistory, THEME.accent, THEME.accentFill);
   }, [cpuHistory]);
 
   useEffect(() => {
@@ -351,9 +326,32 @@ export default function Dashboard() {
       return '';
     }
 
-    const { protocol, hostname } = window.location;
+    const { protocol, hostname, host, port } = window.location;
+    if (port === '8088') {
+      return `${protocol}//${host}`;
+    }
     return `${protocol}//${hostname}:8088`;
   }, []);
+
+  const applyDashboardPayload = (payload: DashboardPayload) => {
+    setServices(payload.services || {});
+    setMonitor(payload.monitor || null);
+    setConnections(Array.isArray(payload.connections?.users) ? payload.connections.users : []);
+    setStorage(Array.isArray(payload.storage?.mounts) ? payload.storage.mounts : []);
+    setDebugLogs(Array.isArray(payload.logs?.logs) ? payload.logs.logs : []);
+    setLogsMarkdown(typeof payload.logs?.markdown === 'string' ? payload.logs.markdown : '');
+    setVerboseLogging(Boolean(payload.logs?.verboseLoggingEnabled));
+
+    if (payload.monitor) {
+      const ramPercent = payload.monitor.totalMem > 0 ? (payload.monitor.usedMem / payload.monitor.totalMem) * 100 : 0;
+      setCpuHistory((prev) => [...prev.slice(-39), payload.monitor.cpuLoad]);
+      setRamHistory((prev) => [...prev.slice(-39), ramPercent]);
+    }
+
+    if (payload.generatedAt) {
+      setLastUpdated(new Date(payload.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    }
+  };
 
   const fetchAll = async () => {
     if (fetchInFlightRef.current) {
@@ -362,55 +360,26 @@ export default function Dashboard() {
     fetchInFlightRef.current = true;
 
     try {
-      const [svcRes, monitorRes, connRes, storageRes, logRes] = await Promise.all([
-        authFetch(`${API}/services`),
-        authFetch(`${API}/monitor`),
-        authFetch(`${API}/connections`),
-        authFetch(`${API}/storage`),
-        authFetch(`${API}/logs`),
-      ]);
+      const res = await authFetch(`${API}/dashboard`);
 
       if (!mountedRef.current) {
         return;
       }
 
-      const resList = [svcRes, monitorRes, connRes, storageRes, logRes];
-      if (resList.some((response) => response.status === 401)) {
+      if (res.status === 401) {
         clearSession('Session expired. Please login again.');
         return;
       }
 
-      if (svcRes.ok) {
-        const svc = await svcRes.json();
-        setServices(svc);
+      if (!res.ok) {
+        setControlStatus('Unable to refresh dashboard telemetry');
+        return;
       }
 
-      if (monitorRes.ok) {
-        const m = await monitorRes.json();
-        const ramPercent = m.totalMem > 0 ? (m.usedMem / m.totalMem) * 100 : 0;
-        setMonitor(m);
-        setCpuHistory((prev) => [...prev.slice(-39), m.cpuLoad]);
-        setRamHistory((prev) => [...prev.slice(-39), ramPercent]);
+      const payload = await res.json().catch(() => null);
+      if (payload) {
+        applyDashboardPayload(payload as DashboardPayload);
       }
-
-      if (connRes.ok) {
-        const c = await connRes.json();
-        setConnections(Array.isArray(c.users) ? c.users : []);
-      }
-
-      if (storageRes.ok) {
-        const s = await storageRes.json();
-        setStorage(Array.isArray(s.mounts) ? s.mounts : []);
-      }
-
-      if (logRes.ok) {
-        const l = await logRes.json();
-        setDebugLogs(Array.isArray(l.logs) ? l.logs : []);
-        setLogsMarkdown(typeof l.markdown === 'string' ? l.markdown : '');
-        setVerboseLogging(Boolean(l.verboseLoggingEnabled));
-      }
-
-      setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err) {
       if (mountedRef.current) {
         setControlStatus(`Telemetry fetch error: ${String(err)}`);
@@ -494,20 +463,16 @@ export default function Dashboard() {
       });
       const payload = await res.json().catch(() => ({}));
 
-      if (!res.ok || !payload?.token) {
+      if (!res.ok) {
         setAuthError(payload?.error || 'Login failed');
         return;
       }
 
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('dashboard-token', payload.token);
-        setFrontendTokenCookie(payload.token);
-      }
-
-      setToken(payload.token);
       setIsAuthed(true);
+      setUsername('');
       setPassword('');
       setControlStatus('');
+      void fetchAll();
     } catch {
       setAuthError('Unable to reach auth service');
     }
@@ -535,15 +500,6 @@ export default function Dashboard() {
       void fetchAll();
     } catch {
       setControlStatus('Unable to update logging mode');
-    }
-  };
-
-  const applyThemePreset = (preset: string) => {
-    setThemePreset(preset);
-    const presetMap: Record<string, number> = { neon: 0, sunset: 1, midnight: 2, crimson: 3 };
-    setThemeFxIndex(presetMap[preset] ?? 0);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('dashboard-theme-preset', preset);
     }
   };
 
@@ -738,7 +694,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ ...styles.app, ...(isCompact ? styles.appCompact : {}), filter: AUTO_THEME_FILTERS[themeFxIndex] }}>
+    <div style={{ ...styles.app, ...(isCompact ? styles.appCompact : {}) }}>
       <aside style={{ ...styles.sidebar, ...(isCompact ? styles.sidebarCompact : {}) }}>
         <div style={styles.brand}>HmSTx</div>
         <div style={{ ...styles.navGroup, ...(isCompact ? styles.navGroupCompact : {}) }}>
@@ -765,159 +721,141 @@ export default function Dashboard() {
       <main style={{ ...styles.main, ...(isCompact ? styles.mainCompact : {}) }}>
         {activeTab === 'home' && (
           <div>
-            <div style={styles.headerRow}>
-              <p style={styles.breadcrumb}>Pages / Dashboard</p>
-              <p style={styles.updatedLabel}>{lastUpdated ? `Updated: ${lastUpdated}` : 'Waiting for telemetry...'}</p>
+            <div style={styles.headerBar}>
+              <div>
+                <h1 style={styles.title}>Server</h1>
+                <p style={styles.smallLabel}>Runtime, drives, services, and live telemetry.</p>
+              </div>
+              <div style={styles.headerMeta}>
+                <span style={styles.headerPill}>{lastUpdated ? `Updated ${lastUpdated}` : 'Waiting for telemetry'}</span>
+                <span style={styles.headerPill}>{runningServices}/{totalServices} services</span>
+                <span style={styles.headerPill}>{connections.length} clients</span>
+              </div>
             </div>
-            <h1 style={styles.title}>Main Dashboard</h1>
 
-            <section style={styles.kpiRow}>
-              <StatCard title="CPU Load" value={`${monitor ? monitor.cpuLoad.toFixed(1) : '0.0'}%`} />
-              <StatCard title="Memory Used" value={`${usedMemPct.toFixed(1)}%`} />
-              <StatCard title="Services Running" value={`${runningServices}/${totalServices}`} />
-              <StatCard title="Uptime" value={`${monitor ? (monitor.uptime / 3600).toFixed(1) : '0.0'}h`} />
-              <StatCard title="Connected Users" value={`${connections.length}`} />
-            </section>
-
-            <section style={{ ...styles.grid, ...(isNarrow ? styles.gridNarrow : {}) }}>
-              <article style={{ ...styles.card, ...(isCompact ? {} : { gridColumn: 'span 2' }) }}>
-                <h3 style={styles.cardTitle}>System Trends</h3>
-                <div style={styles.trendLegendRow}>
-                  <span style={styles.legend}><span style={{ ...styles.legendDot, background: THEME.neonCyan }} />CPU % (neon cyan)</span>
-                  <span style={styles.legend}><span style={{ ...styles.legendDot, background: THEME.brightYellow }} />RAM % (bright yellow)</span>
-                  <span style={styles.legend}>Markers show sampled points</span>
-                </div>
-                <div style={styles.dualCanvas}>
-                  <div>
-                    <p style={styles.smallLabel}>CPU Trend</p>
-                    <canvas ref={cpuCanvas} width={460} height={170} style={styles.canvas} />
+            <section style={{ ...styles.homeLayout, ...(isCompact ? styles.homeLayoutCompact : {}) }}>
+              <div style={styles.homePrimary}>
+                <article style={styles.card}>
+                  <h3 style={styles.cardTitle}>System</h3>
+                  <div style={styles.keyValueGrid}>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>CPU load</span><strong>{monitor ? `${monitor.cpuLoad.toFixed(1)}%` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Memory</span><strong>{usedMemPct.toFixed(1)}%</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Uptime</span><strong>{monitor ? `${(monitor.uptime / 3600).toFixed(1)}h` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>CPU cores</span><strong>{monitor ? monitor.cpuCores : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Load average</span><strong>{monitor ? `${monitor.loadAvg1m.toFixed(2)} / ${monitor.loadAvg5m.toFixed(2)} / ${monitor.loadAvg15m.toFixed(2)}` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Event loop</span><strong>{monitor ? `${monitor.eventLoopP95Ms.toFixed(2)}ms p95` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Node RSS</span><strong>{monitor ? fmtBytes(monitor.processRss) : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Network</span><strong>{monitor ? `↓ ${fmtRate(monitor.network.rxRate)} · ↑ ${fmtRate(monitor.network.txRate)}` : '--'}</strong></div>
                   </div>
-                  <div>
-                    <p style={styles.smallLabel}>RAM Trend</p>
-                    <canvas ref={ramCanvas} width={460} height={170} style={styles.canvas} />
-                  </div>
-                </div>
-              </article>
 
-              <article style={styles.card}>
-                <h3 style={styles.cardTitle}>Performance Headroom</h3>
-                <Progress label="CPU headroom" value={Math.max(0, 100 - (monitor?.cpuLoad || 0))} />
-                <Progress label="Memory headroom" value={Math.max(0, 100 - usedMemPct)} />
-                <Progress label="Service availability" value={totalServices > 0 ? (runningServices / totalServices) * 100 : 0} />
-                <Progress label="Storage free" value={Math.max(0, 100 - usedStoragePct)} />
-              </article>
-
-              <article style={styles.card}>
-                <h3 style={styles.cardTitle}>Service Controls</h3>
-                {Object.entries(services).map(([name, running]) => (
-                  <div key={name} style={styles.serviceRow}>
-                    <span style={styles.serviceName}>
-                      {name}
-                      <span style={{ ...styles.dot, background: running ? THEME.ok : THEME.crimsonRed }} />
-                    </span>
-                    <div style={styles.actionWrap}>
-                      <button disabled={!!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'start')}>Start</button>
-                      <button disabled={!!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'stop')}>Stop</button>
-                      <button disabled={!!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'restart')}>Restart</button>
+                  <div style={styles.trendStack}>
+                    <div>
+                      <p style={styles.smallLabel}>CPU trend</p>
+                      <canvas ref={cpuCanvas} width={460} height={144} style={styles.canvas} />
+                    </div>
+                    <div>
+                      <p style={styles.smallLabel}>RAM trend</p>
+                      <canvas ref={ramCanvas} width={460} height={144} style={styles.canvas} />
                     </div>
                   </div>
-                ))}
-                <p style={{ ...styles.smallLabel, marginTop: 8, color: controlStatus.includes('succeeded') ? THEME.ok : THEME.crimsonRed }}>
-                  {controlStatus || 'Ready'}
-                </p>
-              </article>
+                </article>
 
-              <article style={styles.card}>
-                <h3 style={styles.cardTitle}>Storage Split (Detailed)</h3>
-                <div style={{ ...styles.donutWrap, ...(isNarrow ? styles.donutWrapCompact : {}) }}>
-                  <div
-                    style={{
-                      ...styles.donut,
-                      background: `conic-gradient(${THEME.neonCyan} 0deg ${(usedStoragePct / 100) * 360}deg, ${THEME.darkPurple} ${(usedStoragePct / 100) * 360}deg 360deg)`,
-                    }}
-                  />
-                  <div>
-                    <p style={styles.legend}><span style={{ ...styles.legendDot, background: THEME.neonCyan }} />Used</p>
-                    <p style={styles.legend}><span style={{ ...styles.legendDot, background: THEME.darkPurple }} />Free</p>
-                    <p style={styles.legendValue}>{usedStoragePct.toFixed(1)}% used</p>
-                    <p style={styles.smallLabel}>{fmtBytes(usedStorage)} / {fmtBytes(totalStorage)}</p>
-                  </div>
-                </div>
-                <div style={styles.mountList}>
-                  {storage.slice(0, 6).map((mount) => (
-                    <div key={`${mount.filesystem}-${mount.mount}`} style={{ ...styles.mountRow, ...(isNarrow ? styles.mountRowCompact : {}) }}>
-                      <div style={styles.mountLeft}>
-                        <strong>{mount.mount}</strong>
-                        <p style={styles.mountMeta}>{mount.filesystem} {mount.fsType ? `(${mount.fsType})` : ''} {mount.category ? `- ${mount.category}` : ''}</p>
+                <article style={styles.card}>
+                  <h3 style={styles.cardTitle}>Storage</h3>
+                  <Progress label="Storage free" value={Math.max(0, 100 - usedStoragePct)} />
+                  <div style={styles.mountList}>
+                    {storage.slice(0, 6).map((mount) => (
+                      <div key={`${mount.filesystem}-${mount.mount}`} style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>{mount.mount}</strong>
+                          <p style={styles.mountMeta}>{mount.filesystem} {mount.fsType ? `(${mount.fsType})` : ''} {mount.category ? `- ${mount.category}` : ''}</p>
+                        </div>
+                        <div style={styles.mountRight}>
+                          <span>{mount.usePercent}%</span>
+                          <span style={styles.mountMeta}>{fmtBytes(mount.used)} / {fmtBytes(mount.size)}</span>
+                        </div>
                       </div>
-                      <div style={{ ...styles.mountRight, ...(isNarrow ? styles.mountRightCompact : {}) }}>
-                        <span>{mount.usePercent}%</span>
-                        <span style={styles.mountMeta}>{fmtBytes(mount.used)} / {fmtBytes(mount.size)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </article>
-
-              <article style={styles.card}>
-                <h3 style={styles.cardTitle}>Live Debug Log</h3>
-                <div style={styles.logControlRow}>
-                  <button style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
-                    {verboseLogging ? 'Disable Verbose Logging' : 'Enable Verbose Logging'}
-                  </button>
-                </div>
-                <div style={styles.logBox}>
-                  {debugLogs.length === 0 && <p style={styles.smallLabel}>No debug events yet.</p>}
-                  {debugLogs.slice(0, 40).map((log, idx) => (
-                    <p key={`${log.timestamp}-${idx}`} style={styles.logLine}>
-                      <span style={styles.logTime}>{fmtTime(log.timestamp)}</span>
-                      <span style={{ ...styles.logLevel, color: log.level === 'error' ? THEME.crimsonRed : log.level === 'warn' ? THEME.brightYellow : THEME.neonCyan }}>
-                        {log.level.toUpperCase()}
-                      </span>
-                      <span>
-                        {log.message}
-                        {log.meta ? ` ${JSON.stringify(log.meta)}` : ''}
-                      </span>
-                    </p>
-                  ))}
-                </div>
-                <p style={{ ...styles.smallLabel, marginTop: 10 }}>Markdown Debug Box</p>
-                <pre style={styles.markdownBox}>{logsMarkdown || '```log\n(no logs yet)\n```'}</pre>
-              </article>
-            </section>
-
-            <section style={{ ...styles.card, marginTop: 16 }}>
-              <h3 style={styles.cardTitle}>Connected Users</h3>
-              <div style={styles.tableWrap}>
-                <table style={styles.table}>
-                  <thead>
-                    <tr>
-                      <th style={styles.th}>Username</th>
-                      <th style={styles.th}>IP</th>
-                      <th style={styles.th}>Port</th>
-                      <th style={styles.th}>Protocol</th>
-                      <th style={styles.th}>Status</th>
-                      <th style={styles.th}>Last Seen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {connections.length === 0 && (
-                      <tr>
-                        <td style={styles.td} colSpan={6}>No active users</td>
-                      </tr>
-                    )}
-                    {connections.map((user, idx) => (
-                      <tr key={`${user.ip}-${user.port}-${idx}`}>
-                        <td style={styles.td}>{user.username}</td>
-                        <td style={styles.td}>{user.ip}</td>
-                        <td style={styles.td}>{user.port || '--'}</td>
-                        <td style={styles.td}>{user.protocol}</td>
-                        <td style={styles.td}><span style={styles.statusDone}>{user.status}</span></td>
-                        <td style={styles.td}>{fmtTime(user.lastSeen)}</td>
-                      </tr>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </article>
+              </div>
+
+              <div style={styles.homeSecondary}>
+                <article style={styles.card}>
+                  <h3 style={styles.cardTitle}>Service Controls</h3>
+                  {Object.entries(services).map(([name, running]) => (
+                    <div key={name} style={styles.serviceRow}>
+                      <span style={styles.serviceName}>
+                        {name}
+                        <span style={{ ...styles.dot, background: running ? THEME.ok : THEME.crimsonRed }} />
+                      </span>
+                      <div style={styles.actionWrap}>
+                        <button disabled={!!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'start')}>Start</button>
+                        <button disabled={!!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'stop')}>Stop</button>
+                        <button disabled={!!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'restart')}>Restart</button>
+                      </div>
+                    </div>
+                  ))}
+                  <p style={{ ...styles.smallLabel, marginTop: 8, color: controlStatus.includes('succeeded') ? THEME.ok : THEME.crimsonRed }}>
+                    {controlStatus || 'Ready'}
+                  </p>
+                </article>
+
+                <article style={styles.card}>
+                  <h3 style={styles.cardTitle}>Connected Users</h3>
+                  <div style={styles.tableWrapTight}>
+                    <table style={styles.table}>
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>Username</th>
+                          <th style={styles.th}>IP</th>
+                          <th style={styles.th}>Protocol</th>
+                          <th style={styles.th}>Last Seen</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {connections.length === 0 && (
+                          <tr>
+                            <td style={styles.td} colSpan={4}>No active users</td>
+                          </tr>
+                        )}
+                        {connections.map((user, idx) => (
+                          <tr key={`${user.ip}-${user.port}-${idx}`}>
+                            <td style={styles.td}>{user.username}</td>
+                            <td style={styles.td}>{user.ip}</td>
+                            <td style={styles.td}>{user.protocol}</td>
+                            <td style={styles.td}>{fmtTime(user.lastSeen)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article style={styles.card}>
+                  <div style={styles.logControlRow}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Debug Log</h3>
+                    <button style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
+                      {verboseLogging ? 'Disable Verbose' : 'Enable Verbose'}
+                    </button>
+                  </div>
+                  <div style={styles.logBoxCompact}>
+                    {debugLogs.length === 0 && <p style={styles.smallLabel}>No debug events yet.</p>}
+                    {debugLogs.slice(0, 20).map((log, idx) => (
+                      <p key={`${log.timestamp}-${idx}`} style={styles.logLine}>
+                        <span style={styles.logTime}>{fmtTime(log.timestamp)}</span>
+                        <span style={{ ...styles.logLevel, color: log.level === 'error' ? THEME.crimsonRed : log.level === 'warn' ? THEME.brightYellow : THEME.accent }}>
+                          {log.level.toUpperCase()}
+                        </span>
+                        <span>
+                          {log.message}
+                          {log.meta ? ` ${JSON.stringify(log.meta)}` : ''}
+                        </span>
+                      </p>
+                    ))}
+                  </div>
+                  <pre style={styles.markdownBoxCompact}>{logsMarkdown || '```log\n(no logs yet)\n```'}</pre>
+                </article>
               </div>
             </section>
           </div>
@@ -1043,25 +981,13 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'settings' && (
-          <Panel title="Settings" subtitle="Theme presets and diagnostics preferences.">
+          <Panel title="Settings" subtitle="Session, logging, and diagnostics controls.">
             <div style={styles.card}>
-              <h3 style={styles.cardTitle}>Theme Presets</h3>
+              <h3 style={styles.cardTitle}>Session</h3>
+              <p style={styles.smallLabel}>Theme switching is fixed to a single stable palette now. Session access is cookie-based and invalidates on logout or timeout.</p>
               <div style={styles.actionWrap}>
-                {['neon', 'sunset', 'midnight', 'crimson'].map((preset) => (
-                  <button
-                    key={preset}
-                    style={{ ...styles.actionBtn, ...(themePreset === preset ? styles.navBtnActive : {}) }}
-                    type="button"
-                    onClick={() => applyThemePreset(preset)}
-                  >
-                    {preset}
-                  </button>
-                ))}
+                <button style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
               </div>
-              <p style={{ ...styles.smallLabel, marginTop: 10 }}>
-                Selected preset: <strong>{themePreset}</strong>. Reload after plugin UI update to apply full palette.
-              </p>
-              <p style={styles.smallLabel}>Auto theme rotation is enabled and cycles every 20 seconds.</p>
 
               <h3 style={{ ...styles.cardTitle, marginTop: 16 }}>Logging</h3>
               <div style={styles.actionWrap}>
@@ -1098,15 +1024,6 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div style={styles.statCard}>
-      <p style={styles.statTitle}>{title}</p>
-      <p style={styles.statValue}>{value}</p>
-    </div>
-  );
-}
-
 function Progress({ label, value }: { label: string; value: number }) {
   const safeValue = Math.max(0, Math.min(value, 100));
   return (
@@ -1125,9 +1042,8 @@ function Progress({ label, value }: { label: string; value: number }) {
 function Panel({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
     <div>
-      <p style={styles.breadcrumb}>Pages / Dashboard</p>
       <h1 style={styles.title}>{title}</h1>
-      <p style={{ ...styles.smallLabel, marginBottom: 16 }}>{subtitle}</p>
+      <p style={styles.panelSubtitle}>{subtitle}</p>
       {children}
     </div>
   );
@@ -1196,32 +1112,32 @@ const styles: Record<string, CSSProperties> = {
     minHeight: '100dvh',
     display: 'grid',
     placeItems: 'center',
-    background: '#0b0c10',
-    color: '#d8dbe3',
+    background: THEME.bg,
+    color: THEME.text,
   },
   loginShell: {
     minHeight: '100dvh',
-    background: `radial-gradient(circle at top, ${THEME.darkPurple} 0%, ${THEME.bg} 55%)`,
+    background: THEME.bg,
     display: 'grid',
     placeItems: 'center',
-    padding: 16,
+    padding: 24,
   },
   loginCard: {
     width: '100%',
-    maxWidth: 380,
-    background: '#11131b',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 14,
-    padding: 20,
+    maxWidth: 360,
+    background: THEME.panel,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    padding: 24,
   },
   input: {
     width: '100%',
     marginBottom: 10,
-    background: '#0f1118',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 9,
+    background: '#121519',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
     padding: '10px 12px',
-    color: '#eff1f7',
+    color: THEME.text,
   },
   errorText: {
     color: THEME.crimsonRed,
@@ -1230,201 +1146,253 @@ const styles: Record<string, CSSProperties> = {
   },
   loginBtn: {
     width: '100%',
-    border: 'none',
-    borderRadius: 9,
+    border: `1px solid ${THEME.accent}`,
+    borderRadius: 8,
     padding: '10px 12px',
-    background: THEME.neonCyan,
-    color: '#04101f',
-    fontWeight: 700,
+    background: THEME.accent,
+    color: '#131611',
+    fontWeight: 600,
     cursor: 'pointer',
   },
   app: {
     minHeight: '100dvh',
     display: 'flex',
-    background: `radial-gradient(120% 100% at 10% 0%, ${THEME.darkPurple} 0%, ${THEME.bg} 55%, #08090f 100%)`,
+    background: THEME.bg,
     color: THEME.text,
     overflow: 'hidden',
+    fontFamily: 'system-ui, sans-serif',
   },
   appCompact: { flexDirection: 'column' },
   sidebar: {
-    width: 220,
+    width: 248,
     height: '100%',
-    borderRight: `1px solid ${THEME.darkPurple}`,
+    borderRight: `1px solid ${THEME.border}`,
     padding: 20,
-    background: 'linear-gradient(180deg, #14111f 0%, #0d1018 100%)',
+    background: '#15181c',
     overflowY: 'auto',
   },
   sidebarCompact: {
     width: '100%',
     borderRight: 'none',
-    borderBottom: `1px solid ${THEME.darkPurple}`,
+    borderBottom: `1px solid ${THEME.border}`,
     padding: 14,
   },
   brand: {
-    fontSize: 21,
-    fontWeight: 800,
+    fontSize: 20,
+    fontWeight: 700,
     marginBottom: 18,
-    color: '#f7f0ff',
-    textShadow: `0 8px 22px ${THEME.darkPurple}`,
+    color: THEME.text,
   },
   navGroup: { display: 'flex', flexDirection: 'column', gap: 8 },
   navGroupCompact: { flexDirection: 'row', flexWrap: 'wrap' },
   navBtn: {
-    border: '1px solid #36334f',
-    borderRadius: 10,
-    background: '#17172a',
-    color: '#c3c7d5',
+    border: '1px solid transparent',
+    borderRadius: 8,
+    background: 'transparent',
+    color: THEME.text,
     padding: '10px 12px',
     textAlign: 'left',
     cursor: 'pointer',
-    fontWeight: 600,
+    fontWeight: 500,
   },
   navBtnCompact: { flex: '1 1 118px' },
   navBtnActive: {
-    background: `linear-gradient(135deg, ${THEME.darkPurple} 0%, #1f2941 48%, #1a2d3f 100%)`,
-    color: '#fff',
-    borderColor: '#4a4c74',
-    boxShadow: `0 10px 20px ${THEME.darkPurple}`,
+    background: THEME.panelRaised,
+    color: THEME.text,
+    borderColor: THEME.border,
   },
   logoutBtn: { marginTop: 14 },
-  main: { flex: 1, height: '100%', padding: 28, overflowY: 'auto' },
+  main: { flex: 1, height: '100%', padding: 24, overflowY: 'auto' },
   mainCompact: { padding: 16 },
-  headerRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  breadcrumb: { margin: 0, color: THEME.muted, fontSize: 12 },
-  updatedLabel: { margin: 0, color: THEME.neonCyan, fontSize: 12 },
-  title: { margin: '4px 0 16px', fontSize: 36, fontWeight: 800 },
-  kpiRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 14 },
-  statCard: {
-    background: 'linear-gradient(180deg, #171b2a 0%, #131827 100%)',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 12,
-    padding: 12,
+  title: { margin: '0 0 6px', fontSize: 28, fontWeight: 700, color: THEME.text },
+  panelSubtitle: { margin: '0 0 18px', color: THEME.muted, fontSize: 13 },
+  headerBar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+    flexWrap: 'wrap',
+    marginBottom: 16,
   },
-  statTitle: { margin: 0, color: THEME.muted, fontSize: 12 },
-  statValue: { margin: '6px 0 0', fontSize: 22, fontWeight: 700, color: '#fff' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 },
-  gridNarrow: { gridTemplateColumns: '1fr' },
+  headerMeta: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
+  headerPill: {
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    background: THEME.panel,
+    color: THEME.muted,
+    fontSize: 12,
+    padding: '6px 10px',
+  },
+  homeLayout: {
+    display: 'flex',
+    alignItems: 'stretch',
+    gap: 16,
+    minHeight: 'calc(100dvh - 168px)',
+  },
+  homeLayoutCompact: {
+    flexDirection: 'column',
+    minHeight: 'auto',
+  },
+  homePrimary: {
+    flex: '1 1 58%',
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
+  },
+  homeSecondary: {
+    flex: '1 1 42%',
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
+  },
   card: {
-    background: 'linear-gradient(180deg, #151a2a 0%, #121827 100%)',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 14,
-    padding: 14,
+    background: THEME.panel,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    padding: 16,
   },
-  cardTitle: { margin: '0 0 10px', fontSize: 15, color: '#f2f2f5' },
-  trendLegendRow: { display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 8 },
-  dualCanvas: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10 },
+  cardTitle: { margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: THEME.text },
   smallLabel: { margin: '0 0 8px', color: THEME.muted, fontSize: 12 },
-  canvas: { width: '100%', height: 170, borderRadius: 10, border: `1px solid ${THEME.darkPurple}` },
-  progressLabel: { display: 'flex', justifyContent: 'space-between', color: '#c8c9ce', fontSize: 12, marginBottom: 4 },
-  progressTrack: { height: 7, borderRadius: 999, background: '#2a2e3d', overflow: 'hidden' },
-  progressFill: { height: '100%', background: `linear-gradient(90deg, ${THEME.neonCyan} 0%, ${THEME.brightYellow} 55%, ${THEME.crimsonRed} 100%)` },
+  keyValueGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: 8,
+    marginBottom: 16,
+  },
+  keyValueRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+    padding: '10px 12px',
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+  },
+  keyLabel: {
+    color: THEME.muted,
+    fontSize: 13,
+  },
+  trendStack: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: 12,
+  },
+  canvas: {
+    width: '100%',
+    height: 156,
+    borderRadius: 8,
+    border: `1px solid ${THEME.border}`,
+    background: '#121519',
+  },
+  progressLabel: { display: 'flex', justifyContent: 'space-between', color: THEME.muted, fontSize: 12, marginBottom: 6 },
+  progressTrack: { height: 8, borderRadius: 999, background: '#242930', overflow: 'hidden' },
+  progressFill: { height: '100%', background: THEME.accent },
   serviceRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 10,
     paddingBottom: 10,
-    borderBottom: '1px dashed #32374a',
+    borderBottom: `1px solid ${THEME.border}`,
     gap: 8,
   },
   serviceName: { textTransform: 'capitalize', display: 'flex', alignItems: 'center', gap: 8 },
   dot: { width: 8, height: 8, borderRadius: '50%', display: 'inline-block' },
   actionWrap: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   actionBtn: {
-    border: '1px solid #4f5674',
-    background: '#22283b',
-    color: '#f3f3f4',
+    border: `1px solid ${THEME.border}`,
+    background: THEME.panelRaised,
+    color: THEME.text,
     borderRadius: 8,
-    padding: '4px 8px',
+    padding: '7px 10px',
     fontSize: 12,
     cursor: 'pointer',
   },
-  donutWrap: { display: 'flex', alignItems: 'center', gap: 18, marginBottom: 10, flexWrap: 'wrap' },
-  donutWrapCompact: { alignItems: 'flex-start' },
-  donut: { width: 120, height: 120, borderRadius: '50%', position: 'relative' },
-  legend: { margin: '0 0 8px', color: '#b7bac7', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 },
-  legendDot: { width: 9, height: 9, borderRadius: '50%', display: 'inline-block' },
-  legendValue: { margin: 0, color: '#fff', fontWeight: 700 },
   mountList: { display: 'grid', gap: 8 },
   mountLeft: { minWidth: 0, flex: '1 1 220px' },
   mountRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    background: THEME.panel,
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 10,
-    padding: '8px 10px',
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    padding: '10px 12px',
     gap: 10,
   },
-  mountRowCompact: { flexWrap: 'wrap', alignItems: 'flex-start' },
   mountRight: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 },
-  mountRightCompact: { width: '100%', alignItems: 'flex-start' },
   mountMeta: { margin: 0, fontSize: 12, color: THEME.muted },
-  logBox: {
+  logControlRow: { marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  logBoxCompact: {
     maxHeight: 220,
     overflow: 'auto',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 10,
-    padding: '8px 10px',
-    background: '#101524',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    padding: '10px 12px',
+    background: '#121519',
     fontFamily: 'monospace',
   },
-  logControlRow: { marginBottom: 8 },
-  markdownBox: {
-    margin: 0,
-    maxHeight: 170,
+  markdownBoxCompact: {
+    margin: '10px 0 0',
+    maxHeight: 180,
     overflow: 'auto',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 10,
-    padding: '10px',
-    background: '#0d1320',
-    color: '#c4dcff',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    padding: '10px 12px',
+    background: '#121519',
+    color: '#d6dbd0',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     fontSize: 12,
     fontFamily: 'monospace',
   },
   logLine: { margin: '0 0 6px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' },
-  logTime: { color: '#a9b0c8', minWidth: 72 },
+  logTime: { color: THEME.muted, minWidth: 72 },
   logLevel: { fontWeight: 700, minWidth: 42 },
   tableWrap: { width: '100%', overflowX: 'auto' },
-  table: { width: '100%', borderCollapse: 'separate', borderSpacing: '0 8px', fontSize: 13 },
-  th: { color: '#b5bad0', fontWeight: 500, textAlign: 'left', padding: '0 10px 6px' },
-  td: {
-    background: '#1a2135',
-    borderTop: '1px solid #343c55',
-    borderBottom: '1px solid #343c55',
-    padding: '10px',
-    color: '#e2e4ec',
+  tableWrapTight: { width: '100%', overflowX: 'auto' },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: {
+    color: THEME.muted,
+    fontWeight: 500,
+    textAlign: 'left',
+    padding: '0 10px 10px',
+    borderBottom: `1px solid ${THEME.border}`,
+    whiteSpace: 'nowrap',
   },
-  statusDone: {
-    borderRadius: 999,
-    padding: '3px 8px',
-    fontSize: 12,
-    fontWeight: 600,
-    color: '#cde8db',
-    background: 'rgba(48, 181, 118, 0.2)',
-    border: '1px solid rgba(48, 181, 118, 0.4)',
+  td: {
+    background: 'transparent',
+    borderBottom: `1px solid ${THEME.border}`,
+    padding: '10px',
+    color: THEME.text,
+    verticalAlign: 'top',
   },
   frame: {
     width: '100%',
-    minHeight: 420,
-    height: 'calc(100dvh - 220px)',
-    border: '1px solid #2d3142',
-    borderRadius: 12,
-    background: '#111420',
+    minHeight: 480,
+    height: 'calc(100dvh - 184px)',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    background: '#121519',
   },
   panelActions: { marginBottom: 10 },
-  ftpGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 },
+  ftpGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 },
   ftpFormGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 },
   ftpActionGroup: { display: 'grid', gap: 10, marginTop: 12 },
   checkboxRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, color: THEME.text, fontSize: 13 },
   linkBtn: {
     display: 'inline-block',
-    border: '1px solid #3f4458',
-    background: '#1d2130',
-    color: '#f0f1f5',
+    border: `1px solid ${THEME.border}`,
+    background: THEME.panelRaised,
+    color: THEME.text,
     padding: '8px 12px',
     borderRadius: 8,
     fontSize: 13,
@@ -1434,7 +1402,7 @@ const styles: Record<string, CSSProperties> = {
   modalOverlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(4, 7, 14, 0.66)',
+    background: 'rgba(7, 8, 10, 0.72)',
     display: 'grid',
     placeItems: 'center',
     zIndex: 90,
@@ -1443,9 +1411,9 @@ const styles: Record<string, CSSProperties> = {
   modalCard: {
     width: '100%',
     maxWidth: 420,
-    background: '#141a2a',
-    border: `1px solid ${THEME.darkPurple}`,
-    borderRadius: 12,
+    background: THEME.panel,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
     padding: 16,
   },
 };

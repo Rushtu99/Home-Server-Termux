@@ -1,6 +1,7 @@
 # Node
 node_modules/
 npm-debug.log*
+server/.env
 
 # Next.js
 .next/
@@ -28,6 +29,7 @@ tools/
 .term.*
 .verify.*
 .ttyd.out
+*.cookies
 nohup.out
 log.txt
 

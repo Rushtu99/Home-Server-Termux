@@ -24,13 +24,14 @@ cp server/.env.example server/.env
 bash start.sh
 ```
 
-`start.sh` prepares `~/Drives` as the file-system root and:
+`start.sh` loads `server/.env`, prepares `~/Drives` as the file-system root, and:
 - bind-mounts Android shared storage at `~/Drives/C`
 - auto-mounts the first detected external NTFS partition at `~/Drives/D` with `ntfs-3g`
-- auto-mounts the first detected external exFAT partition at `~/Drives/E`
+- auto-mounts the first detected external exFAT partition at `~/Drives/E` and remaps permissions through `bindfs`
 - keeps `~/Drives/PS4` as the local mirror target for the PS4 FTP client
 
 FileBrowser serves `~/Drives`, and ttyd opens in `~/home-server`.
+Run `start.sh` from the normal Termux app user, not from a root shell.
 
 If Android enumerates your external disks differently, you can override the source block devices for startup:
 
@@ -45,13 +46,20 @@ The default automount now prefers stable identifiers instead of shifting device 
 You can override those in `server/.env` or the shell with `D_UUID`, `E_UUID`, `D_LABEL`, and `E_LABEL`.
 
 ## Auto-Mount On Detect
-`start.sh` now launches [drive-watcher.sh](/data/data/com.termux/files/home/home-server/scripts/drive-watcher.sh), which polls every 5 seconds and mounts:
+`start.sh` launches [drive-watcher.sh](/data/data/com.termux/files/home/home-server/scripts/drive-watcher.sh), which polls on `WATCH_INTERVAL` seconds and mounts:
 - NTFS to `~/Drives/D` with `ntfs-3g`
-- exFAT to `~/Drives/E`
+- exFAT to `~/Drives/E` through `bindfs`
 
 This is polling-based, not kernel hotplug based. It works as soon as Android exposes the drives as block devices.
 
-For boot-time startup with Termux:Boot, copy or symlink [home-server.sh](/data/data/com.termux/files/home/home-server/termux-boot/home-server.sh) into `~/.termux/boot/`.
+For boot-time startup with Termux:Boot, run:
+
+```bash
+cd ~/home-server
+bash scripts/install-termux-boot.sh
+```
+
+That installs a symlinked launcher at `~/.termux/boot/home-server.sh` and disables the older conflicting boot entries.
 
 ## Optional Linux/WSL Dev Helper
 ```bash
@@ -71,21 +79,26 @@ This requires `tools/agent-browser-workspace` to exist locally. Output is writte
 
 ## Auth and Security
 - Dashboard login uses JWT.
-- Backend accepts JWT from either bearer header or auth cookie.
+- Backend uses the httpOnly auth cookie for the dashboard and tracks active sessions server-side.
 - nginx protects `/files` and `/term` through `auth_request` against `/api/auth/verify`.
 - Service control requires `ADMIN_ACTION_PASSWORD`.
 - nginx is excluded from dashboard controls to avoid self-lockout.
 - FileBrowser and ttyd stay on loopback so only nginx is externally exposed.
+- Login attempts are rate-limited and sessions expire on idle and absolute timeouts.
 
 ## Backend Environment
 Start from `server/.env.example`:
 
 ```env
 PORT=4000
-CORS_ORIGIN=*
+CORS_ORIGIN=
+EXEC_SHELL=
 FILEBROWSER_ROOT=/data/data/com.termux/files/home/Drives
 RUNTIME_DIR=/data/data/com.termux/files/home/home-server/runtime
 FILEBROWSER_DB_PATH=/data/data/com.termux/files/home/home-server/runtime/filebrowser.db
+SERVER_NODE_OPTIONS=--max-old-space-size=192
+DASHBOARD_NODE_OPTIONS=--max-old-space-size=384
+WATCH_INTERVAL=5
 JWT_SECRET=replace-with-a-long-random-secret
 TOKEN_TTL=12h
 DASHBOARD_USER=admin
@@ -122,7 +135,7 @@ Rerun:
 bash start.sh
 ```
 
-This clears old frontend/backend processes and starts the stack again in the expected order.
+This reloads `server/.env`, clears the repo-managed service processes, and starts the stack again in the expected order.
 
 ### `/files` or `/term` returns `401`
 Login through the dashboard first. Those routes are protected by nginx and require the dashboard auth cookie.

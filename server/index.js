@@ -5,8 +5,9 @@ const express = require('express');
 const cors = require('cors');
 const os = require('os');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { exec, execFileSync } = require('child_process');
 const net = require('net');
+const { monitorEventLoopDelay } = require('node:perf_hooks');
 const jwt = require('jsonwebtoken');
 const ftp = require('basic-ftp');
 
@@ -15,7 +16,37 @@ if (typeof loadEnvFile === 'function' && fs.existsSync(ENV_FILE)) {
   loadEnvFile(ENV_FILE);
 }
 
+const parseDurationMs = (input, fallbackMs) => {
+  const value = String(input || '').trim();
+  if (!value) {
+    return fallbackMs;
+  }
+
+  if (/^\d+$/.test(value)) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallbackMs;
+  }
+
+  const match = value.match(/^(\d+)(ms|s|m|h|d)$/i);
+  if (!match) {
+    return fallbackMs;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+  };
+
+  return amount * multipliers[unit];
+};
+
 const app = express();
+app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
 const ROOT_DIR = path.resolve(__dirname, '..');
 const HOME_DIR = process.env.HOME || '/data/data/com.termux/files/home';
@@ -23,8 +54,12 @@ const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'Dr
 const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
 const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || path.join(FILEBROWSER_ROOT, 'PS4');
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
+const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pid');
 const FILEBROWSER_DB = process.env.FILEBROWSER_DB_PATH || path.join(RUNTIME_DIR, 'filebrowser.db');
-const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+const FILEBROWSER_PID = process.env.FILEBROWSER_PID_PATH || path.join(RUNTIME_DIR, 'filebrowser.pid');
+const TTYD_PID = process.env.TTYD_PID_PATH || path.join(RUNTIME_DIR, 'ttyd.pid');
+const FTP_PID = process.env.FTP_PID_PATH || path.join(RUNTIME_DIR, 'ftp.pid');
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const PORT = Number(process.env.PORT || 4000);
 const DASHBOARD_USER = process.env.DASHBOARD_USER || 'admin';
 const DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
@@ -32,53 +67,83 @@ const ADMIN_ACTION_PASSWORD = process.env.ADMIN_ACTION_PASSWORD || DASHBOARD_PAS
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
 const TOKEN_TTL = process.env.TOKEN_TTL || '12h';
 const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'hs_jwt';
-const FRONTEND_TOKEN_COOKIE = process.env.FRONTEND_TOKEN_COOKIE || 'dashboard_token';
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || '';
 const COOKIE_SAME_SITE = process.env.COOKIE_SAME_SITE || 'lax';
-const EXEC_SHELL = process.env.SHELL || '/bin/sh';
+const DEFAULT_EXEC_SHELL = fs.existsSync('/data/data/com.termux/files/usr/bin/bash')
+  ? '/data/data/com.termux/files/usr/bin/bash'
+  : '/bin/sh';
+const EXEC_SHELL = process.env.EXEC_SHELL || DEFAULT_EXEC_SHELL;
 const STORAGE_FS_TYPES = new Set(['ext2', 'ext3', 'ext4', 'f2fs', 'xfs', 'btrfs', 'ntfs', 'exfat', 'vfat', 'fuse']);
 const CONNECTION_TTL_MS = 10 * 60 * 1000;
 const MAX_CONNECTIONS = 50;
 const FTP_CLIENT_TIMEOUT_MS = 15000;
+const SESSION_IDLE_TIMEOUT_MS = parseDurationMs(process.env.SESSION_IDLE_TIMEOUT || '30m', 30 * 60 * 1000);
+const SESSION_ABSOLUTE_TIMEOUT_MS = parseDurationMs(process.env.SESSION_ABSOLUTE_TIMEOUT || TOKEN_TTL, 12 * 60 * 60 * 1000);
+const MAX_ACTIVE_SESSIONS = Math.max(1, Number(process.env.MAX_ACTIVE_SESSIONS || 4));
+const LOGIN_WINDOW_MS = parseDurationMs(process.env.LOGIN_WINDOW || '10m', 10 * 60 * 1000);
+const LOGIN_BLOCK_MS = parseDurationMs(process.env.LOGIN_BLOCK_DURATION || '15m', 15 * 60 * 1000);
+const LOGIN_MAX_ATTEMPTS = Math.max(1, Number(process.env.LOGIN_MAX_ATTEMPTS || 5));
+const NGINX_CMD = `nginx -p "${ROOT_DIR}" -c "${ROOT_DIR}/nginx.conf"`;
+const NGINX_MATCH = `nginx -p ${ROOT_DIR} -c ${ROOT_DIR}/nginx.conf`;
+const stopPidfileProcess = (pidPath, fallback = '') =>
+  `if [ -f "${pidPath}" ]; then pid="$(cat "${pidPath}" 2>/dev/null || true)"; if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill "$pid" >/dev/null 2>&1 || true; sleep 1; if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" >/dev/null 2>&1 || true; fi; fi; rm -f "${pidPath}"; fi${fallback ? `; ${fallback}` : ''}`;
+const checkPidfileProcess = (pidPath, fallback = '') =>
+  `test -f "${pidPath}" && kill -0 "$(cat "${pidPath}")" >/dev/null 2>&1${fallback ? ` || ${fallback}` : ''}`;
+const detachCommand = (pidPath, command) => `nohup sh -c '${command}' >/dev/null 2>&1 & echo $! > "${pidPath}"`;
 
-if (CORS_ORIGIN === '*') {
-  app.use(cors());
-} else {
+if (CORS_ORIGIN) {
   const allowList = CORS_ORIGIN
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
-  app.use(cors({ origin: allowList }));
+
+  if (allowList.length > 0) {
+    app.use(cors({ origin: allowList, credentials: true }));
+  }
 }
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+  if (req.path.startsWith('/api/') || req.path.startsWith('/auth/')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+
+  next();
+});
+
 app.use(express.json({ limit: '256kb' }));
 
 const authError = { error: 'Unauthorized' };
 
 /* ---------------- CONFIG ---------------- */
 
+// Keep dashboard-controlled processes repo-local and pid-backed so service actions
+// do not accidentally target unrelated Termux processes with generic names.
 const SERVICES = {
   nginx: {
-    start: `mkdir -p "${ROOT_DIR}/logs" && nginx -p "${ROOT_DIR}" -c "${ROOT_DIR}/nginx.conf"`,
-    stop: 'pkill nginx 2>/dev/null || true',
-    restart: `pkill nginx 2>/dev/null || true; mkdir -p "${ROOT_DIR}/logs" && nginx -p "${ROOT_DIR}" -c "${ROOT_DIR}/nginx.conf"`,
-    check: 'pgrep nginx',
+    start: `mkdir -p "${ROOT_DIR}/logs" "${RUNTIME_DIR}" && ${NGINX_CMD}`,
+    stop: `if [ -f "${NGINX_PID}" ]; then ${NGINX_CMD} -s quit >/dev/null 2>&1 || true; fi; pkill -f '${NGINX_MATCH}' 2>/dev/null || true; rm -f "${NGINX_PID}"`,
+    restart: `if [ -f "${NGINX_PID}" ]; then ${NGINX_CMD} -s quit >/dev/null 2>&1 || true; fi; pkill -f '${NGINX_MATCH}' 2>/dev/null || true; rm -f "${NGINX_PID}"; mkdir -p "${ROOT_DIR}/logs" "${RUNTIME_DIR}" && ${NGINX_CMD}`,
+    check: `test -f "${NGINX_PID}" && kill -0 "$(cat "${NGINX_PID}")"`,
     port: 8088,
     binary: 'nginx',
   },
   filebrowser: {
-    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1 &`,
-    stop: 'pkill filebrowser 2>/dev/null || true',
-    restart: `pkill filebrowser 2>/dev/null || true; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1 &`,
-    check: 'pgrep filebrowser',
+    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
+    stop: stopPidfileProcess(FILEBROWSER_PID),
+    restart: `${stopPidfileProcess(FILEBROWSER_PID)}; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
+    check: checkPidfileProcess(FILEBROWSER_PID),
     port: 8080,
     binary: 'filebrowser',
   },
   ttyd: {
-    start: `mkdir -p "${ROOT_DIR}/logs" && ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1 &`,
-    stop: 'pkill ttyd 2>/dev/null || true',
-    restart: `pkill ttyd 2>/dev/null || true; mkdir -p "${ROOT_DIR}/logs" && ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1 &`,
-    check: 'pgrep ttyd',
+    start: `mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
+    stop: stopPidfileProcess(TTYD_PID),
+    restart: `${stopPidfileProcess(TTYD_PID)}; mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
+    check: checkPidfileProcess(TTYD_PID),
     port: 7681,
     binary: 'ttyd',
   },
@@ -91,10 +156,10 @@ const SERVICES = {
     binary: 'sshd',
   },
   ftp: {
-    start: `mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then python3 -m pyftpdlib -p 2121 -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1 & elif command -v busybox >/dev/null 2>&1; then busybox tcpsvd -vE 0.0.0.0 2121 busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1 & else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
-    stop: 'pkill -f "pyftpdlib -p 2121" 2>/dev/null || pkill -f "tcpsvd -vE 0.0.0.0 2121" 2>/dev/null || true',
-    restart: `pkill -f "pyftpdlib -p 2121" 2>/dev/null || pkill -f "tcpsvd -vE 0.0.0.0 2121" 2>/dev/null || true; mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then python3 -m pyftpdlib -p 2121 -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1 & elif command -v busybox >/dev/null 2>&1; then busybox tcpsvd -vE 0.0.0.0 2121 busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1 & else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
-    check: 'pgrep -f "pyftpdlib -p 2121|tcpsvd -vE 0.0.0.0 2121"',
+    start: `mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec python3 -m pyftpdlib -p 2121 -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; elif command -v busybox >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec busybox tcpsvd -vE 0.0.0.0 2121 busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
+    stop: stopPidfileProcess(FTP_PID),
+    restart: `${stopPidfileProcess(FTP_PID)}; mkdir -p "${ROOT_DIR}/logs" && if command -v python3 >/dev/null 2>&1 && python3 -c "import pyftpdlib" >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec python3 -m pyftpdlib -p 2121 -w -d "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; elif command -v busybox >/dev/null 2>&1; then ${detachCommand(FTP_PID, `exec busybox tcpsvd -vE 0.0.0.0 2121 busybox ftpd -w "${FTP_ROOT}" > "${ROOT_DIR}/logs/ftp.log" 2>&1`)}; else echo "No supported FTP server found (install pyftpdlib or busybox)"; exit 1; fi`,
+    check: checkPidfileProcess(FTP_PID),
     port: 2121,
     binary: 'python3',
   },
@@ -104,6 +169,9 @@ const SERVICES = {
 
 const debugEvents = [];
 const recentConnections = new Map();
+const activeSessions = new Map();
+const loginAttempts = new Map();
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 const MAX_DEBUG_EVENTS = 300;
 let cpuSnapshot = null;
 let verboseLoggingEnabled = false;
@@ -112,6 +180,14 @@ let ftpProviderCache = {
   checkedAt: 0,
   provider: null,
 };
+let networkSnapshotCache = null;
+const timedCache = {
+  monitor: { expiresAt: 0, value: null, promise: null },
+  services: { expiresAt: 0, value: null, promise: null },
+  storage: { expiresAt: 0, value: null, promise: null },
+};
+
+eventLoopDelay.enable();
 
 const pushDebugEvent = (level, message, meta = undefined, force = false) => {
   if (!verboseLoggingEnabled && !force && level !== 'error') {
@@ -388,6 +464,143 @@ const pollServiceStateTransitions = async () => {
   }
 };
 
+if (JWT_SECRET === 'change-this-in-production' || JWT_SECRET.length < 32) {
+  console.warn('[security] JWT_SECRET is using an insecure default or is too short; set a long random secret in server/.env');
+}
+
+if (DASHBOARD_PASS === 'admin123') {
+  console.warn('[security] DASHBOARD_PASS is using the default credential; change it in server/.env');
+}
+
+const pruneLoginAttempts = () => {
+  const now = Date.now();
+
+  for (const [key, attempt] of loginAttempts.entries()) {
+    const expiredWindow = now - attempt.windowStartedAtMs > LOGIN_WINDOW_MS;
+    const expiredBlock = !attempt.blockedUntilMs || attempt.blockedUntilMs <= now;
+
+    if (expiredWindow && expiredBlock) {
+      loginAttempts.delete(key);
+    }
+  }
+};
+
+const getLoginAttemptKey = (req) => normalizeIp(req.ip || req.socket?.remoteAddress || 'unknown');
+
+const getLoginAttemptState = (req) => {
+  pruneLoginAttempts();
+  return loginAttempts.get(getLoginAttemptKey(req)) || null;
+};
+
+const registerLoginFailure = (req) => {
+  const key = getLoginAttemptKey(req);
+  const now = Date.now();
+  const existing = loginAttempts.get(key);
+  const withinWindow = existing && now - existing.windowStartedAtMs <= LOGIN_WINDOW_MS;
+  const nextCount = withinWindow ? existing.count + 1 : 1;
+  const attempt = {
+    count: nextCount,
+    windowStartedAtMs: withinWindow ? existing.windowStartedAtMs : now,
+    blockedUntilMs: nextCount >= LOGIN_MAX_ATTEMPTS ? now + LOGIN_BLOCK_MS : 0,
+  };
+
+  loginAttempts.set(key, attempt);
+  return attempt;
+};
+
+const clearLoginFailures = (req) => {
+  loginAttempts.delete(getLoginAttemptKey(req));
+};
+
+const pruneSessions = () => {
+  const now = Date.now();
+
+  for (const [sessionId, session] of activeSessions.entries()) {
+    const idleExpired = session.lastSeenAtMs + SESSION_IDLE_TIMEOUT_MS <= now;
+    const absoluteExpired = session.createdAtMs + SESSION_ABSOLUTE_TIMEOUT_MS <= now;
+
+    if (idleExpired || absoluteExpired) {
+      activeSessions.delete(sessionId);
+    }
+  }
+};
+
+const invalidateSession = (sessionId) => {
+  if (!sessionId) {
+    return;
+  }
+
+  activeSessions.delete(sessionId);
+};
+
+const invalidateSessionFromToken = (token) => {
+  try {
+    const decoded = jwt.decode(token);
+    if (decoded && typeof decoded === 'object' && decoded.jti) {
+      invalidateSession(decoded.jti);
+    }
+  } catch {
+    // Ignore invalid logout tokens.
+  }
+};
+
+const createSession = (req) => {
+  pruneSessions();
+
+  const sessionId = crypto.randomUUID();
+  const now = Date.now();
+  const session = {
+    id: sessionId,
+    username: DASHBOARD_USER,
+    createdAtMs: now,
+    lastSeenAtMs: now,
+    ip: normalizeIp(req.ip || req.socket?.remoteAddress || ''),
+    userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+  };
+
+  activeSessions.set(sessionId, session);
+
+  const sessionsForUser = [...activeSessions.values()]
+    .filter((entry) => entry.username === DASHBOARD_USER)
+    .sort((a, b) => a.lastSeenAtMs - b.lastSeenAtMs);
+
+  while (sessionsForUser.length > MAX_ACTIVE_SESSIONS) {
+    const oldest = sessionsForUser.shift();
+    invalidateSession(oldest?.id);
+  }
+
+  return session;
+};
+
+const touchSession = (session) => {
+  if (!session) {
+    return;
+  }
+
+  session.lastSeenAtMs = Date.now();
+  activeSessions.set(session.id, session);
+};
+
+const validateSessionToken = (token, { touch = false } = {}) => {
+  pruneSessions();
+
+  const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+  if (!decoded || typeof decoded !== 'object' || !decoded.jti) {
+    throw new Error('Session token missing jti');
+  }
+
+  const session = activeSessions.get(decoded.jti);
+  if (!session) {
+    throw new Error('Session not found');
+  }
+
+  if (touch) {
+    touchSession(session);
+  }
+
+  return { decoded, session };
+};
+
 const secureCompare = (a, b) => {
   const bufA = Buffer.from(String(a));
   const bufB = Buffer.from(String(b));
@@ -428,12 +641,10 @@ const readBearerToken = (req) => {
 
 const readCookieToken = (req) => {
   const cookies = parseCookieHeader(req.headers.cookie || '');
-  return cookies[AUTH_COOKIE_NAME] || cookies[FRONTEND_TOKEN_COOKIE] || null;
+  return cookies[AUTH_COOKIE_NAME] || null;
 };
 
 const readToken = (req) => readBearerToken(req) || readCookieToken(req);
-
-const verifyToken = (token) => jwt.verify(token, JWT_SECRET);
 
 const normalizeIp = (ip = '') => String(ip).replace(/^::ffff:/, '');
 
@@ -480,7 +691,7 @@ const rememberConnection = (req) => {
   const token = readToken(req);
   if (token) {
     try {
-      const decoded = verifyToken(token);
+      const { decoded } = validateSessionToken(token);
       username = decoded?.sub || username;
     } catch {
       // Ignore invalid tokens for telemetry purposes.
@@ -626,6 +837,183 @@ const parseStorageInventory = async () => {
   return { mounts, summary };
 };
 
+const withTimedCache = async (bucket, ttlMs, loader) => {
+  const cache = timedCache[bucket];
+  const now = Date.now();
+
+  if (cache.value && cache.expiresAt > now) {
+    return cache.value;
+  }
+
+  if (cache.promise) {
+    return cache.promise;
+  }
+
+  cache.promise = loader()
+    .then((value) => {
+      cache.value = value;
+      cache.expiresAt = Date.now() + ttlMs;
+      cache.promise = null;
+      return value;
+    })
+    .catch((error) => {
+      cache.promise = null;
+      throw error;
+    });
+
+  return cache.promise;
+};
+
+const readNetworkStats = () => {
+  try {
+    let raw = '';
+
+    try {
+      raw = fs.readFileSync('/proc/net/dev', 'utf8');
+    } catch {
+      if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+        try {
+          raw = execFileSync('su', ['-c', 'cat /proc/net/dev'], {
+            encoding: 'utf8',
+            timeout: 1500,
+          });
+        } catch {
+          raw = '';
+        }
+      }
+    }
+
+    if (!raw) {
+      return { rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0 };
+    }
+
+    let rxBytes = 0;
+    let txBytes = 0;
+
+    for (const line of raw.split('\n').slice(2)) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      const [namePart, dataPart] = trimmed.split(':');
+      const iface = String(namePart || '').trim();
+      if (!iface || iface === 'lo') {
+        continue;
+      }
+
+      if (/^(dummy|ifb|tunl|gre|gretap|erspan|ip_vti|ip6_vti|sit|ip6tnl)/.test(iface)) {
+        continue;
+      }
+
+      const parts = String(dataPart || '').trim().split(/\s+/);
+      rxBytes += Number(parts[0] || 0);
+      txBytes += Number(parts[8] || 0);
+    }
+
+    const now = Date.now();
+    let rxRate = 0;
+    let txRate = 0;
+
+    if (networkSnapshotCache && now > networkSnapshotCache.atMs) {
+      const seconds = (now - networkSnapshotCache.atMs) / 1000;
+      if (seconds > 0) {
+        rxRate = Math.max(0, (rxBytes - networkSnapshotCache.rxBytes) / seconds);
+        txRate = Math.max(0, (txBytes - networkSnapshotCache.txBytes) / seconds);
+      }
+    }
+
+    networkSnapshotCache = { atMs: now, rxBytes, txBytes };
+
+    return { rxBytes, txBytes, rxRate, txRate };
+  } catch {
+    return { rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0 };
+  }
+};
+
+const collectMonitorSnapshot = async () => {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const cpuLoad = await readCpuUsage();
+  const processMemory = process.memoryUsage();
+  const [load1m, load5m, load15m] = os.loadavg();
+  const loopMeanMs = Number((eventLoopDelay.mean / 1e6).toFixed(2));
+  const loopP95Ms = Number((eventLoopDelay.percentile(95) / 1e6).toFixed(2));
+  const cpuCores = (typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) || 1;
+  eventLoopDelay.reset();
+
+  return {
+    cpuCores,
+    cpuLoad,
+    freeMem,
+    loadAvg1m: Number(load1m.toFixed(2)),
+    loadAvg5m: Number(load5m.toFixed(2)),
+    loadAvg15m: Number(load15m.toFixed(2)),
+    network: readNetworkStats(),
+    processExternal: processMemory.external,
+    processHeapTotal: processMemory.heapTotal,
+    processHeapUsed: processMemory.heapUsed,
+    processRss: processMemory.rss,
+    totalMem,
+    uptime: os.uptime(),
+    usedMem: totalMem - freeMem,
+    eventLoopLagMs: Number.isFinite(loopMeanMs) ? loopMeanMs : 0,
+    eventLoopP95Ms: Number.isFinite(loopP95Ms) ? loopP95Ms : 0,
+  };
+};
+
+const getMonitorSnapshot = () => withTimedCache('monitor', 1500, collectMonitorSnapshot);
+
+const collectServicesSnapshot = async () => {
+  const result = {};
+  const controlledServiceNames = await getControlledServiceNames();
+
+  for (const name of controlledServiceNames) {
+    const svc = SERVICES[name];
+    result[name] = await checkService(svc);
+  }
+
+  return result;
+};
+
+const getServicesSnapshot = () => withTimedCache('services', 2000, collectServicesSnapshot);
+
+const getStorageSnapshot = () => withTimedCache('storage', 15000, parseStorageInventory);
+
+const getConnectionsSnapshot = () => {
+  pruneRecentConnections();
+
+  return {
+    users: [...recentConnections.values()]
+      .sort((a, b) => b.lastSeenMs - a.lastSeenMs)
+      .slice(0, MAX_CONNECTIONS)
+      .map(({ lastSeenMs, ...entry }) => entry),
+  };
+};
+
+const getLogsSnapshot = () => ({
+  logs: debugEvents.slice(-120).reverse(),
+  markdown: buildMarkdownLog(80),
+  verboseLoggingEnabled,
+});
+
+const getDashboardSnapshot = async () => {
+  const [services, monitor, storage] = await Promise.all([
+    getServicesSnapshot(),
+    getMonitorSnapshot(),
+    getStorageSnapshot(),
+  ]);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    services,
+    monitor,
+    connections: getConnectionsSnapshot(),
+    storage,
+    logs: getLogsSnapshot(),
+  };
+};
+
 const normalizeRemotePath = (remotePath = '/') => {
   const parts = String(remotePath)
     .replace(/\\/g, '/')
@@ -713,13 +1101,17 @@ const listFtpDirectory = async (payload = {}) => {
 const requireAuth = (req, res, next) => {
   const token = readToken(req);
   if (!token) {
+    clearAuthCookie(res, req);
     return res.status(401).json(authError);
   }
 
   try {
-    req.user = verifyToken(token);
+    const { decoded, session } = validateSessionToken(token, { touch: true });
+    req.user = decoded;
+    req.session = session;
     return next();
   } catch {
+    clearAuthCookie(res, req);
     return res.status(401).json(authError);
   }
 };
@@ -729,18 +1121,19 @@ app.use((req, res, next) => {
   next();
 });
 
-const issueToken = () => jwt.sign(
-  { sub: DASHBOARD_USER, role: 'admin' },
+const issueToken = (sessionId) => jwt.sign(
+  { sub: DASHBOARD_USER, role: 'admin', jti: sessionId },
   JWT_SECRET,
-  { expiresIn: TOKEN_TTL }
+  { algorithm: 'HS256', expiresIn: TOKEN_TTL }
 );
 
-const buildCookieOptions = () => {
+const buildCookieOptions = (req) => {
   const options = {
     httpOnly: true,
-    secure: COOKIE_SECURE,
+    secure: COOKIE_SECURE || req?.secure || req?.headers['x-forwarded-proto'] === 'https',
     sameSite: COOKIE_SAME_SITE,
     path: '/',
+    priority: 'high',
   };
 
   if (COOKIE_DOMAIN) {
@@ -760,8 +1153,8 @@ const tokenMaxAgeMs = (token) => {
   return ms > 0 ? ms : undefined;
 };
 
-const setAuthCookie = (res, token) => {
-  const options = buildCookieOptions();
+const setAuthCookie = (res, token, req) => {
+  const options = buildCookieOptions(req);
   const maxAge = tokenMaxAgeMs(token);
   if (maxAge) {
     options.maxAge = maxAge;
@@ -769,38 +1162,63 @@ const setAuthCookie = (res, token) => {
   res.cookie(AUTH_COOKIE_NAME, token, options);
 };
 
-const clearAuthCookie = (res) => {
-  res.clearCookie(AUTH_COOKIE_NAME, buildCookieOptions());
+const clearAuthCookie = (res, req) => {
+  res.clearCookie(AUTH_COOKIE_NAME, buildCookieOptions(req));
 };
 
 /* ---------------- ROUTES ---------------- */
 
 const loginHandler = (req, res) => {
   const { username, password } = req.body || {};
+  const existingAttempt = getLoginAttemptState(req);
+  if (existingAttempt?.blockedUntilMs && existingAttempt.blockedUntilMs > Date.now()) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((existingAttempt.blockedUntilMs - Date.now()) / 1000));
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    pushDebugEvent('warn', 'Dashboard login rate limited', { ip: normalizeIp(req.ip || req.socket?.remoteAddress || '') }, true);
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+
   const validUser = secureCompare(username || '', DASHBOARD_USER);
   const validPass = secureCompare(password || '', DASHBOARD_PASS);
 
   if (!validUser || !validPass) {
     const usernameHint = (username || '(empty)').slice(0, 2);
+    const attempt = registerLoginFailure(req);
     pushDebugEvent('warn', 'Dashboard login failed', { usernameHint: `${usernameHint}***` }, true);
-    return res.status(401).json({ error: 'Invalid credentials' });
+    return res.status(401).json({
+      error: 'Invalid credentials',
+      attemptsRemaining: Math.max(0, LOGIN_MAX_ATTEMPTS - attempt.count),
+    });
   }
 
-  const token = issueToken();
-  setAuthCookie(res, token);
+  clearLoginFailures(req);
+  invalidateSessionFromToken(readToken(req));
+
+  const session = createSession(req);
+  const token = issueToken(session.id);
+  setAuthCookie(res, token, req);
 
   pushDebugEvent('info', 'Dashboard login success', { username: DASHBOARD_USER }, true);
   return res.json({
-    token,
-    tokenType: 'Bearer',
+    success: true,
     expiresIn: TOKEN_TTL,
     cookieName: AUTH_COOKIE_NAME,
-    user: { username: DASHBOARD_USER },
+    session: {
+      idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
+      absoluteTimeoutMs: SESSION_ABSOLUTE_TIMEOUT_MS,
+    },
+    user: { username: DASHBOARD_USER, role: 'admin' },
   });
 };
 
 const meHandler = (req, res) => {
   return res.json({
+    session: {
+      idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
+      absoluteTimeoutMs: SESSION_ABSOLUTE_TIMEOUT_MS,
+      createdAt: req.session ? new Date(req.session.createdAtMs).toISOString() : null,
+      lastSeenAt: req.session ? new Date(req.session.lastSeenAtMs).toISOString() : null,
+    },
     user: {
       username: req.user?.sub || DASHBOARD_USER,
       role: req.user?.role || 'admin',
@@ -811,7 +1229,8 @@ const meHandler = (req, res) => {
 const verifyHandler = (req, res) => res.status(204).end();
 
 const logoutHandler = (req, res) => {
-  clearAuthCookie(res);
+  invalidateSessionFromToken(readToken(req));
+  clearAuthCookie(res, req);
   pushDebugEvent('info', 'Dashboard logout', null, true);
   return res.json({ success: true });
 };
@@ -825,29 +1244,20 @@ app.get('/api/auth/verify', requireAuth, verifyHandler);
 app.post('/auth/logout', logoutHandler);
 app.post('/api/auth/logout', logoutHandler);
 
-// Health
-app.get('/api/status', requireAuth, (req, res) => {
+const statusHandler = (req, res) => {
   res.json({
     uptime: `${(os.uptime() / 3600).toFixed(1)} hrs`,
   });
-});
+};
 
-// Services status
-app.get('/api/services', requireAuth, async (req, res) => {
-  const result = {};
-  const controlledServiceNames = await getControlledServiceNames();
-
-  for (const name of controlledServiceNames) {
-    const svc = SERVICES[name];
-    result[name] = await checkService(svc);
-  }
+const servicesHandler = async (req, res) => {
+  const result = await getServicesSnapshot();
 
   pushDebugEvent('info', 'Services snapshot served', { count: Object.keys(result).length });
   res.json(result);
-});
+};
 
-// Control services
-app.post('/api/control', requireAuth, async (req, res) => {
+const controlHandler = async (req, res) => {
   const { service, action, adminPassword } = req.body || {};
   const controlledServiceNames = await getControlledServiceNames();
 
@@ -899,39 +1309,25 @@ app.post('/api/control', requireAuth, async (req, res) => {
     pushDebugEvent('error', `${service} ${action} failed`, { error: errorText, hint }, true);
     res.status(500).json({ error: errorText, hint });
   }
-});
+};
 
-// Monitoring (FIXED CPU)
-app.get('/api/monitor', requireAuth, async (req, res) => {
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const cpuPercent = await readCpuUsage();
+const monitorHandler = async (req, res) => {
+  const payload = await getMonitorSnapshot();
 
-  res.json({
-    cpuLoad: cpuPercent,
-    totalMem,
-    freeMem,
-    usedMem: totalMem - freeMem,
-    uptime: os.uptime(),
-  });
-  pushDebugEvent('info', 'Monitor snapshot served', { cpuLoad: Number(cpuPercent.toFixed(2)) });
-});
+  res.json(payload);
+  pushDebugEvent('info', 'Monitor snapshot served', { cpuLoad: Number(payload.cpuLoad.toFixed(2)) });
+};
 
 const connectionsHandler = (req, res) => {
-  pruneRecentConnections();
+  const payload = getConnectionsSnapshot();
 
-  const users = [...recentConnections.values()]
-    .sort((a, b) => b.lastSeenMs - a.lastSeenMs)
-    .slice(0, MAX_CONNECTIONS)
-    .map(({ lastSeenMs, ...entry }) => entry);
-
-  pushDebugEvent('info', 'Connections snapshot served', { count: users.length });
-  res.json({ users });
+  pushDebugEvent('info', 'Connections snapshot served', { count: payload.users.length });
+  res.json(payload);
 };
 
 const storageHandler = async (req, res) => {
   try {
-    const payload = await parseStorageInventory();
+    const payload = await getStorageSnapshot();
     pushDebugEvent('info', 'Storage snapshot served', { count: payload.mounts.length });
     res.json(payload);
   } catch (err) {
@@ -941,11 +1337,7 @@ const storageHandler = async (req, res) => {
 };
 
 const logsHandler = (req, res) => {
-  res.json({
-    logs: debugEvents.slice(-120).reverse(),
-    markdown: buildMarkdownLog(80),
-    verboseLoggingEnabled,
-  });
+  res.json(getLogsSnapshot());
 };
 
 const loggingGetHandler = (req, res) => {
@@ -964,6 +1356,35 @@ const loggingPostHandler = (req, res) => {
     markdown: buildMarkdownLog(80),
   });
 };
+
+const dashboardHandler = async (req, res) => {
+  try {
+    const payload = await getDashboardSnapshot();
+    res.json(payload);
+  } catch (err) {
+    pushDebugEvent('error', 'Dashboard snapshot failed', { error: String(err) }, true);
+    res.status(500).json({ error: 'Unable to build dashboard snapshot' });
+  }
+};
+
+// Health
+app.get('/status', requireAuth, statusHandler);
+app.get('/api/status', requireAuth, statusHandler);
+
+// Services status
+app.get('/services', requireAuth, servicesHandler);
+app.get('/api/services', requireAuth, servicesHandler);
+
+// Control services
+app.post('/control', requireAuth, controlHandler);
+app.post('/api/control', requireAuth, controlHandler);
+
+// Monitoring
+app.get('/monitor', requireAuth, monitorHandler);
+app.get('/api/monitor', requireAuth, monitorHandler);
+
+app.get('/dashboard', requireAuth, dashboardHandler);
+app.get('/api/dashboard', requireAuth, dashboardHandler);
 
 const ftpDefaultsHandler = (req, res) => {
   res.json({

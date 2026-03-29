@@ -5,7 +5,8 @@ import { useMemo } from 'react';
 export default function FilesPage() {
   const gatewayBase = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    const { protocol, hostname } = window.location;
+    const { protocol, hostname, host, port } = window.location;
+    if (port === '8088') return `${protocol}//${host}`;
     return `${protocol}//${hostname}:8088`;
   }, []);
 
