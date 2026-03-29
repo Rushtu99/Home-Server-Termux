@@ -84,6 +84,53 @@ type FtpEntry = {
   permissions?: string;
 };
 
+type FtpMountState = {
+  error?: string;
+  mounted: boolean;
+  mountName: string;
+  mountPoint: string;
+  pid?: number | null;
+  remoteName: string;
+  running: boolean;
+  state: 'mounted' | 'starting' | 'error' | 'unmounted' | string;
+};
+
+type FtpFavourite = {
+  id: number;
+  name: string;
+  protocol: string;
+  host: string;
+  port: number;
+  username: string;
+  secure: boolean;
+  remotePath: string;
+  mountName: string;
+  createdAt: string;
+  updatedAt: string;
+  mount: FtpMountState;
+};
+
+type FtpFavouriteDraft = {
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  secure: boolean;
+  remotePath: string;
+  mountName: string;
+};
+
+type FtpDefaults = {
+  defaultName: string;
+  host: string;
+  password: string;
+  port: number;
+  user: string;
+  secure: boolean;
+  downloadRoot: string;
+};
+
 type DashboardPayload = {
   generatedAt: string;
   services: Services;
@@ -161,6 +208,49 @@ const parentRemotePath = (targetPath: string) => {
   return `/${parts.join('/')}` || '/';
 };
 
+const createFtpFavouriteDraft = (defaults: Partial<FtpFavouriteDraft> = {}): FtpFavouriteDraft => ({
+  name: defaults.name || '',
+  host: defaults.host || '',
+  port: defaults.port || '2121',
+  username: defaults.username || 'anonymous',
+  password: defaults.password || '',
+  secure: defaults.secure === true,
+  remotePath: defaults.remotePath || '/',
+  mountName: defaults.mountName || '',
+});
+
+const createFtpFavouriteDraftFromFavourite = (favourite: FtpFavourite): FtpFavouriteDraft =>
+  createFtpFavouriteDraft({
+    name: favourite.name,
+    host: favourite.host,
+    port: String(favourite.port || 21),
+    username: favourite.username || 'anonymous',
+    password: '',
+    secure: favourite.secure,
+    remotePath: favourite.remotePath || '/',
+    mountName: favourite.mountName || favourite.name,
+  });
+
+const describeFtpMount = (mount?: FtpMountState | null) => {
+  if (!mount) {
+    return 'unmounted';
+  }
+
+  if (mount.mounted) {
+    return `mounted at ${mount.mountPoint}`;
+  }
+
+  if (mount.state === 'starting' || mount.running) {
+    return 'mount starting';
+  }
+
+  if (mount.error) {
+    return mount.error;
+  }
+
+  return 'unmounted';
+};
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [isCompact, setIsCompact] = useState(false);
@@ -185,6 +275,7 @@ export default function Dashboard() {
   const [logsMarkdown, setLogsMarkdown] = useState('');
   const [controlTarget, setControlTarget] = useState<ControlTarget>(null);
   const [controlPassword, setControlPassword] = useState('');
+  const [ftpDefaults, setFtpDefaults] = useState<FtpDefaults | null>(null);
   const [ftpHost, setFtpHost] = useState('');
   const [ftpPort, setFtpPort] = useState('2121');
   const [ftpUser, setFtpUser] = useState('anonymous');
@@ -198,6 +289,12 @@ export default function Dashboard() {
   const [ftpUploadLocalPath, setFtpUploadLocalPath] = useState('');
   const [ftpUploadRemotePath, setFtpUploadRemotePath] = useState('');
   const [ftpFolderName, setFtpFolderName] = useState('');
+  const [ftpFavourites, setFtpFavourites] = useState<FtpFavourite[]>([]);
+  const [ftpFavouritesBusy, setFtpFavouritesBusy] = useState(false);
+  const [ftpFavouriteDraft, setFtpFavouriteDraft] = useState<FtpFavouriteDraft>(() => createFtpFavouriteDraft());
+  const [ftpEditingFavouriteId, setFtpEditingFavouriteId] = useState<number | null>(null);
+  const [ftpActiveFavouriteId, setFtpActiveFavouriteId] = useState<number | null>(null);
+  const [ftpEntryMenuKey, setFtpEntryMenuKey] = useState<string | null>(null);
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
@@ -229,6 +326,23 @@ export default function Dashboard() {
     setControlStatus('');
     setControlBusy({});
     setLogsMarkdown('');
+    setFtpDefaults(null);
+    setFtpFavourites([]);
+    setFtpFavouriteDraft(createFtpFavouriteDraft());
+    setFtpEditingFavouriteId(null);
+    setFtpActiveFavouriteId(null);
+    setFtpEntries([]);
+    setFtpPath('/');
+    setFtpStatus('');
+    setFtpHost('');
+    setFtpPort('2121');
+    setFtpUser('anonymous');
+    setFtpPassword('anonymous@');
+    setFtpSecure(false);
+    setFtpDownloadRoot('');
+    setFtpUploadLocalPath('');
+    setFtpUploadRemotePath('');
+    setFtpFolderName('');
     setAuthError(message);
   };
 
@@ -331,21 +445,48 @@ export default function Dashboard() {
 
     const bootstrapFtp = async () => {
       try {
-        const res = await authFetch(`${API}/ftp/defaults`);
-        if (!res.ok) {
-          return;
-        }
-
-        const payload = await res.json();
         if (!mountedRef.current) {
           return;
         }
 
-        setFtpHost(payload.host || '');
-        setFtpPort(String(payload.port || 2121));
-        setFtpUser(payload.user || 'anonymous');
-        setFtpSecure(Boolean(payload.secure));
-        setFtpDownloadRoot(payload.downloadRoot || '');
+        const [defaultsRes, favouritesRes] = await Promise.all([
+          authFetch(`${API}/ftp/defaults`),
+          authFetch(`${API}/ftp/favourites`),
+        ]);
+
+        const [defaultsPayload, favouritesPayload] = await Promise.all([
+          defaultsRes.ok ? defaultsRes.json().catch(() => null) : Promise.resolve(null),
+          favouritesRes.ok ? favouritesRes.json().catch(() => null) : Promise.resolve(null),
+        ]);
+
+        if (!mountedRef.current) {
+          return;
+        }
+
+        if (defaultsPayload) {
+          const nextDefaults = defaultsPayload as FtpDefaults;
+          setFtpDefaults(nextDefaults);
+          setFtpHost(nextDefaults.host || '');
+          setFtpPort(String(nextDefaults.port || 2121));
+          setFtpUser(nextDefaults.user || 'anonymous');
+          setFtpPassword(nextDefaults.password || 'anonymous@');
+          setFtpSecure(Boolean(nextDefaults.secure));
+          setFtpDownloadRoot(nextDefaults.downloadRoot || '');
+          setFtpFavouriteDraft(createFtpFavouriteDraft({
+            name: nextDefaults.defaultName || 'PS4',
+            host: nextDefaults.host || '',
+            port: String(nextDefaults.port || 2121),
+            username: nextDefaults.user || 'anonymous',
+            password: nextDefaults.password || 'anonymous@',
+            secure: Boolean(nextDefaults.secure),
+            remotePath: '/',
+            mountName: nextDefaults.defaultName || 'PS4',
+          }));
+        }
+
+        if (favouritesPayload) {
+          setFtpFavourites(Array.isArray(favouritesPayload.favourites) ? favouritesPayload.favourites : []);
+        }
       } catch {
         // Ignore FTP defaults bootstrap failures.
       }
@@ -353,6 +494,10 @@ export default function Dashboard() {
 
     void bootstrapFtp();
   }, [isAuthed]);
+
+  useEffect(() => {
+    setFtpEntryMenuKey(null);
+  }, [ftpPath]);
 
   useEffect(() => {
     if (!controlTarget) {
@@ -506,6 +651,7 @@ export default function Dashboard() {
     : ftpStatus.toLowerCase().includes('failed') || ftpStatus.toLowerCase().includes('unable') || ftpStatus.toLowerCase().includes('error')
       ? THEME.crimsonRed
       : THEME.ok;
+  const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -565,7 +711,76 @@ export default function Dashboard() {
     }
   };
 
-  const ftpPayload = (pathOverride?: string) => ({
+  const syncFtpConnection = (favourite: FtpFavourite | null) => {
+    if (!favourite) {
+      return;
+    }
+
+    setFtpHost(favourite.host || '');
+    setFtpPort(String(favourite.port || 21));
+    setFtpUser(favourite.username || 'anonymous');
+    setFtpPassword('');
+    setFtpSecure(Boolean(favourite.secure));
+    setFtpPath(favourite.remotePath || '/');
+    setFtpActiveFavouriteId(favourite.id);
+  };
+
+  const resetFtpFavouriteEditor = () => {
+    setFtpEditingFavouriteId(null);
+    setFtpFavouriteDraft(createFtpFavouriteDraft({
+      name: ftpDefaults?.defaultName || ftpHost.trim() || 'PS4',
+      host: ftpHost.trim() || ftpDefaults?.host || '',
+      port: ftpPort || String(ftpDefaults?.port || 2121),
+      username: ftpUser.trim() || ftpDefaults?.user || 'anonymous',
+      password: ftpDefaults?.password || ftpPassword || 'anonymous@',
+      secure: ftpSecure || Boolean(ftpDefaults?.secure),
+      remotePath: ftpPath || '/',
+      mountName: ftpDefaults?.defaultName || ftpHost.trim() || 'PS4',
+    }));
+  };
+
+  const loadFtpFavourites = async () => {
+    setFtpFavouritesBusy(true);
+
+    try {
+      const res = await authFetch(`${API}/ftp/favourites`);
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return [];
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload?.error || 'Unable to load FTP favourites');
+      }
+
+      const nextFavourites = Array.isArray(payload.favourites) ? payload.favourites as FtpFavourite[] : [];
+      setFtpFavourites(nextFavourites);
+
+      if (ftpActiveFavouriteId !== null) {
+        const active = nextFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
+        if (active) {
+          syncFtpConnection(active);
+        } else {
+          setFtpActiveFavouriteId(null);
+        }
+      }
+
+      if (ftpEditingFavouriteId !== null && !nextFavourites.some((favourite) => favourite.id === ftpEditingFavouriteId)) {
+        resetFtpFavouriteEditor();
+      }
+
+      return nextFavourites;
+    } catch (error) {
+      setFtpStatus(String(error instanceof Error ? error.message : error || 'Unable to load FTP favourites'));
+      return [];
+    } finally {
+      setFtpFavouritesBusy(false);
+    }
+  };
+
+  const ftpPayload = (pathOverride?: string, favouriteIdOverride: number | null = ftpActiveFavouriteId) => ({
+    favouriteId: favouriteIdOverride ?? undefined,
     host: ftpHost.trim(),
     port: Number(ftpPort || 21),
     user: ftpUser.trim() || 'anonymous',
@@ -574,9 +789,9 @@ export default function Dashboard() {
     path: pathOverride || ftpPath,
   });
 
-  const loadFtpDirectory = async (pathOverride?: string) => {
-    if (!ftpHost.trim()) {
-      setFtpStatus('Enter the PS4 FTP host first.');
+  const loadFtpDirectory = async (pathOverride?: string, favouriteIdOverride: number | null = ftpActiveFavouriteId) => {
+    if (!favouriteIdOverride && !ftpHost.trim()) {
+      setFtpStatus('Enter an FTP host or browse a saved favourite first.');
       return;
     }
 
@@ -587,7 +802,7 @@ export default function Dashboard() {
       const res = await authFetch(`${API}/ftp/list`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ftpPayload(pathOverride)),
+        body: JSON.stringify(ftpPayload(pathOverride, favouriteIdOverride)),
       });
 
       if (res.status === 401) {
@@ -601,9 +816,13 @@ export default function Dashboard() {
         return;
       }
 
+      const nextFavourite = favouriteIdOverride
+        ? ftpFavourites.find((favourite) => favourite.id === favouriteIdOverride) || null
+        : null;
+      setFtpActiveFavouriteId(favouriteIdOverride ?? null);
       setFtpPath(payload.path || '/');
       setFtpEntries(Array.isArray(payload.entries) ? payload.entries : []);
-      setFtpStatus(`Connected to ${payload.connection?.host || ftpHost.trim()} at ${payload.path || '/'}`);
+      setFtpStatus(`Connected to ${nextFavourite?.name || payload.connection?.host || ftpHost.trim()} at ${payload.path || '/'}`);
     } catch {
       setFtpStatus('Unable to reach FTP endpoint');
     } finally {
@@ -611,7 +830,152 @@ export default function Dashboard() {
     }
   };
 
-  const downloadFtpEntry = async (entry: FtpEntry) => {
+  const browseFtpFavourite = async (favourite: FtpFavourite) => {
+    syncFtpConnection(favourite);
+    await loadFtpDirectory(favourite.remotePath || '/', favourite.id);
+  };
+
+  const editFtpFavourite = (favourite: FtpFavourite) => {
+    setFtpEditingFavouriteId(favourite.id);
+    setFtpFavouriteDraft(createFtpFavouriteDraftFromFavourite(favourite));
+    setFtpStatus(`Editing saved favourite ${favourite.name}`);
+  };
+
+  const saveFtpFavourite = async () => {
+    if (!ftpFavouriteDraft.name.trim() || !ftpFavouriteDraft.host.trim()) {
+      setFtpStatus('Favourite name and FTP host are required.');
+      return;
+    }
+
+    setFtpFavouritesBusy(true);
+    setFtpStatus('');
+
+    try {
+      const body: Record<string, unknown> = {
+        name: ftpFavouriteDraft.name.trim(),
+        host: ftpFavouriteDraft.host.trim(),
+        port: Number(ftpFavouriteDraft.port || 21),
+        username: ftpFavouriteDraft.username.trim() || 'anonymous',
+        secure: ftpFavouriteDraft.secure,
+        remotePath: ftpFavouriteDraft.remotePath.trim() || '/',
+        mountName: ftpFavouriteDraft.mountName.trim() || ftpFavouriteDraft.name.trim(),
+      };
+
+      if (ftpEditingFavouriteId === null || ftpFavouriteDraft.password) {
+        body.password = ftpFavouriteDraft.password;
+      }
+
+      const res = await authFetch(
+        ftpEditingFavouriteId === null ? `${API}/ftp/favourites` : `${API}/ftp/favourites/${ftpEditingFavouriteId}`,
+        {
+          method: ftpEditingFavouriteId === null ? 'POST' : 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      );
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || 'Unable to save FTP favourite');
+        return;
+      }
+
+      const savedName = payload?.favourite?.name || ftpFavouriteDraft.name.trim();
+      await loadFtpFavourites();
+      setFtpStatus(ftpEditingFavouriteId === null ? `Saved favourite ${savedName}` : `Updated favourite ${savedName}`);
+      setFtpEditingFavouriteId(payload?.favourite?.id || ftpEditingFavouriteId);
+      setFtpFavouriteDraft((current) => createFtpFavouriteDraft({
+        ...current,
+        password: '',
+      }));
+    } catch {
+      setFtpStatus('Unable to save FTP favourite');
+    } finally {
+      setFtpFavouritesBusy(false);
+    }
+  };
+
+  const deleteFtpFavourite = async (favourite: FtpFavourite) => {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete FTP favourite "${favourite.name}"?`)) {
+      return;
+    }
+
+    setFtpFavouritesBusy(true);
+    setFtpStatus('');
+
+    try {
+      const res = await authFetch(`${API}/ftp/favourites/${favourite.id}`, {
+        method: 'DELETE',
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || 'Unable to delete FTP favourite');
+        return;
+      }
+
+      if (ftpActiveFavouriteId === favourite.id) {
+        setFtpActiveFavouriteId(null);
+      }
+
+      if (ftpEditingFavouriteId === favourite.id) {
+        resetFtpFavouriteEditor();
+      }
+
+      await loadFtpFavourites();
+      setFtpStatus(`Deleted favourite ${favourite.name}`);
+    } catch {
+      setFtpStatus('Unable to delete FTP favourite');
+    } finally {
+      setFtpFavouritesBusy(false);
+    }
+  };
+
+  const toggleFtpFavouriteMount = async (favourite: FtpFavourite) => {
+    setFtpFavouritesBusy(true);
+    setFtpStatus('');
+
+    try {
+      const action = favourite.mount?.mounted ? 'unmount' : 'mount';
+      const res = await authFetch(`${API}/ftp/favourites/${favourite.id}/${action}`, {
+        method: 'POST',
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || `Unable to ${action} favourite`);
+        return;
+      }
+
+      await loadFtpFavourites();
+      setFtpStatus(
+        action === 'mount'
+          ? `Mounted ${favourite.name} into ~/Drives/${favourite.mount.mountName || favourite.mountName}`
+          : `Unmounted ${favourite.name}`
+      );
+    } catch {
+      setFtpStatus(`Unable to ${favourite.mount?.mounted ? 'unmount' : 'mount'} favourite`);
+    } finally {
+      setFtpFavouritesBusy(false);
+    }
+  };
+
+  const downloadFtpEntry = async (entry: FtpEntry, { recursive = false }: { recursive?: boolean } = {}) => {
     setFtpBusy(true);
     setFtpStatus('');
 
@@ -621,6 +985,8 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...ftpPayload(),
+          entryType: entry.type,
+          recursive,
           remotePath: joinRemotePath(ftpPath, entry.name),
         }),
       });
@@ -636,12 +1002,20 @@ export default function Dashboard() {
         return;
       }
 
-      setFtpStatus(`Saved to ${payload.localPath}`);
+      setFtpEntryMenuKey(null);
+      setFtpStatus(`${payload.entryType === 'directory' ? 'Directory' : 'File'} saved to ${payload.localPath}`);
     } catch {
       setFtpStatus('Download failed');
     } finally {
       setFtpBusy(false);
     }
+  };
+
+  const setUploadTargetFromEntry = (entry: FtpEntry) => {
+    const remotePath = joinRemotePath(ftpPath, entry.name);
+    setFtpUploadRemotePath(entry.type === 'directory' ? `${remotePath}/` : remotePath);
+    setFtpEntryMenuKey(null);
+    setFtpStatus(`Upload target set to ${entry.type === 'directory' ? `${remotePath}/` : remotePath}`);
   };
 
   const uploadToFtp = async () => {
@@ -959,36 +1333,140 @@ export default function Dashboard() {
         {activeTab === 'filesystem' && (
           <EmbeddedToolPanel
             title="Filesystem"
-            subtitle="Embedded FileBrowser instance."
+            subtitle="Drive state, manual checks, and the embedded FileBrowser."
             frameTitle="Embedded File Manager"
-            path="/files/"
+            path="/files"
             gatewayBase={gatewayBase}
             isCompact={isCompact}
           />
         )}
 
         {activeTab === 'ftp' && (
-          <Panel title="FTP Client" subtitle="Connect to your PS4 GoldHEN FTP server, browse it, and pull files into this Termux host.">
-              <div style={styles.ftpGrid}>
+          <Panel title="FTP" subtitle="Save remotes, browse them directly, and mount them into ~/Drives when this host allows it.">
+            <div style={{ ...styles.ftpWorkspace, ...(isCompact ? styles.ftpWorkspaceCompact : {}) }}>
+              <div style={styles.ftpSidebar}>
                 <div style={styles.card}>
-                  <h3 style={styles.cardTitle}>Connection</h3>
-                  <div style={styles.ftpFormGrid}>
-                    <TextField id="ftp-host" label="PS4 Host" name="ftpHost" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpHost} onChange={setFtpHost} />
-                    <TextField id="ftp-port" label="Port" name="ftpPort" autoComplete="off" inputMode="numeric" spellCheck={false} value={ftpPort} onChange={setFtpPort} />
-                    <TextField id="ftp-user" label="Username" name="ftpUser" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpUser} onChange={setFtpUser} />
-                    <TextField id="ftp-password" label="Password" name="ftpPassword" type="password" autoComplete="off" value={ftpPassword} onChange={setFtpPassword} />
+                  <div style={styles.sectionHeader}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Saved Favourites</h3>
+                    <div style={styles.actionWrap}>
+                      <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => resetFtpFavouriteEditor()}>New</button>
+                      <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpFavourites()}>Reload</button>
+                    </div>
+                  </div>
+                  <p style={styles.smallLabel}>Saved remotes can be browsed live or mounted into a drive folder. Mount errors stay attached to the favourite so they are visible without opening logs.</p>
+                  <div style={styles.ftpFavouriteList}>
+                    {ftpFavourites.length === 0 && (
+                      <p style={styles.smallLabel}>No favourites saved yet. The editor below is prefilled with the default PS4 connection.</p>
+                    )}
+                    {ftpFavourites.map((favourite) => {
+                      const mountLabel = favourite.mount?.mounted
+                        ? 'Mounted'
+                        : favourite.mount?.state === 'starting'
+                          ? 'Starting'
+                          : favourite.mount?.error
+                            ? 'Error'
+                            : 'Saved';
+
+                      const badgeStyle = favourite.mount?.mounted
+                        ? styles.ftpBadgeMounted
+                        : favourite.mount?.error
+                          ? styles.ftpBadgeError
+                          : styles.ftpBadgeIdle;
+
+                      return (
+                        <div
+                          key={favourite.id}
+                          style={{
+                            ...styles.ftpFavouriteRow,
+                            ...(ftpActiveFavouriteId === favourite.id ? styles.ftpFavouriteRowActive : {}),
+                          }}
+                        >
+                          <div style={styles.ftpFavouriteMeta}>
+                            <div style={styles.ftpFavouriteHeader}>
+                              <strong>{favourite.name}</strong>
+                              <span style={{ ...styles.ftpBadge, ...badgeStyle }}>{mountLabel}</span>
+                            </div>
+                            <p style={styles.mountMeta}>{favourite.host}:{favourite.port} · {favourite.remotePath || '/'}</p>
+                            <p style={styles.mountMeta}>Drive target: ~/Drives/{favourite.mountName || favourite.name}</p>
+                            <p style={styles.mountMeta}>{describeFtpMount(favourite.mount)}</p>
+                          </div>
+                          <div style={styles.actionWrap}>
+                            <button className="ui-button" disabled={ftpBusy || ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void browseFtpFavourite(favourite)}>Browse</button>
+                            <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void toggleFtpFavouriteMount(favourite)}>
+                              {favourite.mount?.mounted ? 'Unmount' : 'Mount'}
+                            </button>
+                            <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => editFtpFavourite(favourite)}>Edit</button>
+                            <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void deleteFtpFavourite(favourite)}>Delete</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>{ftpEditingFavouriteId === null ? 'New Favourite' : 'Edit Favourite'}</h3>
+                    <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => resetFtpFavouriteEditor()}>
+                      {ftpEditingFavouriteId === null ? 'Reset' : 'Clear'}
+                    </button>
+                  </div>
+                  <div style={styles.ftpActionGroup}>
+                    <TextField id="ftp-favourite-name" label="Display Name" name="ftpFavouriteName" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.name} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, name: value }))} />
+                    <TextField id="ftp-favourite-host" label="Host" name="ftpFavouriteHost" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.host} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, host: value }))} />
+                    <TextField id="ftp-favourite-port" label="Port" name="ftpFavouritePort" autoComplete="off" inputMode="numeric" spellCheck={false} value={ftpFavouriteDraft.port} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, port: value }))} />
+                    <TextField id="ftp-favourite-user" label="Username" name="ftpFavouriteUser" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.username} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, username: value }))} />
+                    <TextField id="ftp-favourite-password" label={ftpEditingFavouriteId === null ? 'Password' : 'Password Override'} name="ftpFavouritePassword" type="password" autoComplete="off" value={ftpFavouriteDraft.password} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, password: value }))} />
+                    <TextField id="ftp-favourite-remote-path" label="Start Path" name="ftpFavouriteRemotePath" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.remotePath} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, remotePath: value }))} />
+                    <TextField id="ftp-favourite-mount-name" label="Drive Folder Name" name="ftpFavouriteMountName" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.mountName} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, mountName: value }))} />
                   </div>
                   <label style={styles.checkboxRow}>
-                    <input type="checkbox" checked={ftpSecure} onChange={(event) => setFtpSecure(event.target.checked)} />
+                    <input type="checkbox" checked={ftpFavouriteDraft.secure} onChange={(event) => setFtpFavouriteDraft((prev) => ({ ...prev, secure: event.target.checked }))} />
+                    <span>Use FTPS/TLS for this favourite</span>
+                  </label>
+                  <p style={styles.smallLabel}>Leave the password blank while editing if you want to keep the stored secret unchanged.</p>
+                  <div style={styles.actionWrap}>
+                    <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void saveFtpFavourite()}>
+                      {ftpEditingFavouriteId === null ? 'Save Favourite' : 'Update Favourite'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div style={styles.ftpMain}>
+                <div style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Connection</h3>
+                      <p style={styles.smallLabel}>Browse a saved favourite or detach and use the manual fields for one-off sessions.</p>
+                    </div>
+                    {activeFtpFavourite && <span style={styles.headerPill}>Using {activeFtpFavourite.name}</span>}
+                  </div>
+                  <div style={styles.ftpFormGrid}>
+                    <TextField id="ftp-host" label="Host" name="ftpHost" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpHost} onChange={(value) => { setFtpActiveFavouriteId(null); setFtpHost(value); }} />
+                    <TextField id="ftp-port" label="Port" name="ftpPort" autoComplete="off" inputMode="numeric" spellCheck={false} value={ftpPort} onChange={(value) => { setFtpActiveFavouriteId(null); setFtpPort(value); }} />
+                    <TextField id="ftp-user" label="Username" name="ftpUser" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpUser} onChange={(value) => { setFtpActiveFavouriteId(null); setFtpUser(value); }} />
+                    <TextField id="ftp-password" label="Password" name="ftpPassword" type="password" autoComplete="off" value={ftpPassword} onChange={(value) => { setFtpActiveFavouriteId(null); setFtpPassword(value); }} />
+                  </div>
+                  <label style={styles.checkboxRow}>
+                    <input type="checkbox" checked={ftpSecure} onChange={(event) => { setFtpActiveFavouriteId(null); setFtpSecure(event.target.checked); }} />
                     <span>Use FTPS/TLS</span>
                   </label>
                   <div style={styles.actionWrap}>
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory('/')}>Connect</button>
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(ftpPath)}>Refresh</button>
-                    <button className="ui-button" disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</button>
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(activeFtpFavourite?.remotePath || '/')}>Connect</button>
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(ftpPath)}>Refresh</button>
+                    <button className="ui-button" disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</button>
+                    {ftpActiveFavouriteId !== null && (
+                      <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => { setFtpActiveFavouriteId(null); setFtpStatus('Detached from saved favourite. Manual connection fields are active now.'); }}>
+                        Manual Mode
+                      </button>
+                    )}
                   </div>
                   <p style={styles.codeLine}>Current remote path: <code>{ftpPath}</code></p>
-                  <p style={styles.codeLine}>PS4 mirror on this server: <code>{ftpDownloadRoot || '~/Drives/PS4'}</code></p>
+                  <p style={styles.codeLine}>Downloads land under: <code>{ftpDownloadRoot || '~/Drives'}</code></p>
+                  {activeFtpFavourite && (
+                    <p style={styles.codeLine}>Drive target: <code>~/Drives/{activeFtpFavourite.mountName || activeFtpFavourite.name}</code></p>
+                  )}
                   <p
                     style={{ ...styles.smallLabel, color: ftpStatusColor }}
                     role="status"
@@ -1009,7 +1487,7 @@ export default function Dashboard() {
                       autoCorrect="off"
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder="/data/data/com.termux/files/home/Drives/C/PS4UPDATE.PUP…"
+                      placeholder="/data/data/com.termux/files/home/Drives/C/patch.pkg"
                       value={ftpUploadLocalPath}
                       onChange={setFtpUploadLocalPath}
                     />
@@ -1021,11 +1499,11 @@ export default function Dashboard() {
                       autoCorrect="off"
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder="/data/PS4UPDATE.PUP…"
+                      placeholder="/data/patch.pkg"
                       value={ftpUploadRemotePath}
                       onChange={setFtpUploadRemotePath}
                     />
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={uploadToFtp}>Upload Local File</button>
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void uploadToFtp()}>Upload Local File</button>
                   </div>
                   <div style={styles.ftpActionGroup}>
                     <TextField
@@ -1036,55 +1514,78 @@ export default function Dashboard() {
                       autoCorrect="off"
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder="NEW_FOLDER…"
+                      placeholder="new-folder"
                       value={ftpFolderName}
                       onChange={setFtpFolderName}
                     />
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={createFtpFolder}>Create Folder</button>
+                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void createFtpFolder()}>Create Folder</button>
                   </div>
-                  <p style={styles.smallLabel}>GoldHEN usually exposes a plain FTP endpoint, so leave FTPS disabled unless you intentionally front it with TLS.</p>
-                  <p style={styles.smallLabel}>The local FTP server controls remain available separately in service control if you install an FTP provider later.</p>
-              </div>
-            </div>
+                  <p style={styles.smallLabel}>The row menu in the listing can prefill the upload target for the folder or file you choose.</p>
+                </div>
 
-            <div style={{ ...styles.card, marginTop: 16 }}>
-              <h3 style={styles.cardTitle}>Remote Listing</h3>
-              <div style={styles.tableWrap}>
-                <table style={styles.table}>
-                  <thead>
-                    <tr>
-                      <th style={styles.th}>Name</th>
-                      <th style={styles.th}>Type</th>
-                      <th style={styles.th}>Size</th>
-                      <th style={styles.th}>Modified</th>
-                      <th style={styles.th}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ftpEntries.length === 0 && (
-                      <tr>
-                        <td style={styles.td} colSpan={5}>No listing loaded yet.</td>
-                      </tr>
-                    )}
-                    {ftpEntries.map((entry) => (
-                      <tr key={`${entry.type}-${entry.name}`}>
-                        <td style={styles.td}>{entry.name}</td>
-                        <td style={styles.td}>{entry.type}</td>
-                        <td style={styles.td}>{entry.type === 'file' ? fmtBytes(entry.size) : '--'}</td>
-                        <td style={styles.td}>{entry.modifiedAt ? fmtTime(entry.modifiedAt) : entry.rawModifiedAt || '--'}</td>
-                        <td style={styles.td}>
-                          <div style={styles.actionWrap}>
-                            {entry.type === 'directory' ? (
-                              <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
-                            ) : (
-                              <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => downloadFtpEntry(entry)}>Pull To Server</button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Remote Listing</h3>
+                    <span style={styles.smallLabel}>Primary action stays visible. Additional actions live behind the overflow button on the right.</span>
+                  </div>
+                  <div style={styles.tableWrap}>
+                    <table style={styles.table}>
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>Name</th>
+                          <th style={styles.th}>Type</th>
+                          <th style={styles.th}>Size</th>
+                          <th style={styles.th}>Modified</th>
+                          <th style={styles.th}>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ftpEntries.length === 0 && (
+                          <tr>
+                            <td style={styles.td} colSpan={5}>No listing loaded yet.</td>
+                          </tr>
+                        )}
+                        {ftpEntries.map((entry) => {
+                          const menuKey = `${entry.type}:${entry.name}`;
+
+                          return (
+                            <tr key={menuKey}>
+                              <td style={styles.td}>{entry.name}</td>
+                              <td style={styles.td}>{entry.type}</td>
+                              <td style={styles.td}>{entry.type === 'file' ? fmtBytes(entry.size) : '--'}</td>
+                              <td style={styles.td}>{entry.modifiedAt ? fmtTime(entry.modifiedAt) : entry.rawModifiedAt || '--'}</td>
+                              <td style={styles.td}>
+                                <div style={styles.ftpRowActions}>
+                                  {entry.type === 'directory' ? (
+                                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
+                                  ) : (
+                                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void downloadFtpEntry(entry)}>Pull File</button>
+                                  )}
+                                  <div style={styles.ftpMenuCell}>
+                                    <button className="ui-button" disabled={ftpBusy} style={styles.ftpMenuButton} type="button" onClick={() => setFtpEntryMenuKey((current) => current === menuKey ? null : menuKey)}>...</button>
+                                    {ftpEntryMenuKey === menuKey && (
+                                      <div style={styles.ftpMenu}>
+                                        {entry.type === 'directory' && (
+                                          <button className="ui-button" style={styles.ftpMenuItem} type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open Folder</button>
+                                        )}
+                                        <button className="ui-button" style={styles.ftpMenuItem} type="button" onClick={() => void downloadFtpEntry(entry, { recursive: entry.type === 'directory' })}>
+                                          {entry.type === 'directory' ? 'Pull Folder' : 'Pull File'}
+                                        </button>
+                                        <button className="ui-button" style={styles.ftpMenuItem} type="button" onClick={() => setUploadTargetFromEntry(entry)}>
+                                          {entry.type === 'directory' ? 'Use For Uploads' : 'Use Path'}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </div>
           </Panel>
@@ -1619,9 +2120,118 @@ const styles: Record<string, CSSProperties> = {
     textAlign: 'center',
   },
   panelActions: { marginBottom: 10 },
+  sectionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  ftpWorkspace: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(320px, 380px) minmax(0, 1fr)',
+    gap: 16,
+    alignItems: 'start',
+  },
+  ftpWorkspaceCompact: {
+    gridTemplateColumns: '1fr',
+  },
+  ftpSidebar: {
+    display: 'grid',
+    gap: 16,
+    minWidth: 0,
+  },
+  ftpMain: {
+    display: 'grid',
+    gap: 16,
+    minWidth: 0,
+  },
   ftpGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 },
   ftpFormGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 },
   ftpActionGroup: { display: 'grid', gap: 10, marginTop: 12 },
+  ftpFavouriteList: {
+    display: 'grid',
+    gap: 10,
+  },
+  ftpFavouriteRow: {
+    display: 'grid',
+    gap: 10,
+    padding: '10px 12px',
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+  },
+  ftpFavouriteRowActive: {
+    borderColor: THEME.accent,
+  },
+  ftpFavouriteMeta: {
+    minWidth: 0,
+  },
+  ftpFavouriteHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  ftpBadge: {
+    borderRadius: 999,
+    padding: '3px 8px',
+    fontSize: 11,
+    border: `1px solid ${THEME.border}`,
+    whiteSpace: 'nowrap',
+  },
+  ftpBadgeMounted: {
+    color: THEME.ok,
+    background: 'rgba(111, 159, 112, 0.12)',
+    borderColor: 'rgba(111, 159, 112, 0.32)',
+  },
+  ftpBadgeError: {
+    color: THEME.crimsonRed,
+    background: 'rgba(196, 91, 91, 0.12)',
+    borderColor: 'rgba(196, 91, 91, 0.32)',
+  },
+  ftpBadgeIdle: {
+    color: THEME.muted,
+    background: '#15181c',
+  },
+  ftpRowActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+  },
+  ftpMenuCell: {
+    position: 'relative',
+  },
+  ftpMenuButton: {
+    minWidth: 36,
+    padding: '7px 10px',
+    fontSize: 12,
+    letterSpacing: 1,
+  },
+  ftpMenu: {
+    position: 'absolute',
+    top: 'calc(100% + 6px)',
+    right: 0,
+    minWidth: 160,
+    background: THEME.panel,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    padding: 6,
+    display: 'grid',
+    gap: 4,
+    zIndex: 20,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.24)',
+  },
+  ftpMenuItem: {
+    justifyContent: 'flex-start',
+    width: '100%',
+    padding: '8px 10px',
+    fontSize: 12,
+  },
   checkboxRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, color: THEME.text, fontSize: 13 },
   linkBtn: {
     display: 'inline-block',

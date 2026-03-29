@@ -15,6 +15,14 @@ const HASH_PARAMS = {
 const nowIso = () => new Date().toISOString();
 
 const normalizeUsername = (username = '') => String(username).trim();
+const normalizeText = (value = '') => String(value || '').trim();
+const safeJsonParse = (value, fallbackValue = {}) => {
+  try {
+    return JSON.parse(String(value || ''));
+  } catch {
+    return fallbackValue;
+  }
+};
 
 const encodeBuffer = (value) => Buffer.from(value).toString('base64url');
 
@@ -144,6 +152,103 @@ const createAppDb = ({ dbPath }) => {
         value = excluded.value,
         updated_at = excluded.updated_at
     `),
+    listFtpFavourites: db.prepare(`
+      SELECT
+        id,
+        name,
+        protocol,
+        host,
+        port,
+        username,
+        auth_json AS authJson,
+        secure,
+        remote_path AS remotePath,
+        mount_name AS mountName,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM ftp_favourites
+      ORDER BY lower(name), id
+    `),
+    getFtpFavouriteById: db.prepare(`
+      SELECT
+        id,
+        name,
+        protocol,
+        host,
+        port,
+        username,
+        auth_json AS authJson,
+        secure,
+        remote_path AS remotePath,
+        mount_name AS mountName,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM ftp_favourites
+      WHERE id = ?
+      LIMIT 1
+    `),
+    insertFtpFavourite: db.prepare(`
+      INSERT INTO ftp_favourites (
+        name,
+        protocol,
+        host,
+        port,
+        username,
+        auth_json,
+        secure,
+        remote_path,
+        mount_name,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+    updateFtpFavourite: db.prepare(`
+      UPDATE ftp_favourites
+      SET
+        name = ?,
+        protocol = ?,
+        host = ?,
+        port = ?,
+        username = ?,
+        auth_json = ?,
+        secure = ?,
+        remote_path = ?,
+        mount_name = ?,
+        updated_at = ?
+      WHERE id = ?
+    `),
+    deleteFtpFavourite: db.prepare(`
+      DELETE FROM ftp_favourites
+      WHERE id = ?
+    `),
+  };
+
+  const serializeFtpFavourite = (row, { includeSecrets = false } = {}) => {
+    if (!row) {
+      return null;
+    }
+
+    const auth = safeJsonParse(row.authJson, {});
+    const payload = {
+      id: Number(row.id),
+      name: normalizeText(row.name),
+      protocol: normalizeText(row.protocol) || 'ftp',
+      host: normalizeText(row.host),
+      port: Number(row.port || 21),
+      username: normalizeText(row.username) || 'anonymous',
+      secure: Boolean(row.secure),
+      remotePath: normalizeText(row.remotePath) || '/',
+      mountName: normalizeText(row.mountName),
+      createdAt: normalizeText(row.createdAt),
+      updatedAt: normalizeText(row.updatedAt),
+    };
+
+    if (includeSecrets) {
+      payload.auth = auth;
+    }
+
+    return payload;
   };
 
   return {
@@ -195,6 +300,65 @@ const createAppDb = ({ dbPath }) => {
     },
     setSetting(key, value) {
       statements.upsertSetting.run(String(key || ''), String(value ?? ''), nowIso());
+    },
+    listFtpFavourites({ includeSecrets = false } = {}) {
+      return statements.listFtpFavourites.all().map((row) => serializeFtpFavourite(row, { includeSecrets }));
+    },
+    getFtpFavouriteById(id, { includeSecrets = false } = {}) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        return null;
+      }
+
+      return serializeFtpFavourite(statements.getFtpFavouriteById.get(numericId), { includeSecrets });
+    },
+    createFtpFavourite(payload = {}) {
+      const timestamp = nowIso();
+      statements.insertFtpFavourite.run(
+        normalizeText(payload.name),
+        normalizeText(payload.protocol) || 'ftp',
+        normalizeText(payload.host),
+        Number(payload.port || 21),
+        normalizeText(payload.username) || 'anonymous',
+        JSON.stringify(payload.auth || {}),
+        payload.secure ? 1 : 0,
+        normalizeText(payload.remotePath) || '/',
+        normalizeText(payload.mountName),
+        timestamp,
+        timestamp
+      );
+
+      return this.getFtpFavouriteById(db.prepare('SELECT last_insert_rowid() AS id').get().id, { includeSecrets: false });
+    },
+    updateFtpFavourite(id, payload = {}) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        throw new Error('Valid favourite id is required');
+      }
+
+      statements.updateFtpFavourite.run(
+        normalizeText(payload.name),
+        normalizeText(payload.protocol) || 'ftp',
+        normalizeText(payload.host),
+        Number(payload.port || 21),
+        normalizeText(payload.username) || 'anonymous',
+        JSON.stringify(payload.auth || {}),
+        payload.secure ? 1 : 0,
+        normalizeText(payload.remotePath) || '/',
+        normalizeText(payload.mountName),
+        nowIso(),
+        numericId
+      );
+
+      return this.getFtpFavouriteById(numericId, { includeSecrets: false });
+    },
+    deleteFtpFavourite(id) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        throw new Error('Valid favourite id is required');
+      }
+
+      statements.deleteFtpFavourite.run(numericId);
     },
     close() {
       db.close();

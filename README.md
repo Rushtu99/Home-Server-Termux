@@ -121,10 +121,11 @@ COOKIE_SECURE=false
 COOKIE_SAME_SITE=lax
 COOKIE_DOMAIN=
 FTP_ROOT=/data/data/com.termux/files/home/Drives
-FTP_CLIENT_DOWNLOAD_ROOT=/data/data/com.termux/files/home/Drives/PS4
-FTP_CLIENT_HOST=
+FTP_CLIENT_DOWNLOAD_ROOT=/data/data/com.termux/files/home/Drives
+FTP_CLIENT_HOST=192.168.1.8
 FTP_CLIENT_PORT=2121
 FTP_CLIENT_USER=anonymous
+FTP_CLIENT_PASSWORD=anonymous@
 FTP_CLIENT_SECURE=false
 ```
 
@@ -156,14 +157,20 @@ This reloads `server/.env`, clears the repo-managed service processes, and start
 ### `/files` or `/term` returns `401`
 Login through the dashboard first. Those routes are protected by nginx and require the dashboard auth cookie.
 
-### Remote PS4 FTP access
-Open the FTP tab in the dashboard and enter your PS4 host details. The dashboard FTP client can:
+### Remote FTP access
+Open the FTP tab in the dashboard. It now supports saved favourites, direct browsing, and best-effort mount/unmount into `~/Drives/<FavouriteName>`. The default preset is the PS4 host at `192.168.1.8:2121`.
+
+The dashboard FTP client can:
 - browse remote directories
-- pull remote files into `~/Drives/PS4`
+- pull remote files or whole folders into `~/Drives`
 - upload a local server file path to the remote host
 - create remote folders
+- save favourite remotes with a drive folder name
+- mount or unmount saved favourites when the host supports `rclone mount`
 
 If your PS4 GoldHEN setup uses different credentials or port, override them in the form or in `server/.env`.
+
+On this Termux host, `rclone mount` may fail if FUSE is unavailable. When that happens, the favourite stays saved and browseable, and the mount error is shown directly in the FTP favourites list.
 
 ### Local FTP server is not available
 The optional local FTP server only appears in service controls when one of these providers exists:

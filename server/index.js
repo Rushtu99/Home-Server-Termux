@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const os = require('os');
 const crypto = require('crypto');
-const { exec, execFileSync } = require('child_process');
+const { exec, execFileSync, spawn } = require('child_process');
 const net = require('net');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 const jwt = require('jsonwebtoken');
@@ -53,9 +53,12 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const HOME_DIR = process.env.HOME || '/data/data/com.termux/files/home';
 const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'Drives');
 const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
-const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || path.join(FILEBROWSER_ROOT, 'PS4');
+const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || FILEBROWSER_ROOT;
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
 const APP_DB_PATH = process.env.APP_DB_PATH || path.join(RUNTIME_DIR, 'app.db');
+const FTP_MOUNT_RUNTIME_DIR = process.env.FTP_MOUNT_RUNTIME_DIR || path.join(RUNTIME_DIR, 'ftp-mounts');
+const RCLONE_CONFIG_PATH = process.env.RCLONE_CONFIG_PATH || path.join(RUNTIME_DIR, 'rclone', 'rclone.conf');
+const RCLONE_BIN = process.env.RCLONE_BIN || 'rclone';
 const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pid');
 const FILEBROWSER_DB = process.env.FILEBROWSER_DB_PATH || path.join(RUNTIME_DIR, 'filebrowser.db');
 const FILEBROWSER_PID = process.env.FILEBROWSER_PID_PATH || path.join(RUNTIME_DIR, 'filebrowser.pid');
@@ -69,6 +72,11 @@ const FILEBROWSER_BIND_HOST = process.env.FILEBROWSER_BIND_HOST || '127.0.0.1';
 const TTYD_BIND_HOST = process.env.TTYD_BIND_HOST || '127.0.0.1';
 const FTP_BIND_HOST = process.env.FTP_BIND_HOST || '127.0.0.1';
 const FTP_SERVER_PORT = Number(process.env.FTP_SERVER_PORT || 2121);
+const DEFAULT_PS4_FTP_NAME = process.env.DEFAULT_PS4_FTP_NAME || 'PS4';
+const DEFAULT_PS4_HOST = process.env.DEFAULT_PS4_HOST || '192.168.1.8';
+const DEFAULT_PS4_PORT = Number(process.env.DEFAULT_PS4_PORT || 2121);
+const DEFAULT_PS4_USER = process.env.DEFAULT_PS4_USER || 'anonymous';
+const DEFAULT_PS4_PASSWORD = process.env.DEFAULT_PS4_PASSWORD || 'anonymous@';
 const DRIVE_AGENT_CMD = process.env.DRIVE_AGENT_CMD || '/data/data/com.termux/files/usr/bin/termux-drive-agent';
 const DRIVE_STATE_PATH = process.env.DRIVE_STATE_PATH || path.join(FILEBROWSER_ROOT, '.state', 'drives.json');
 const DRIVE_EVENTS_PATH = process.env.DRIVE_EVENTS_PATH || path.join(FILEBROWSER_ROOT, '.state', 'drive-events.jsonl');
@@ -116,6 +124,9 @@ const adminBootstrap = appDb.bootstrapAdmin({
 if (adminBootstrap.seeded) {
   console.info(`[auth] Seeded initial admin user '${adminBootstrap.username}' in ${APP_DB_PATH}`);
 }
+
+fs.mkdirSync(FTP_MOUNT_RUNTIME_DIR, { recursive: true });
+fs.mkdirSync(path.dirname(RCLONE_CONFIG_PATH), { recursive: true });
 
 if (CORS_ORIGIN) {
   const allowList = CORS_ORIGIN
@@ -1154,18 +1165,431 @@ const ensureWithinRoot = (rootDir, candidatePath) => {
 
 const sanitizeHostLabel = (host = '') => String(host).trim().replace(/[^a-zA-Z0-9._-]+/g, '_') || 'remote';
 
+const sanitizeFtpFavouriteName = (value = '', fallback = 'Remote FTP') => {
+  const normalized = String(value || '')
+    .replace(/[^A-Za-z0-9 _-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 32);
+
+  if (normalized) {
+    return normalized;
+  }
+
+  return String(fallback || 'Remote FTP')
+    .replace(/[^A-Za-z0-9 _-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 32) || 'Remote FTP';
+};
+
+const sanitizeRcloneRemoteName = (value = '', fallback = 'ftp_remote') => {
+  const normalized = String(value || '')
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+
+  if (normalized) {
+    return normalized;
+  }
+
+  return String(fallback || 'ftp_remote')
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .slice(0, 48) || 'ftp_remote';
+};
+
+const readPidFile = (pidPath) => {
+  try {
+    const pid = Number(fs.readFileSync(pidPath, 'utf8').trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+  } catch {
+    return 0;
+  }
+};
+
+const isPidRunning = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readLogTail = (filePath, limit = 30) => {
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(-limit);
+  } catch {
+    return [];
+  }
+};
+
+const getFindmntEntry = (targetPath) => {
+  try {
+    const raw = execFileSync('findmnt', ['-J', '-T', targetPath, '-o', 'TARGET,SOURCE,FSTYPE'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const entry = JSON.parse(raw).filesystems?.[0];
+    if (!entry) {
+      return null;
+    }
+
+    return {
+      fstype: String(entry.fstype || ''),
+      source: String(entry.source || ''),
+      target: String(entry.target || ''),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getFtpFavouriteRuntime = (favourite) => {
+  const mountName = sanitizeFtpFavouriteName(
+    favourite.mountName || favourite.name || favourite.host || `FTP ${favourite.id}`,
+    favourite.name || favourite.host || `FTP ${favourite.id}`
+  );
+  const remoteName = sanitizeRcloneRemoteName(`ftp_favourite_${favourite.id}`);
+
+  return {
+    logPath: path.join(FTP_MOUNT_RUNTIME_DIR, `${favourite.id}.log`),
+    mountName,
+    mountPoint: path.join(FILEBROWSER_ROOT, mountName),
+    pidPath: path.join(FTP_MOUNT_RUNTIME_DIR, `${favourite.id}.pid`),
+    remoteName,
+  };
+};
+
+const getRcloneRemoteSpec = (favourite, runtime) => {
+  const remotePath = normalizeRemotePath(favourite.remotePath || '/');
+  const relativePath = remotePath === '/' ? '' : remotePath.replace(/^\//, '');
+  return relativePath ? `${runtime.remoteName}:${relativePath}` : `${runtime.remoteName}:`;
+};
+
+const extractMountError = (logLines) => {
+  const fatalLine = [...logLines].reverse().find((line) => /fatal error:/i.test(line));
+  if (fatalLine) {
+    return fatalLine.replace(/^[^:]*:\s*/u, '').trim();
+  }
+
+  const errorLine = [...logLines].reverse().find((line) => /\berror\b/i.test(line));
+  return errorLine ? errorLine.trim() : '';
+};
+
+const getFtpMountState = (favourite) => {
+  const runtime = getFtpFavouriteRuntime(favourite);
+  const pid = readPidFile(runtime.pidPath);
+  const running = isPidRunning(pid);
+  const mountInfo = getFindmntEntry(runtime.mountPoint);
+  const mounted = Boolean(mountInfo && mountInfo.target === runtime.mountPoint);
+  const logTail = readLogTail(runtime.logPath);
+  const error = extractMountError(logTail);
+  const state = mounted ? 'mounted' : running ? 'starting' : error ? 'error' : 'unmounted';
+
+  return {
+    error,
+    logTail,
+    mountInfo,
+    mounted,
+    mountName: runtime.mountName,
+    mountPoint: runtime.mountPoint,
+    pid: pid || null,
+    remoteName: runtime.remoteName,
+    running,
+    state,
+  };
+};
+
+const serializeFtpFavourite = (favourite) => ({
+  ...favourite,
+  mount: getFtpMountState(favourite),
+});
+
+const ensureUniqueFtpMountName = (mountName, excludeFavouriteId = 0) => {
+  const normalized = sanitizeFtpFavouriteName(mountName, mountName);
+  const reserved = new Set(['C']);
+
+  if (reserved.has(normalized.toUpperCase())) {
+    throw new Error(`Mount name '${normalized}' is reserved`);
+  }
+
+  const favourites = appDb.listFtpFavourites();
+  const collision = favourites.find((entry) =>
+    Number(entry.id) !== Number(excludeFavouriteId || 0) &&
+    sanitizeFtpFavouriteName(entry.mountName || entry.name).toLowerCase() === normalized.toLowerCase()
+  );
+
+  if (collision) {
+    throw new Error(`Mount name '${normalized}' is already used by '${collision.name}'`);
+  }
+
+  return normalized;
+};
+
+const validateFtpFavouriteInput = (payload = {}, existingFavourite = null) => {
+  const host = String(payload.host || existingFavourite?.host || '').trim();
+  if (!host) {
+    throw new Error('FTP host is required');
+  }
+
+  const name = sanitizeFtpFavouriteName(payload.name || existingFavourite?.name || host, host);
+  const port = Number(payload.port ?? existingFavourite?.port ?? 21);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error('FTP port must be between 1 and 65535');
+  }
+
+  const username = String(payload.username ?? existingFavourite?.username ?? 'anonymous').trim() || 'anonymous';
+  const previousAuth = existingFavourite?.auth || {};
+  const nextPassword = Object.prototype.hasOwnProperty.call(payload, 'password')
+    ? String(payload.password || '')
+    : String(previousAuth.password || '');
+  const secure = payload.secure === true || payload.secure === 'true' || (payload.secure == null && existingFavourite?.secure === true);
+  const remotePath = normalizeRemotePath(payload.remotePath || existingFavourite?.remotePath || '/');
+  const mountName = ensureUniqueFtpMountName(
+    payload.mountName || existingFavourite?.mountName || name,
+    existingFavourite?.id || 0
+  );
+
+  return {
+    auth: {
+      password: nextPassword || (username === 'anonymous' ? DEFAULT_PS4_PASSWORD : ''),
+    },
+    host,
+    mountName,
+    name,
+    port,
+    protocol: 'ftp',
+    remotePath,
+    secure,
+    username,
+  };
+};
+
+const getFtpFavouriteOrThrow = (id, { includeSecrets = false } = {}) => {
+  const favourite = appDb.getFtpFavouriteById(id, { includeSecrets });
+  if (!favourite) {
+    throw new Error('FTP favourite not found');
+  }
+  return favourite;
+};
+
+const ensureRcloneRemoteForFavourite = (favourite) => {
+  const runtime = getFtpFavouriteRuntime(favourite);
+  const auth = favourite.auth || {};
+  const secureArgs = favourite.secure ? ['explicit_tls', 'true'] : ['explicit_tls', 'false'];
+  const baseArgs = [
+    '--config',
+    RCLONE_CONFIG_PATH,
+    'config',
+    'create',
+    runtime.remoteName,
+    'ftp',
+    'host',
+    favourite.host,
+    'port',
+    String(favourite.port),
+    'user',
+    favourite.username || 'anonymous',
+    'pass',
+    String(auth.password || ''),
+    ...secureArgs,
+    '--obscure',
+  ];
+
+  try {
+    execFileSync(RCLONE_BIN, baseArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    const stderr = String(error?.stderr || '');
+    if (!/already exists/i.test(stderr)) {
+      throw new Error(stderr.trim() || error.message);
+    }
+
+    execFileSync(RCLONE_BIN, [
+      '--config',
+      RCLONE_CONFIG_PATH,
+      'config',
+      'update',
+      runtime.remoteName,
+      'host',
+      favourite.host,
+      'port',
+      String(favourite.port),
+      'user',
+      favourite.username || 'anonymous',
+      'pass',
+      String(auth.password || ''),
+      ...secureArgs,
+      '--obscure',
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  }
+
+  return runtime;
+};
+
+const waitForMountState = async (favourite, desiredState, timeoutMs = 6000) => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const state = getFtpMountState(favourite);
+    if (state.state === desiredState) {
+      return state;
+    }
+
+    if (desiredState === 'mounted' && state.state === 'error') {
+      return state;
+    }
+
+    await sleep(300);
+  }
+
+  return getFtpMountState(favourite);
+};
+
+const removeEmptyMountDir = (mountPoint) => {
+  try {
+    if (fs.existsSync(mountPoint) && fs.readdirSync(mountPoint).length === 0) {
+      fs.rmdirSync(mountPoint);
+    }
+  } catch {
+    // Ignore non-empty or missing directories.
+  }
+};
+
+const mountFtpFavourite = async (favourite) => {
+  const runtime = ensureRcloneRemoteForFavourite(favourite);
+  const current = getFtpMountState(favourite);
+  if (current.mounted) {
+    return current;
+  }
+
+  if (fs.existsSync(runtime.mountPoint) && !current.mounted) {
+    try {
+      const entries = fs.readdirSync(runtime.mountPoint);
+      if (entries.length > 0) {
+        throw new Error(`Mount point '${runtime.mountName}' is not empty`);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+    }
+  }
+
+  fs.mkdirSync(runtime.mountPoint, { recursive: true });
+  fs.writeFileSync(runtime.logPath, '');
+
+  const child = spawn(
+    RCLONE_BIN,
+    [
+      '--config',
+      RCLONE_CONFIG_PATH,
+      'mount',
+      getRcloneRemoteSpec(favourite, runtime),
+      runtime.mountPoint,
+      '--vfs-cache-mode',
+      'writes',
+      '--dir-cache-time',
+      '30s',
+      '--poll-interval',
+      '0',
+      '--log-file',
+      runtime.logPath,
+      '--log-level',
+      'INFO',
+    ],
+    {
+      detached: true,
+      stdio: 'ignore',
+    }
+  );
+  child.unref();
+  fs.writeFileSync(runtime.pidPath, `${child.pid}\n`);
+
+  const state = await waitForMountState(favourite, 'mounted');
+  if (!state.mounted) {
+    if (isPidRunning(child.pid)) {
+      try {
+        process.kill(child.pid, 'SIGTERM');
+      } catch {
+        // Ignore if process already exited.
+      }
+    }
+    fs.rmSync(runtime.pidPath, { force: true });
+    removeEmptyMountDir(runtime.mountPoint);
+  }
+
+  return state;
+};
+
+const unmountFtpFavourite = async (favourite) => {
+  const runtime = getFtpFavouriteRuntime(favourite);
+  const current = getFtpMountState(favourite);
+
+  for (const command of [
+    ['fusermount3', ['-u', runtime.mountPoint]],
+    ['fusermount', ['-u', runtime.mountPoint]],
+    ['umount', [runtime.mountPoint]],
+  ]) {
+    const [binary, args] = command;
+    try {
+      execFileSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      break;
+    } catch {
+      // Try the next unmount strategy.
+    }
+  }
+
+  if (current.pid && isPidRunning(current.pid)) {
+    try {
+      process.kill(current.pid, 'SIGTERM');
+    } catch {
+      // Ignore if the process is already gone.
+    }
+  }
+
+  fs.rmSync(runtime.pidPath, { force: true });
+  removeEmptyMountDir(runtime.mountPoint);
+  return waitForMountState(favourite, 'unmounted', 2000);
+};
+
+const resolveFtpFavouritePayload = (payload = {}) => {
+  if (!payload.favouriteId) {
+    return payload;
+  }
+
+  const favourite = getFtpFavouriteOrThrow(payload.favouriteId, { includeSecrets: true });
+  return {
+    host: favourite.host,
+    password: favourite.auth?.password || '',
+    path: payload.path || favourite.remotePath || '/',
+    port: favourite.port,
+    secure: favourite.secure,
+    user: favourite.username,
+  };
+};
+
 const buildFtpConnectionOptions = (payload = {}) => {
-  const host = String(payload.host || '').trim();
+  const resolvedPayload = resolveFtpFavouritePayload(payload);
+  const host = String(resolvedPayload.host || '').trim();
   if (!host) {
     throw new Error('FTP host is required');
   }
 
   return {
     host,
-    port: Number(payload.port || 21),
-    user: String(payload.user || 'anonymous'),
-    password: String(payload.password || 'anonymous@'),
-    secure: payload.secure === true || payload.secure === 'true',
+    port: Number(resolvedPayload.port || 21),
+    user: String(resolvedPayload.user || 'anonymous'),
+    password: String(resolvedPayload.password || 'anonymous@'),
+    secure: resolvedPayload.secure === true || resolvedPayload.secure === 'true',
   };
 };
 
@@ -1183,9 +1607,10 @@ const withFtpClient = async (payload, action) => {
 };
 
 const listFtpDirectory = async (payload = {}) => {
-  const remotePath = normalizeRemotePath(payload.path || '/');
+  const resolvedPayload = resolveFtpFavouritePayload(payload);
+  const remotePath = normalizeRemotePath(resolvedPayload.path || '/');
 
-  return withFtpClient(payload, async (client, access) => {
+  return withFtpClient(resolvedPayload, async (client, access) => {
     const entries = await client.list(remotePath);
 
     return {
@@ -1207,6 +1632,28 @@ const listFtpDirectory = async (payload = {}) => {
       })),
     };
   });
+};
+
+const downloadFtpDirectoryTree = async (client, remotePath, localPath) => {
+  fs.mkdirSync(localPath, { recursive: true });
+  const entries = await client.list(remotePath);
+  let fileCount = 0;
+
+  for (const entry of entries) {
+    const childRemotePath = normalizeRemotePath(path.posix.join(remotePath, entry.name));
+    const childLocalPath = path.join(localPath, entry.name);
+
+    if (entry.type === 2) {
+      fileCount += await downloadFtpDirectoryTree(client, childRemotePath, childLocalPath);
+      continue;
+    }
+
+    fs.mkdirSync(path.dirname(childLocalPath), { recursive: true });
+    await client.downloadTo(childLocalPath, childRemotePath);
+    fileCount += 1;
+  }
+
+  return fileCount;
 };
 
 const requireAuth = (req, res, next) => {
@@ -1526,12 +1973,118 @@ app.get('/api/dashboard', requireAuth, dashboardHandler);
 
 const ftpDefaultsHandler = (req, res) => {
   res.json({
-    host: process.env.FTP_CLIENT_HOST || '',
-    port: Number(process.env.FTP_CLIENT_PORT || 2121),
-    user: process.env.FTP_CLIENT_USER || 'anonymous',
+    defaultName: DEFAULT_PS4_FTP_NAME,
+    host: process.env.FTP_CLIENT_HOST || DEFAULT_PS4_HOST,
+    password: process.env.FTP_CLIENT_PASSWORD || DEFAULT_PS4_PASSWORD,
+    port: Number(process.env.FTP_CLIENT_PORT || DEFAULT_PS4_PORT),
+    user: process.env.FTP_CLIENT_USER || DEFAULT_PS4_USER,
     secure: process.env.FTP_CLIENT_SECURE === 'true',
     downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
   });
+};
+
+const ftpFavouritesHandler = (req, res) => {
+  res.json({
+    favourites: appDb.listFtpFavourites().map(serializeFtpFavourite),
+  });
+};
+
+const createFtpFavouriteHandler = (req, res) => {
+  try {
+    const favourite = appDb.createFtpFavourite(validateFtpFavouriteInput(req.body || {}));
+    pushDebugEvent('info', 'FTP favourite created', { id: favourite.id, name: favourite.name }, true);
+    res.status(201).json({ favourite: serializeFtpFavourite(favourite) });
+  } catch (err) {
+    const error = String(err?.message || err || 'Unable to create FTP favourite');
+    pushDebugEvent('error', 'FTP favourite creation failed', { error }, true);
+    res.status(400).json({ error });
+  }
+};
+
+const updateFtpFavouriteHandler = async (req, res) => {
+  try {
+    const existing = getFtpFavouriteOrThrow(req.params.id, { includeSecrets: true });
+    const currentMount = getFtpMountState(existing);
+    if (currentMount.mounted || currentMount.running) {
+      await unmountFtpFavourite(existing).catch(() => {});
+    }
+
+    const favourite = appDb.updateFtpFavourite(existing.id, validateFtpFavouriteInput(req.body || {}, existing));
+    pushDebugEvent('info', 'FTP favourite updated', { id: favourite.id, name: favourite.name }, true);
+    res.json({ favourite: serializeFtpFavourite(favourite) });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to update FTP favourite');
+    const status = /not found/i.test(message) ? 404 : 400;
+    pushDebugEvent('error', 'FTP favourite update failed', { error: message }, true);
+    res.status(status).json({ error: message });
+  }
+};
+
+const deleteFtpFavouriteHandler = async (req, res) => {
+  try {
+    const favourite = getFtpFavouriteOrThrow(req.params.id, { includeSecrets: true });
+    const runtime = getFtpFavouriteRuntime(favourite);
+
+    await unmountFtpFavourite(favourite).catch(() => {});
+    appDb.deleteFtpFavourite(favourite.id);
+
+    try {
+      execFileSync(RCLONE_BIN, ['--config', RCLONE_CONFIG_PATH, 'config', 'delete', runtime.remoteName], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch {
+      // Ignore missing remotes during deletion.
+    }
+
+    fs.rmSync(runtime.logPath, { force: true });
+    fs.rmSync(runtime.pidPath, { force: true });
+
+    pushDebugEvent('info', 'FTP favourite deleted', { id: favourite.id, name: favourite.name }, true);
+    res.json({ success: true });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to delete FTP favourite');
+    const status = /not found/i.test(message) ? 404 : 400;
+    pushDebugEvent('error', 'FTP favourite deletion failed', { error: message }, true);
+    res.status(status).json({ error: message });
+  }
+};
+
+const mountFtpFavouriteHandler = async (req, res) => {
+  try {
+    const favourite = getFtpFavouriteOrThrow(req.params.id, { includeSecrets: true });
+    const mount = await mountFtpFavourite(favourite);
+    const payload = serializeFtpFavourite(getFtpFavouriteOrThrow(favourite.id, { includeSecrets: false }));
+
+    if (!mount.mounted) {
+      const error = mount.error || 'Mount failed on this host';
+      pushDebugEvent('error', 'FTP favourite mount failed', { id: favourite.id, name: favourite.name, error }, true);
+      return res.status(500).json({ error, favourite: payload });
+    }
+
+    pushDebugEvent('info', 'FTP favourite mounted', { id: favourite.id, name: favourite.name, mountPoint: mount.mountPoint }, true);
+    return res.json({ success: true, favourite: payload });
+  } catch (err) {
+    const error = String(err?.message || err || 'Unable to mount FTP favourite');
+    pushDebugEvent('error', 'FTP favourite mount failed', { error, id: req.params.id }, true);
+    return res.status(500).json({ error });
+  }
+};
+
+const unmountFtpFavouriteHandler = async (req, res) => {
+  try {
+    const favourite = getFtpFavouriteOrThrow(req.params.id, { includeSecrets: true });
+    await unmountFtpFavourite(favourite);
+    pushDebugEvent('info', 'FTP favourite unmounted', { id: favourite.id, name: favourite.name }, true);
+    res.json({
+      success: true,
+      favourite: serializeFtpFavourite(getFtpFavouriteOrThrow(favourite.id, { includeSecrets: false })),
+    });
+  } catch (err) {
+    const error = String(err?.message || err || 'Unable to unmount FTP favourite');
+    pushDebugEvent('error', 'FTP favourite unmount failed', { error, id: req.params.id }, true);
+    res.status(500).json({ error });
+  }
 };
 
 const ftpListHandler = async (req, res) => {
@@ -1548,15 +2101,22 @@ const ftpListHandler = async (req, res) => {
 
 const ftpDownloadHandler = async (req, res) => {
   try {
+    const resolvedPayload = resolveFtpFavouritePayload(req.body || {});
     const remotePath = normalizeRemotePath(req.body?.remotePath || '/');
     const remoteName = path.posix.basename(remotePath);
+    const recursive = req.body?.recursive === true || req.body?.recursive === 'true';
+    const entryType = String(req.body?.entryType || (recursive ? 'directory' : 'file'));
 
     if (!remoteName || remoteName === '/' || remoteName === '.') {
-      return res.status(400).json({ error: 'A file path is required for download' });
+      return res.status(400).json({ error: 'A remote path is required for download' });
     }
 
+    const favourite = req.body?.favouriteId ? getFtpFavouriteOrThrow(req.body.favouriteId, { includeSecrets: false }) : null;
+    const targetLabel = favourite
+      ? sanitizeFtpFavouriteName(favourite.mountName || favourite.name, favourite.name)
+      : sanitizeHostLabel(resolvedPayload.host);
     const targetRelative = normalizeLocalRelativePath(
-      req.body?.targetPath || path.join(sanitizeHostLabel(req.body?.host), remoteName)
+      req.body?.targetPath || path.join(targetLabel, remoteName)
     );
     if (!targetRelative) {
       return res.status(400).json({ error: 'A valid local target path is required' });
@@ -1565,13 +2125,20 @@ const ftpDownloadHandler = async (req, res) => {
     const localPath = ensureWithinRoot(FTP_CLIENT_DOWNLOAD_ROOT, path.join(FTP_CLIENT_DOWNLOAD_ROOT, targetRelative));
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
 
-    await withFtpClient(req.body || {}, async (client, access) => {
+    await withFtpClient(resolvedPayload, async (client, access) => {
+      if (recursive || entryType === 'directory') {
+        const fileCount = await downloadFtpDirectoryTree(client, remotePath, localPath);
+        pushDebugEvent('info', 'FTP directory downloaded', { host: access.host, remotePath, localPath, fileCount }, true);
+        return;
+      }
+
       await client.downloadTo(localPath, remotePath);
       pushDebugEvent('info', 'FTP file downloaded', { host: access.host, remotePath, localPath }, true);
     });
 
     res.json({
       success: true,
+      entryType: recursive || entryType === 'directory' ? 'directory' : 'file',
       remotePath,
       localPath,
     });
@@ -1584,6 +2151,7 @@ const ftpDownloadHandler = async (req, res) => {
 
 const ftpUploadHandler = async (req, res) => {
   try {
+    const resolvedPayload = resolveFtpFavouritePayload(req.body || {});
     const localPath = String(req.body?.localPath || '').trim();
     const remotePath = normalizeRemotePath(req.body?.remotePath || '/');
 
@@ -1600,7 +2168,7 @@ const ftpUploadHandler = async (req, res) => {
       return res.status(400).json({ error: 'Local path must be a file' });
     }
 
-    await withFtpClient(req.body || {}, async (client, access) => {
+    await withFtpClient(resolvedPayload, async (client, access) => {
       await client.ensureDir(path.posix.dirname(remotePath));
       await client.uploadFrom(localResolved, remotePath);
       pushDebugEvent('info', 'FTP file uploaded', { host: access.host, remotePath, localPath: localResolved }, true);
@@ -1620,9 +2188,10 @@ const ftpUploadHandler = async (req, res) => {
 
 const ftpMkdirHandler = async (req, res) => {
   try {
+    const resolvedPayload = resolveFtpFavouritePayload(req.body || {});
     const remotePath = normalizeRemotePath(req.body?.remotePath || '/');
 
-    await withFtpClient(req.body || {}, async (client, access) => {
+    await withFtpClient(resolvedPayload, async (client, access) => {
       await client.ensureDir(remotePath);
       pushDebugEvent('info', 'FTP directory created', { host: access.host, remotePath }, true);
     });
@@ -1651,6 +2220,18 @@ app.post('/drives/check', requireAuth, drivesCheckHandler);
 app.post('/api/drives/check', requireAuth, drivesCheckHandler);
 app.get('/ftp/defaults', requireAuth, ftpDefaultsHandler);
 app.get('/api/ftp/defaults', requireAuth, ftpDefaultsHandler);
+app.get('/ftp/favourites', requireAuth, ftpFavouritesHandler);
+app.get('/api/ftp/favourites', requireAuth, ftpFavouritesHandler);
+app.post('/ftp/favourites', requireAuth, createFtpFavouriteHandler);
+app.post('/api/ftp/favourites', requireAuth, createFtpFavouriteHandler);
+app.put('/ftp/favourites/:id', requireAuth, updateFtpFavouriteHandler);
+app.put('/api/ftp/favourites/:id', requireAuth, updateFtpFavouriteHandler);
+app.delete('/ftp/favourites/:id', requireAuth, deleteFtpFavouriteHandler);
+app.delete('/api/ftp/favourites/:id', requireAuth, deleteFtpFavouriteHandler);
+app.post('/ftp/favourites/:id/mount', requireAuth, mountFtpFavouriteHandler);
+app.post('/api/ftp/favourites/:id/mount', requireAuth, mountFtpFavouriteHandler);
+app.post('/ftp/favourites/:id/unmount', requireAuth, unmountFtpFavouriteHandler);
+app.post('/api/ftp/favourites/:id/unmount', requireAuth, unmountFtpFavouriteHandler);
 app.post('/ftp/list', requireAuth, ftpListHandler);
 app.post('/api/ftp/list', requireAuth, ftpListHandler);
 app.post('/ftp/download', requireAuth, ftpDownloadHandler);
