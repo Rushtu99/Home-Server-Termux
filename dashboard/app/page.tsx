@@ -62,6 +62,15 @@ type DebugLog = {
   meta?: unknown;
 };
 
+type FtpEntry = {
+  name: string;
+  type: 'file' | 'directory';
+  size: number;
+  modifiedAt?: string;
+  rawModifiedAt?: string;
+  permissions?: string;
+};
+
 type ControlTarget = {
   service: string;
   action: string;
@@ -99,6 +108,25 @@ const fmtTime = (iso: string) => {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
+const joinRemotePath = (basePath: string, child: string) => {
+  const parts = `${basePath === '/' ? '' : basePath}/${child}`
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..');
+
+  return `/${parts.join('/')}`;
+};
+
+const parentRemotePath = (targetPath: string) => {
+  const parts = String(targetPath)
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..');
+
+  parts.pop();
+  return `/${parts.join('/')}` || '/';
+};
+
 const setFrontendTokenCookie = (token: string) => {
   document.cookie = `${FRONTEND_TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
 };
@@ -110,6 +138,7 @@ const clearFrontendTokenCookie = () => {
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [isCompact, setIsCompact] = useState(false);
+  const [isNarrow, setIsNarrow] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
   const [token, setToken] = useState<string | null>(null);
@@ -133,6 +162,19 @@ export default function Dashboard() {
   const [themeFxIndex, setThemeFxIndex] = useState(0);
   const [controlTarget, setControlTarget] = useState<ControlTarget>(null);
   const [controlPassword, setControlPassword] = useState('');
+  const [ftpHost, setFtpHost] = useState('');
+  const [ftpPort, setFtpPort] = useState('2121');
+  const [ftpUser, setFtpUser] = useState('anonymous');
+  const [ftpPassword, setFtpPassword] = useState('anonymous@');
+  const [ftpSecure, setFtpSecure] = useState(false);
+  const [ftpPath, setFtpPath] = useState('/');
+  const [ftpEntries, setFtpEntries] = useState<FtpEntry[]>([]);
+  const [ftpBusy, setFtpBusy] = useState(false);
+  const [ftpStatus, setFtpStatus] = useState('');
+  const [ftpDownloadRoot, setFtpDownloadRoot] = useState('');
+  const [ftpUploadLocalPath, setFtpUploadLocalPath] = useState('');
+  const [ftpUploadRemotePath, setFtpUploadRemotePath] = useState('');
+  const [ftpFolderName, setFtpFolderName] = useState('');
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
@@ -220,7 +262,10 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    const updateLayout = () => setIsCompact(window.innerWidth < 980);
+    const updateLayout = () => {
+      setIsCompact(window.innerWidth < 980);
+      setIsNarrow(window.innerWidth < 640);
+    };
     updateLayout();
     window.addEventListener('resize', updateLayout);
     return () => window.removeEventListener('resize', updateLayout);
@@ -261,6 +306,36 @@ export default function Dashboard() {
     }, 3000);
 
     return () => clearInterval(interval);
+  }, [isAuthed, token]);
+
+  useEffect(() => {
+    if (!isAuthed) {
+      return;
+    }
+
+    const bootstrapFtp = async () => {
+      try {
+        const res = await authFetch(`${API}/ftp/defaults`);
+        if (!res.ok) {
+          return;
+        }
+
+        const payload = await res.json();
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setFtpHost(payload.host || '');
+        setFtpPort(String(payload.port || 2121));
+        setFtpUser(payload.user || 'anonymous');
+        setFtpSecure(Boolean(payload.secure));
+        setFtpDownloadRoot(payload.downloadRoot || '');
+      } catch {
+        // Ignore FTP defaults bootstrap failures.
+      }
+    };
+
+    void bootstrapFtp();
   }, [isAuthed, token]);
 
   useEffect(() => {
@@ -405,7 +480,6 @@ export default function Dashboard() {
   const totalStorage = storage.reduce((sum, mount) => sum + mount.size, 0);
   const usedStorage = storage.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
-  const ftpEnabled = Object.prototype.hasOwnProperty.call(services, 'ftp');
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -470,6 +544,166 @@ export default function Dashboard() {
     setThemeFxIndex(presetMap[preset] ?? 0);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('dashboard-theme-preset', preset);
+    }
+  };
+
+  const ftpPayload = (pathOverride?: string) => ({
+    host: ftpHost.trim(),
+    port: Number(ftpPort || 21),
+    user: ftpUser.trim() || 'anonymous',
+    password: ftpPassword,
+    secure: ftpSecure,
+    path: pathOverride || ftpPath,
+  });
+
+  const loadFtpDirectory = async (pathOverride?: string) => {
+    if (!ftpHost.trim()) {
+      setFtpStatus('Enter the PS4 FTP host first.');
+      return;
+    }
+
+    setFtpBusy(true);
+    setFtpStatus('');
+
+    try {
+      const res = await authFetch(`${API}/ftp/list`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ftpPayload(pathOverride)),
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || 'Unable to list remote directory');
+        return;
+      }
+
+      setFtpPath(payload.path || '/');
+      setFtpEntries(Array.isArray(payload.entries) ? payload.entries : []);
+      setFtpStatus(`Connected to ${payload.connection?.host || ftpHost.trim()} at ${payload.path || '/'}`);
+    } catch {
+      setFtpStatus('Unable to reach FTP endpoint');
+    } finally {
+      setFtpBusy(false);
+    }
+  };
+
+  const downloadFtpEntry = async (entry: FtpEntry) => {
+    setFtpBusy(true);
+    setFtpStatus('');
+
+    try {
+      const res = await authFetch(`${API}/ftp/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...ftpPayload(),
+          remotePath: joinRemotePath(ftpPath, entry.name),
+        }),
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || 'Download failed');
+        return;
+      }
+
+      setFtpStatus(`Saved to ${payload.localPath}`);
+    } catch {
+      setFtpStatus('Download failed');
+    } finally {
+      setFtpBusy(false);
+    }
+  };
+
+  const uploadToFtp = async () => {
+    if (!ftpUploadLocalPath.trim() || !ftpUploadRemotePath.trim()) {
+      setFtpStatus('Set both a local file path and a remote upload path.');
+      return;
+    }
+
+    setFtpBusy(true);
+    setFtpStatus('');
+
+    try {
+      const res = await authFetch(`${API}/ftp/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...ftpPayload(),
+          localPath: ftpUploadLocalPath.trim(),
+          remotePath: ftpUploadRemotePath.trim(),
+        }),
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || 'Upload failed');
+        return;
+      }
+
+      setFtpStatus(`Uploaded ${payload.localPath} to ${payload.remotePath}`);
+      void loadFtpDirectory(parentRemotePath(ftpUploadRemotePath.trim()));
+    } catch {
+      setFtpStatus('Upload failed');
+    } finally {
+      setFtpBusy(false);
+    }
+  };
+
+  const createFtpFolder = async () => {
+    if (!ftpFolderName.trim()) {
+      setFtpStatus('Enter a folder name first.');
+      return;
+    }
+
+    const remotePath = joinRemotePath(ftpPath, ftpFolderName.trim());
+    setFtpBusy(true);
+    setFtpStatus('');
+
+    try {
+      const res = await authFetch(`${API}/ftp/mkdir`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...ftpPayload(),
+          remotePath,
+        }),
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFtpStatus(payload?.error || 'Folder creation failed');
+        return;
+      }
+
+      setFtpFolderName('');
+      setFtpStatus(`Created ${payload.remotePath}`);
+      void loadFtpDirectory(ftpPath);
+    } catch {
+      setFtpStatus('Folder creation failed');
+    } finally {
+      setFtpBusy(false);
     }
   };
 
@@ -545,7 +779,7 @@ export default function Dashboard() {
               <StatCard title="Connected Users" value={`${connections.length}`} />
             </section>
 
-            <section style={styles.grid}>
+            <section style={{ ...styles.grid, ...(isNarrow ? styles.gridNarrow : {}) }}>
               <article style={{ ...styles.card, ...(isCompact ? {} : { gridColumn: 'span 2' }) }}>
                 <h3 style={styles.cardTitle}>System Trends</h3>
                 <div style={styles.trendLegendRow}>
@@ -595,7 +829,7 @@ export default function Dashboard() {
 
               <article style={styles.card}>
                 <h3 style={styles.cardTitle}>Storage Split (Detailed)</h3>
-                <div style={styles.donutWrap}>
+                <div style={{ ...styles.donutWrap, ...(isNarrow ? styles.donutWrapCompact : {}) }}>
                   <div
                     style={{
                       ...styles.donut,
@@ -611,12 +845,12 @@ export default function Dashboard() {
                 </div>
                 <div style={styles.mountList}>
                   {storage.slice(0, 6).map((mount) => (
-                    <div key={`${mount.filesystem}-${mount.mount}`} style={styles.mountRow}>
-                      <div>
+                    <div key={`${mount.filesystem}-${mount.mount}`} style={{ ...styles.mountRow, ...(isNarrow ? styles.mountRowCompact : {}) }}>
+                      <div style={styles.mountLeft}>
                         <strong>{mount.mount}</strong>
                         <p style={styles.mountMeta}>{mount.filesystem} {mount.fsType ? `(${mount.fsType})` : ''} {mount.category ? `- ${mount.category}` : ''}</p>
                       </div>
-                      <div style={styles.mountRight}>
+                      <div style={{ ...styles.mountRight, ...(isNarrow ? styles.mountRightCompact : {}) }}>
                         <span>{mount.usePercent}%</span>
                         <span style={styles.mountMeta}>{fmtBytes(mount.used)} / {fmtBytes(mount.size)}</span>
                       </div>
@@ -654,35 +888,37 @@ export default function Dashboard() {
 
             <section style={{ ...styles.card, marginTop: 16 }}>
               <h3 style={styles.cardTitle}>Connected Users</h3>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Username</th>
-                    <th style={styles.th}>IP</th>
-                    <th style={styles.th}>Port</th>
-                    <th style={styles.th}>Protocol</th>
-                    <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Last Seen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {connections.length === 0 && (
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
                     <tr>
-                      <td style={styles.td} colSpan={6}>No active users</td>
+                      <th style={styles.th}>Username</th>
+                      <th style={styles.th}>IP</th>
+                      <th style={styles.th}>Port</th>
+                      <th style={styles.th}>Protocol</th>
+                      <th style={styles.th}>Status</th>
+                      <th style={styles.th}>Last Seen</th>
                     </tr>
-                  )}
-                  {connections.map((user, idx) => (
-                    <tr key={`${user.ip}-${user.port}-${idx}`}>
-                      <td style={styles.td}>{user.username}</td>
-                      <td style={styles.td}>{user.ip}</td>
-                      <td style={styles.td}>{user.port || '--'}</td>
-                      <td style={styles.td}>{user.protocol}</td>
-                      <td style={styles.td}><span style={styles.statusDone}>{user.status}</span></td>
-                      <td style={styles.td}>{fmtTime(user.lastSeen)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {connections.length === 0 && (
+                      <tr>
+                        <td style={styles.td} colSpan={6}>No active users</td>
+                      </tr>
+                    )}
+                    {connections.map((user, idx) => (
+                      <tr key={`${user.ip}-${user.port}-${idx}`}>
+                        <td style={styles.td}>{user.username}</td>
+                        <td style={styles.td}>{user.ip}</td>
+                        <td style={styles.td}>{user.port || '--'}</td>
+                        <td style={styles.td}>{user.protocol}</td>
+                        <td style={styles.td}><span style={styles.statusDone}>{user.status}</span></td>
+                        <td style={styles.td}>{fmtTime(user.lastSeen)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </div>
         )}
@@ -706,26 +942,102 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'ftp' && (
-          <Panel title="FTP" subtitle="Optional transfer mode. This branch prefers SFTP over plain FTP on Android.">
-            <div style={styles.card}>
-              {ftpEnabled ? (
-                <>
-                  <div style={styles.actionWrap}>
-                    <button disabled={!!controlBusy['ftp:start']} style={styles.actionBtn} type="button" onClick={() => openControlPopup('ftp', 'start')}>Start FTP Server</button>
-                    <button disabled={!!controlBusy['ftp:stop']} style={styles.actionBtn} type="button" onClick={() => openControlPopup('ftp', 'stop')}>Stop FTP Server</button>
-                    <button disabled={!!controlBusy['ftp:restart']} style={styles.actionBtn} type="button" onClick={() => openControlPopup('ftp', 'restart')}>Restart FTP Server</button>
-                  </div>
-                  <p>FTP Status: <strong>{services.ftp ? 'Running' : 'Stopped'}</strong></p>
-                </>
-              ) : (
-                <p style={{ marginTop: 0 }}>FTP support is not enabled in `main` yet. Use SFTP over SSH for file transfer on this Termux host.</p>
-              )}
-              <p>Host: <code>your-server-ip</code></p>
-              <p>SFTP Port: <code>8022</code></p>
-              <p>User: your Termux user</p>
-              <p>Recommended clients: WinSCP, FileZilla (SFTP), or `scp` / `sftp`</p>
-              <p>SSH Status: <strong>{services.sshd ? 'Running' : 'Stopped'}</strong></p>
-              <p style={styles.smallLabel}>If an FTP provider is installed later, this tab will expose live controls automatically.</p>
+          <Panel title="FTP Client" subtitle="Connect to your PS4 GoldHEN FTP server, browse it, and pull files into this Termux host.">
+            <div style={styles.ftpGrid}>
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Connection</h3>
+                <div style={styles.ftpFormGrid}>
+                  <input style={styles.input} placeholder="PS4 host" value={ftpHost} onChange={(event) => setFtpHost(event.target.value)} />
+                  <input style={styles.input} placeholder="Port" value={ftpPort} onChange={(event) => setFtpPort(event.target.value)} />
+                  <input style={styles.input} placeholder="User" value={ftpUser} onChange={(event) => setFtpUser(event.target.value)} />
+                  <input style={styles.input} placeholder="Password" type="password" value={ftpPassword} onChange={(event) => setFtpPassword(event.target.value)} />
+                </div>
+                <label style={styles.checkboxRow}>
+                  <input type="checkbox" checked={ftpSecure} onChange={(event) => setFtpSecure(event.target.checked)} />
+                  <span>Use FTPS/TLS</span>
+                </label>
+                <div style={styles.actionWrap}>
+                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory('/')}>Connect</button>
+                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(ftpPath)}>Refresh</button>
+                  <button disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</button>
+                </div>
+                <p style={styles.smallLabel}>Current remote path: <code>{ftpPath}</code></p>
+                <p style={styles.smallLabel}>PS4 mirror on this server: <code>{ftpDownloadRoot || '~/Drives/PS4'}</code></p>
+                <p style={{ ...styles.smallLabel, color: ftpStatus.toLowerCase().includes('failed') || ftpStatus.toLowerCase().includes('unable') || ftpStatus.toLowerCase().includes('error') ? THEME.crimsonRed : THEME.ok }}>
+                  {ftpStatus || 'Ready'}
+                </p>
+              </div>
+
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Transfer Actions</h3>
+                <div style={styles.ftpActionGroup}>
+                  <input
+                    style={styles.input}
+                    placeholder="Local file to upload, e.g. /data/data/com.termux/files/home/Drives/C/PS4UPDATE.PUP"
+                    value={ftpUploadLocalPath}
+                    onChange={(event) => setFtpUploadLocalPath(event.target.value)}
+                  />
+                  <input
+                    style={styles.input}
+                    placeholder="Remote upload target, e.g. /data/PS4UPDATE.PUP"
+                    value={ftpUploadRemotePath}
+                    onChange={(event) => setFtpUploadRemotePath(event.target.value)}
+                  />
+                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={uploadToFtp}>Upload Local File</button>
+                </div>
+                <div style={styles.ftpActionGroup}>
+                  <input
+                    style={styles.input}
+                    placeholder="New remote folder name"
+                    value={ftpFolderName}
+                    onChange={(event) => setFtpFolderName(event.target.value)}
+                  />
+                  <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={createFtpFolder}>Create Folder</button>
+                </div>
+                <p style={styles.smallLabel}>GoldHEN usually exposes a plain FTP endpoint, so leave FTPS disabled unless you intentionally front it with TLS.</p>
+                <p style={styles.smallLabel}>The local FTP server controls remain available separately in service control if you install an FTP provider later.</p>
+              </div>
+            </div>
+
+            <div style={{ ...styles.card, marginTop: 16 }}>
+              <h3 style={styles.cardTitle}>Remote Listing</h3>
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Name</th>
+                      <th style={styles.th}>Type</th>
+                      <th style={styles.th}>Size</th>
+                      <th style={styles.th}>Modified</th>
+                      <th style={styles.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ftpEntries.length === 0 && (
+                      <tr>
+                        <td style={styles.td} colSpan={5}>No listing loaded yet.</td>
+                      </tr>
+                    )}
+                    {ftpEntries.map((entry) => (
+                      <tr key={`${entry.type}-${entry.name}`}>
+                        <td style={styles.td}>{entry.name}</td>
+                        <td style={styles.td}>{entry.type}</td>
+                        <td style={styles.td}>{entry.type === 'file' ? fmtBytes(entry.size) : '--'}</td>
+                        <td style={styles.td}>{entry.modifiedAt ? fmtTime(entry.modifiedAt) : entry.rawModifiedAt || '--'}</td>
+                        <td style={styles.td}>
+                          <div style={styles.actionWrap}>
+                            {entry.type === 'directory' ? (
+                              <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
+                            ) : (
+                              <button disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => downloadFtpEntry(entry)}>Pull To Server</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </Panel>
         )}
@@ -881,14 +1193,14 @@ function drawTrend(canvas: HTMLCanvasElement | null, data: number[], stroke: str
 
 const styles: Record<string, CSSProperties> = {
   loading: {
-    minHeight: '100vh',
+    minHeight: '100dvh',
     display: 'grid',
     placeItems: 'center',
     background: '#0b0c10',
     color: '#d8dbe3',
   },
   loginShell: {
-    minHeight: '100vh',
+    minHeight: '100dvh',
     background: `radial-gradient(circle at top, ${THEME.darkPurple} 0%, ${THEME.bg} 55%)`,
     display: 'grid',
     placeItems: 'center',
@@ -927,7 +1239,7 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
   },
   app: {
-    height: '100vh',
+    minHeight: '100dvh',
     display: 'flex',
     background: `radial-gradient(120% 100% at 10% 0%, ${THEME.darkPurple} 0%, ${THEME.bg} 55%, #08090f 100%)`,
     color: THEME.text,
@@ -967,7 +1279,7 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     fontWeight: 600,
   },
-  navBtnCompact: { flex: '1 1 150px' },
+  navBtnCompact: { flex: '1 1 118px' },
   navBtnActive: {
     background: `linear-gradient(135deg, ${THEME.darkPurple} 0%, #1f2941 48%, #1a2d3f 100%)`,
     color: '#fff',
@@ -991,6 +1303,7 @@ const styles: Record<string, CSSProperties> = {
   statTitle: { margin: 0, color: THEME.muted, fontSize: 12 },
   statValue: { margin: '6px 0 0', fontSize: 22, fontWeight: 700, color: '#fff' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 },
+  gridNarrow: { gridTemplateColumns: '1fr' },
   card: {
     background: 'linear-gradient(180deg, #151a2a 0%, #121827 100%)',
     border: `1px solid ${THEME.darkPurple}`,
@@ -1026,12 +1339,14 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     cursor: 'pointer',
   },
-  donutWrap: { display: 'flex', alignItems: 'center', gap: 18, marginBottom: 10 },
+  donutWrap: { display: 'flex', alignItems: 'center', gap: 18, marginBottom: 10, flexWrap: 'wrap' },
+  donutWrapCompact: { alignItems: 'flex-start' },
   donut: { width: 120, height: 120, borderRadius: '50%', position: 'relative' },
   legend: { margin: '0 0 8px', color: '#b7bac7', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 },
   legendDot: { width: 9, height: 9, borderRadius: '50%', display: 'inline-block' },
   legendValue: { margin: 0, color: '#fff', fontWeight: 700 },
   mountList: { display: 'grid', gap: 8 },
+  mountLeft: { minWidth: 0, flex: '1 1 220px' },
   mountRow: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -1042,7 +1357,9 @@ const styles: Record<string, CSSProperties> = {
     padding: '8px 10px',
     gap: 10,
   },
+  mountRowCompact: { flexWrap: 'wrap', alignItems: 'flex-start' },
   mountRight: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 },
+  mountRightCompact: { width: '100%', alignItems: 'flex-start' },
   mountMeta: { margin: 0, fontSize: 12, color: THEME.muted },
   logBox: {
     maxHeight: 220,
@@ -1071,6 +1388,7 @@ const styles: Record<string, CSSProperties> = {
   logLine: { margin: '0 0 6px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' },
   logTime: { color: '#a9b0c8', minWidth: 72 },
   logLevel: { fontWeight: 700, minWidth: 42 },
+  tableWrap: { width: '100%', overflowX: 'auto' },
   table: { width: '100%', borderCollapse: 'separate', borderSpacing: '0 8px', fontSize: 13 },
   th: { color: '#b5bad0', fontWeight: 500, textAlign: 'left', padding: '0 10px 6px' },
   td: {
@@ -1089,8 +1407,19 @@ const styles: Record<string, CSSProperties> = {
     background: 'rgba(48, 181, 118, 0.2)',
     border: '1px solid rgba(48, 181, 118, 0.4)',
   },
-  frame: { width: '100%', height: '78vh', border: '1px solid #2d3142', borderRadius: 12, background: '#111420' },
+  frame: {
+    width: '100%',
+    minHeight: 420,
+    height: 'calc(100dvh - 220px)',
+    border: '1px solid #2d3142',
+    borderRadius: 12,
+    background: '#111420',
+  },
   panelActions: { marginBottom: 10 },
+  ftpGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 },
+  ftpFormGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 },
+  ftpActionGroup: { display: 'grid', gap: 10, marginTop: 12 },
+  checkboxRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, color: THEME.text, fontSize: 13 },
   linkBtn: {
     display: 'inline-block',
     border: '1px solid #3f4458',

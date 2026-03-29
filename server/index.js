@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { exec } = require('child_process');
 const net = require('net');
 const jwt = require('jsonwebtoken');
+const ftp = require('basic-ftp');
 
 const ENV_FILE = path.resolve(__dirname, '.env');
 if (typeof loadEnvFile === 'function' && fs.existsSync(ENV_FILE)) {
@@ -18,8 +19,9 @@ const app = express();
 app.set('trust proxy', 'loopback');
 const ROOT_DIR = path.resolve(__dirname, '..');
 const HOME_DIR = process.env.HOME || '/data/data/com.termux/files/home';
-const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'nas');
+const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'Drives');
 const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
+const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || path.join(FILEBROWSER_ROOT, 'PS4');
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
 const FILEBROWSER_DB = process.env.FILEBROWSER_DB_PATH || path.join(RUNTIME_DIR, 'filebrowser.db');
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
@@ -38,6 +40,7 @@ const EXEC_SHELL = process.env.SHELL || '/bin/sh';
 const STORAGE_FS_TYPES = new Set(['ext2', 'ext3', 'ext4', 'f2fs', 'xfs', 'btrfs', 'ntfs', 'exfat', 'vfat', 'fuse']);
 const CONNECTION_TTL_MS = 10 * 60 * 1000;
 const MAX_CONNECTIONS = 50;
+const FTP_CLIENT_TIMEOUT_MS = 15000;
 
 if (CORS_ORIGIN === '*') {
   app.use(cors());
@@ -64,17 +67,17 @@ const SERVICES = {
     binary: 'nginx',
   },
   filebrowser: {
-    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1 &`,
+    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1 &`,
     stop: 'pkill filebrowser 2>/dev/null || true',
-    restart: `pkill filebrowser 2>/dev/null || true; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1 &`,
+    restart: `pkill filebrowser 2>/dev/null || true; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a 127.0.0.1 -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1 &`,
     check: 'pgrep filebrowser',
     port: 8080,
     binary: 'filebrowser',
   },
   ttyd: {
-    start: `mkdir -p "${ROOT_DIR}/logs" && ttyd -W -i 127.0.0.1 -p 7681 bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1 &`,
+    start: `mkdir -p "${ROOT_DIR}/logs" && ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1 &`,
     stop: 'pkill ttyd 2>/dev/null || true',
-    restart: `pkill ttyd 2>/dev/null || true; mkdir -p "${ROOT_DIR}/logs" && ttyd -W -i 127.0.0.1 -p 7681 bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1 &`,
+    restart: `pkill ttyd 2>/dev/null || true; mkdir -p "${ROOT_DIR}/logs" && ttyd -W -i 127.0.0.1 -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1 &`,
     check: 'pgrep ttyd',
     port: 7681,
     binary: 'ttyd',
@@ -623,6 +626,90 @@ const parseStorageInventory = async () => {
   return { mounts, summary };
 };
 
+const normalizeRemotePath = (remotePath = '/') => {
+  const parts = String(remotePath)
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..');
+
+  return `/${parts.join('/')}`;
+};
+
+const normalizeLocalRelativePath = (inputPath = '') =>
+  String(inputPath)
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..')
+    .join(path.sep);
+
+const ensureWithinRoot = (rootDir, candidatePath) => {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedCandidate = path.resolve(candidatePath);
+
+  if (resolvedCandidate !== resolvedRoot && !resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('Resolved path escapes the allowed root');
+  }
+
+  return resolvedCandidate;
+};
+
+const sanitizeHostLabel = (host = '') => String(host).trim().replace(/[^a-zA-Z0-9._-]+/g, '_') || 'remote';
+
+const buildFtpConnectionOptions = (payload = {}) => {
+  const host = String(payload.host || '').trim();
+  if (!host) {
+    throw new Error('FTP host is required');
+  }
+
+  return {
+    host,
+    port: Number(payload.port || 21),
+    user: String(payload.user || 'anonymous'),
+    password: String(payload.password || 'anonymous@'),
+    secure: payload.secure === true || payload.secure === 'true',
+  };
+};
+
+const withFtpClient = async (payload, action) => {
+  const access = buildFtpConnectionOptions(payload);
+  const client = new ftp.Client(FTP_CLIENT_TIMEOUT_MS);
+  client.ftp.verbose = false;
+
+  try {
+    await client.access(access);
+    return await action(client, access);
+  } finally {
+    client.close();
+  }
+};
+
+const listFtpDirectory = async (payload = {}) => {
+  const remotePath = normalizeRemotePath(payload.path || '/');
+
+  return withFtpClient(payload, async (client, access) => {
+    const entries = await client.list(remotePath);
+
+    return {
+      connection: {
+        host: access.host,
+        port: access.port,
+        user: access.user,
+        secure: access.secure,
+      },
+      path: remotePath,
+      parentPath: remotePath === '/' ? null : normalizeRemotePath(path.posix.dirname(remotePath)),
+      entries: entries.map((entry) => ({
+        name: entry.name,
+        type: entry.type === 2 ? 'directory' : 'file',
+        size: Number(entry.size || 0),
+        modifiedAt: entry.modifiedAt ? entry.modifiedAt.toISOString() : '',
+        rawModifiedAt: entry.rawModifiedAt || '',
+        permissions: entry.permissions || '',
+      })),
+    };
+  });
+};
+
 const requireAuth = (req, res, next) => {
   const token = readToken(req);
   if (!token) {
@@ -878,6 +965,117 @@ const loggingPostHandler = (req, res) => {
   });
 };
 
+const ftpDefaultsHandler = (req, res) => {
+  res.json({
+    host: process.env.FTP_CLIENT_HOST || '',
+    port: Number(process.env.FTP_CLIENT_PORT || 2121),
+    user: process.env.FTP_CLIENT_USER || 'anonymous',
+    secure: process.env.FTP_CLIENT_SECURE === 'true',
+    downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
+  });
+};
+
+const ftpListHandler = async (req, res) => {
+  try {
+    const payload = await listFtpDirectory(req.body || {});
+    pushDebugEvent('info', 'FTP directory listed', { host: payload.connection.host, path: payload.path, count: payload.entries.length });
+    res.json(payload);
+  } catch (err) {
+    const error = String(err?.message || err || 'FTP list failed');
+    pushDebugEvent('error', 'FTP list failed', { error }, true);
+    res.status(500).json({ error });
+  }
+};
+
+const ftpDownloadHandler = async (req, res) => {
+  try {
+    const remotePath = normalizeRemotePath(req.body?.remotePath || '/');
+    const remoteName = path.posix.basename(remotePath);
+
+    if (!remoteName || remoteName === '/' || remoteName === '.') {
+      return res.status(400).json({ error: 'A file path is required for download' });
+    }
+
+    const targetRelative = normalizeLocalRelativePath(
+      req.body?.targetPath || path.join(sanitizeHostLabel(req.body?.host), remoteName)
+    );
+    if (!targetRelative) {
+      return res.status(400).json({ error: 'A valid local target path is required' });
+    }
+
+    const localPath = ensureWithinRoot(FTP_CLIENT_DOWNLOAD_ROOT, path.join(FTP_CLIENT_DOWNLOAD_ROOT, targetRelative));
+    fs.mkdirSync(path.dirname(localPath), { recursive: true });
+
+    await withFtpClient(req.body || {}, async (client, access) => {
+      await client.downloadTo(localPath, remotePath);
+      pushDebugEvent('info', 'FTP file downloaded', { host: access.host, remotePath, localPath }, true);
+    });
+
+    res.json({
+      success: true,
+      remotePath,
+      localPath,
+    });
+  } catch (err) {
+    const error = String(err?.message || err || 'FTP download failed');
+    pushDebugEvent('error', 'FTP download failed', { error }, true);
+    res.status(500).json({ error });
+  }
+};
+
+const ftpUploadHandler = async (req, res) => {
+  try {
+    const localPath = String(req.body?.localPath || '').trim();
+    const remotePath = normalizeRemotePath(req.body?.remotePath || '/');
+
+    if (!localPath) {
+      return res.status(400).json({ error: 'A local file path is required for upload' });
+    }
+
+    const localResolved = path.resolve(localPath);
+    if (!fs.existsSync(localResolved)) {
+      return res.status(400).json({ error: 'Local file does not exist' });
+    }
+
+    if (!fs.statSync(localResolved).isFile()) {
+      return res.status(400).json({ error: 'Local path must be a file' });
+    }
+
+    await withFtpClient(req.body || {}, async (client, access) => {
+      await client.ensureDir(path.posix.dirname(remotePath));
+      await client.uploadFrom(localResolved, remotePath);
+      pushDebugEvent('info', 'FTP file uploaded', { host: access.host, remotePath, localPath: localResolved }, true);
+    });
+
+    res.json({
+      success: true,
+      localPath: localResolved,
+      remotePath,
+    });
+  } catch (err) {
+    const error = String(err?.message || err || 'FTP upload failed');
+    pushDebugEvent('error', 'FTP upload failed', { error }, true);
+    res.status(500).json({ error });
+  }
+};
+
+const ftpMkdirHandler = async (req, res) => {
+  try {
+    const remotePath = normalizeRemotePath(req.body?.remotePath || '/');
+
+    await withFtpClient(req.body || {}, async (client, access) => {
+      await client.ensureDir(remotePath);
+      pushDebugEvent('info', 'FTP directory created', { host: access.host, remotePath }, true);
+    });
+
+    res.json({ success: true, remotePath });
+  } catch (err) {
+    const error = String(err?.message || err || 'FTP mkdir failed');
+    pushDebugEvent('error', 'FTP mkdir failed', { error }, true);
+    res.status(500).json({ error });
+  }
+};
+
 app.get('/connections', requireAuth, connectionsHandler);
 app.get('/api/connections', requireAuth, connectionsHandler);
 app.get('/storage', requireAuth, storageHandler);
@@ -888,6 +1086,16 @@ app.get('/logging', requireAuth, loggingGetHandler);
 app.get('/api/logging', requireAuth, loggingGetHandler);
 app.post('/logging', requireAuth, loggingPostHandler);
 app.post('/api/logging', requireAuth, loggingPostHandler);
+app.get('/ftp/defaults', requireAuth, ftpDefaultsHandler);
+app.get('/api/ftp/defaults', requireAuth, ftpDefaultsHandler);
+app.post('/ftp/list', requireAuth, ftpListHandler);
+app.post('/api/ftp/list', requireAuth, ftpListHandler);
+app.post('/ftp/download', requireAuth, ftpDownloadHandler);
+app.post('/api/ftp/download', requireAuth, ftpDownloadHandler);
+app.post('/ftp/upload', requireAuth, ftpUploadHandler);
+app.post('/api/ftp/upload', requireAuth, ftpUploadHandler);
+app.post('/ftp/mkdir', requireAuth, ftpMkdirHandler);
+app.post('/api/ftp/mkdir', requireAuth, ftpMkdirHandler);
 
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {

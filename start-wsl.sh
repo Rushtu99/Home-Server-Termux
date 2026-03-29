@@ -103,7 +103,7 @@ fi
 
 if command -v ttyd >/dev/null 2>&1; then
   echo "Starting ttyd..."
-  ttyd -W -i 127.0.0.1 -p 7681 bash -l > "$LOG_DIR/ttyd.log" 2>&1 &
+  ttyd -W -i 127.0.0.1 -p 7681 -w "$HOME_SERVER_DIR" bash -l > "$LOG_DIR/ttyd.log" 2>&1 &
   wait_for_port 7681 "ttyd" || echo "ttyd failed to start"
 else
   echo "Skipping ttyd (command not found)"
