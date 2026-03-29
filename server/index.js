@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const os = require('os');
 const crypto = require('crypto');
-const { exec, execFileSync, spawn } = require('child_process');
+const { exec, execFileSync } = require('child_process');
 const net = require('net');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 const jwt = require('jsonwebtoken');
@@ -57,18 +57,15 @@ const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || FILEBRO
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
 const APP_DB_PATH = process.env.APP_DB_PATH || path.join(RUNTIME_DIR, 'app.db');
 const FTP_MOUNT_RUNTIME_DIR = process.env.FTP_MOUNT_RUNTIME_DIR || path.join(RUNTIME_DIR, 'ftp-mounts');
-const RCLONE_CONFIG_PATH = process.env.RCLONE_CONFIG_PATH || path.join(RUNTIME_DIR, 'rclone', 'rclone.conf');
-const RCLONE_BIN = process.env.RCLONE_BIN || 'rclone';
+const TERMUX_CLOUD_MOUNT_CMD = process.env.TERMUX_CLOUD_MOUNT_CMD || '/data/data/com.termux/files/usr/bin/termux-cloud-mount';
+const TERMUX_CLOUD_MOUNT_ROOT = process.env.TERMUX_CLOUD_MOUNT_ROOT || '/mnt/cloud/home-server';
 const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pid');
-const FILEBROWSER_DB = process.env.FILEBROWSER_DB_PATH || path.join(RUNTIME_DIR, 'filebrowser.db');
-const FILEBROWSER_PID = process.env.FILEBROWSER_PID_PATH || path.join(RUNTIME_DIR, 'filebrowser.pid');
 const TTYD_PID = process.env.TTYD_PID_PATH || path.join(RUNTIME_DIR, 'ttyd.pid');
 const FTP_PID = process.env.FTP_PID_PATH || path.join(RUNTIME_DIR, 'ftp.pid');
 const SSHD_PID = process.env.SSHD_PID_PATH || path.join(RUNTIME_DIR, 'sshd.pid');
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const PORT = Number(process.env.PORT || 4000);
 const BACKEND_BIND_HOST = process.env.BACKEND_BIND_HOST || '127.0.0.1';
-const FILEBROWSER_BIND_HOST = process.env.FILEBROWSER_BIND_HOST || '127.0.0.1';
 const TTYD_BIND_HOST = process.env.TTYD_BIND_HOST || '127.0.0.1';
 const FTP_BIND_HOST = process.env.FTP_BIND_HOST || '127.0.0.1';
 const FTP_SERVER_PORT = Number(process.env.FTP_SERVER_PORT || 2121);
@@ -126,7 +123,6 @@ if (adminBootstrap.seeded) {
 }
 
 fs.mkdirSync(FTP_MOUNT_RUNTIME_DIR, { recursive: true });
-fs.mkdirSync(path.dirname(RCLONE_CONFIG_PATH), { recursive: true });
 
 if (CORS_ORIGIN) {
   const allowList = CORS_ORIGIN
@@ -167,15 +163,6 @@ const SERVICES = {
     host: '127.0.0.1',
     port: 8088,
     binary: 'nginx',
-  },
-  filebrowser: {
-    start: `mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a "${FILEBROWSER_BIND_HOST}" -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
-    stop: stopPidfileProcess(FILEBROWSER_PID),
-    restart: `${stopPidfileProcess(FILEBROWSER_PID)}; mkdir -p "${RUNTIME_DIR}" "${ROOT_DIR}/logs" "${FILEBROWSER_ROOT}" && filebrowser config set -d "${FILEBROWSER_DB}" --auth.method=noauth >/dev/null 2>&1 || true; ${detachCommand(FILEBROWSER_PID, `exec filebrowser -d "${FILEBROWSER_DB}" -r "${FILEBROWSER_ROOT}" -p 8080 -a "${FILEBROWSER_BIND_HOST}" -b /files --noauth > "${ROOT_DIR}/logs/filebrowser.log" 2>&1`)}`,
-    check: checkPidfileProcess(FILEBROWSER_PID),
-    host: FILEBROWSER_BIND_HOST,
-    port: 8080,
-    binary: 'filebrowser',
   },
   ttyd: {
     start: `mkdir -p "${ROOT_DIR}/logs" && ${detachCommand(TTYD_PID, `exec ttyd -W -i "${TTYD_BIND_HOST}" -p 7681 -w "${ROOT_DIR}" bash -l > "${ROOT_DIR}/logs/ttyd.log" 2>&1`)}`,
@@ -715,10 +702,6 @@ const normalizeIp = (ip = '') => String(ip).replace(/^::ffff:/, '');
 const protocolFromRequest = (req) => {
   const originalUri = String(req.headers['x-original-uri'] || '');
 
-  if (originalUri.startsWith('/files/')) {
-    return 'Filesystem';
-  }
-
   if (originalUri.startsWith('/term/')) {
     return 'Terminal';
   }
@@ -995,6 +978,40 @@ const readNetworkStats = () => {
   }
 };
 
+const readLanDevices = () => {
+  try {
+    const raw = fs.readFileSync('/proc/net/arp', 'utf8');
+    const lines = raw.split('\n').slice(1).map((line) => line.trim()).filter(Boolean);
+
+    return lines
+      .map((line) => {
+        const parts = line.split(/\s+/);
+        const ip = String(parts[0] || '');
+        const hwType = String(parts[1] || '');
+        const flags = String(parts[2] || '');
+        const mac = String(parts[3] || '').toLowerCase();
+        const device = String(parts[5] || '');
+        if (!ip || !mac || mac === '00:00:00:00:00:00') {
+          return null;
+        }
+
+        return {
+          device,
+          ip,
+          lastSeen: new Date().toISOString(),
+          mac,
+          source: 'lan',
+          state: flags === '0x2' ? 'reachable' : 'stale',
+          type: hwType === '0x1' ? 'ethernet' : 'network',
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
+  } catch {
+    return [];
+  }
+};
+
 const collectMonitorSnapshot = async () => {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
@@ -1054,6 +1071,10 @@ const getConnectionsSnapshot = () => {
       .map(({ lastSeenMs, ...entry }) => entry),
   };
 };
+
+const getNetworkDevicesSnapshot = () => ({
+  devices: readLanDevices(),
+});
 
 const getLogsSnapshot = () => ({
   logs: debugEvents.slice(-120).reverse(),
@@ -1131,6 +1152,7 @@ const getDashboardSnapshot = async () => {
     services,
     monitor,
     connections: getConnectionsSnapshot(),
+    networkDevices: getNetworkDevicesSnapshot(),
     storage,
     logs: getLogsSnapshot(),
   };
@@ -1152,6 +1174,8 @@ const normalizeLocalRelativePath = (inputPath = '') =>
     .filter((part) => part && part !== '.' && part !== '..')
     .join(path.sep);
 
+const FS_HIDDEN_NAMES = new Set(['.state', 'filebrowser.db']);
+
 const ensureWithinRoot = (rootDir, candidatePath) => {
   const resolvedRoot = path.resolve(rootDir);
   const resolvedCandidate = path.resolve(candidatePath);
@@ -1161,6 +1185,149 @@ const ensureWithinRoot = (rootDir, candidatePath) => {
   }
 
   return resolvedCandidate;
+};
+
+const resolveFsPath = (inputPath = '') => {
+  const relativePath = normalizeLocalRelativePath(inputPath);
+  const absolutePath = ensureWithinRoot(FILEBROWSER_ROOT, path.join(FILEBROWSER_ROOT, relativePath));
+  return {
+    absolutePath,
+    relativePath,
+  };
+};
+
+const relativeSegments = (relativePath = '') => normalizeLocalRelativePath(relativePath).split(path.sep).filter(Boolean);
+
+const isProtectedFsPath = (relativePath = '') => {
+  const segments = relativeSegments(relativePath);
+  if (segments.length === 0) {
+    return true;
+  }
+
+  return segments.length === 1 && (segments[0] === 'C' || FS_HIDDEN_NAMES.has(segments[0]));
+};
+
+const getDriveNames = async () => {
+  const snapshot = await getDriveSnapshot();
+  return new Set(['C', ...snapshot.manifest.drives.map((drive) => drive.dirName).filter(Boolean)]);
+};
+
+const buildFsBreadcrumbs = (relativePath = '') => {
+  const segments = relativeSegments(relativePath);
+  const crumbs = [{ label: 'Drives', path: '' }];
+  let currentPath = '';
+
+  for (const segment of segments) {
+    currentPath = currentPath ? path.join(currentPath, segment) : segment;
+    crumbs.push({
+      label: segment,
+      path: currentPath,
+    });
+  }
+
+  return crumbs;
+};
+
+const describeFsType = (dirent, stat) => {
+  if (dirent?.isSymbolicLink?.()) {
+    return 'symlink';
+  }
+
+  if (stat.isDirectory()) {
+    return 'directory';
+  }
+
+  if (stat.isFile()) {
+    return 'file';
+  }
+
+  return 'other';
+};
+
+const listFilesystemDirectory = async (inputPath = '') => {
+  const { absolutePath, relativePath } = resolveFsPath(inputPath);
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error('Directory not found');
+  }
+
+  const stat = fs.statSync(absolutePath);
+  if (!stat.isDirectory()) {
+    throw new Error('Path is not a directory');
+  }
+
+  const driveNames = await getDriveNames();
+  const names = fs.readdirSync(absolutePath, { encoding: 'utf8' });
+  const entries = names
+    .filter((name) => !FS_HIDDEN_NAMES.has(name))
+    .map((name) => {
+      const childAbsolute = path.join(absolutePath, name);
+      const childRelative = relativePath ? path.join(relativePath, name) : name;
+      const dirent = fs.lstatSync(childAbsolute);
+      const resolvedStat = dirent.isSymbolicLink() ? fs.statSync(childAbsolute) : dirent;
+      const type = describeFsType(dirent, resolvedStat);
+      const topLevel = relativeSegments(childRelative)[0] || name;
+      const protectedEntry = isProtectedFsPath(childRelative) || driveNames.has(topLevel);
+
+      return {
+        editable: !protectedEntry,
+        modifiedAt: resolvedStat.mtime.toISOString(),
+        name,
+        path: childRelative,
+        size: resolvedStat.isFile() ? resolvedStat.size : 0,
+        type,
+      };
+    })
+    .sort((a, b) => {
+      if (a.type === 'directory' && b.type !== 'directory') {
+        return -1;
+      }
+      if (a.type !== 'directory' && b.type === 'directory') {
+        return 1;
+      }
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+  return {
+    breadcrumbs: buildFsBreadcrumbs(relativePath),
+    entries,
+    path: relativePath,
+    root: FILEBROWSER_ROOT,
+  };
+};
+
+const ensureFsTargetAllowed = (relativePath = '') => {
+  const segments = relativeSegments(relativePath);
+  if (segments.length === 0) {
+    throw new Error('Destination folder is required');
+  }
+
+  const topLevel = segments[0];
+  if (topLevel === 'C' || FS_HIDDEN_NAMES.has(topLevel)) {
+    throw new Error('This destination is protected');
+  }
+};
+
+const copyFsEntry = (sourcePath, targetPath) => {
+  fs.cpSync(sourcePath, targetPath, {
+    dereference: false,
+    errorOnExist: true,
+    force: false,
+    preserveTimestamps: true,
+    recursive: true,
+  });
+};
+
+const moveFsEntry = (sourcePath, targetPath) => {
+  try {
+    fs.renameSync(sourcePath, targetPath);
+  } catch (error) {
+    if (error?.code !== 'EXDEV') {
+      throw error;
+    }
+
+    copyFsEntry(sourcePath, targetPath);
+    fs.rmSync(sourcePath, { recursive: true, force: true });
+  }
 };
 
 const sanitizeHostLabel = (host = '') => String(host).trim().replace(/[^a-zA-Z0-9._-]+/g, '_') || 'remote';
@@ -1199,60 +1366,6 @@ const sanitizeRcloneRemoteName = (value = '', fallback = 'ftp_remote') => {
     .slice(0, 48) || 'ftp_remote';
 };
 
-const readPidFile = (pidPath) => {
-  try {
-    const pid = Number(fs.readFileSync(pidPath, 'utf8').trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : 0;
-  } catch {
-    return 0;
-  }
-};
-
-const isPidRunning = (pid) => {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const readLogTail = (filePath, limit = 30) => {
-  try {
-    return fs.readFileSync(filePath, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .slice(-limit);
-  } catch {
-    return [];
-  }
-};
-
-const getFindmntEntry = (targetPath) => {
-  try {
-    const raw = execFileSync('findmnt', ['-J', '-T', targetPath, '-o', 'TARGET,SOURCE,FSTYPE'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const entry = JSON.parse(raw).filesystems?.[0];
-    if (!entry) {
-      return null;
-    }
-
-    return {
-      fstype: String(entry.fstype || ''),
-      source: String(entry.source || ''),
-      target: String(entry.target || ''),
-    };
-  } catch {
-    return null;
-  }
-};
-
 const getFtpFavouriteRuntime = (favourite) => {
   const mountName = sanitizeFtpFavouriteName(
     favourite.mountName || favourite.name || favourite.host || `FTP ${favourite.id}`,
@@ -1261,50 +1374,134 @@ const getFtpFavouriteRuntime = (favourite) => {
   const remoteName = sanitizeRcloneRemoteName(`ftp_favourite_${favourite.id}`);
 
   return {
-    logPath: path.join(FTP_MOUNT_RUNTIME_DIR, `${favourite.id}.log`),
+    helperRequestPath: path.join(FTP_MOUNT_RUNTIME_DIR, `${favourite.id}.request.json`),
     mountName,
     mountPoint: path.join(FILEBROWSER_ROOT, mountName),
-    pidPath: path.join(FTP_MOUNT_RUNTIME_DIR, `${favourite.id}.pid`),
     remoteName,
+    symlinkPath: path.join(FILEBROWSER_ROOT, mountName),
   };
 };
 
-const getRcloneRemoteSpec = (favourite, runtime) => {
-  const remotePath = normalizeRemotePath(favourite.remotePath || '/');
-  const relativePath = remotePath === '/' ? '' : remotePath.replace(/^\//, '');
-  return relativePath ? `${runtime.remoteName}:${relativePath}` : `${runtime.remoteName}:`;
+const readJsonOutput = (raw, fallbackValue = null) => {
+  try {
+    return JSON.parse(String(raw || ''));
+  } catch {
+    return fallbackValue;
+  }
 };
 
-const extractMountError = (logLines) => {
-  const fatalLine = [...logLines].reverse().find((line) => /fatal error:/i.test(line));
-  if (fatalLine) {
-    return fatalLine.replace(/^[^:]*:\s*/u, '').trim();
+const writeCloudMountRequest = (favourite, { includeSecrets = false } = {}) => {
+  const runtime = getFtpFavouriteRuntime(favourite);
+  const payload = {
+    drivesRoot: FILEBROWSER_ROOT,
+    id: Number(favourite.id),
+    host: favourite.host,
+    mountName: runtime.mountName,
+    name: favourite.name,
+    password: includeSecrets ? String(favourite.auth?.password || '') : '',
+    port: favourite.port,
+    remoteName: runtime.remoteName,
+    remotePath: normalizeRemotePath(favourite.remotePath || '/'),
+    secure: favourite.secure === true,
+    username: favourite.username || 'anonymous',
+  };
+
+  fs.writeFileSync(runtime.helperRequestPath, `${JSON.stringify(payload, null, 2)}\n`);
+  return runtime.helperRequestPath;
+};
+
+const runCloudMountHelper = (args = []) => {
+  if (!fileIsExecutable(TERMUX_CLOUD_MOUNT_CMD)) {
+    return {
+      ok: false,
+      payload: {
+        available: false,
+        error: `Root mount helper is not installed at ${TERMUX_CLOUD_MOUNT_CMD}`,
+        errorCode: 'helper_missing',
+        mode: 'fallback',
+        reason: 'Browse-only fallback',
+        state: 'fallback_only',
+      },
+    };
   }
 
-  const errorLine = [...logLines].reverse().find((line) => /\berror\b/i.test(line));
-  return errorLine ? errorLine.trim() : '';
+  try {
+    const raw = execFileSync(TERMUX_CLOUD_MOUNT_CMD, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 20000,
+    });
+    return {
+      ok: true,
+      payload: readJsonOutput(raw, {}),
+    };
+  } catch (error) {
+    const stderr = String(error?.stderr || error?.stdout || error?.message || '').trim();
+    return {
+      ok: false,
+      payload: readJsonOutput(stderr, {
+        available: false,
+        error: stderr || 'Root mount helper failed',
+        errorCode: 'helper_failed',
+        mode: 'fallback',
+        reason: 'Browse-only fallback',
+        state: 'fallback_only',
+      }),
+    };
+  }
+};
+
+const getCloudMountCapability = () => {
+  const result = runCloudMountHelper(['capability']);
+  return {
+    available: Boolean(result.payload?.available),
+    mode: String(result.payload?.mode || (result.payload?.available ? 'root_helper' : 'fallback')),
+    reason: String(result.payload?.reason || (result.payload?.available ? 'Root mount helper is available' : 'Browse-only fallback')),
+  };
 };
 
 const getFtpMountState = (favourite) => {
   const runtime = getFtpFavouriteRuntime(favourite);
-  const pid = readPidFile(runtime.pidPath);
-  const running = isPidRunning(pid);
-  const mountInfo = getFindmntEntry(runtime.mountPoint);
-  const mounted = Boolean(mountInfo && mountInfo.target === runtime.mountPoint);
-  const logTail = readLogTail(runtime.logPath);
-  const error = extractMountError(logTail);
-  const state = mounted ? 'mounted' : running ? 'starting' : error ? 'error' : 'unmounted';
+  const capability = getCloudMountCapability();
+  if (!capability.available) {
+    return {
+      available: false,
+      error: capability.reason,
+      errorCode: 'helper_unavailable',
+      linkPath: runtime.symlinkPath,
+      logTail: [],
+      mode: 'fallback',
+      mountInfo: null,
+      mountName: runtime.mountName,
+      mountPoint: runtime.mountPoint,
+      mounted: false,
+      pid: null,
+      reason: capability.reason,
+      remoteName: runtime.remoteName,
+      running: false,
+      state: 'fallback_only',
+    };
+  }
+
+  const result = runCloudMountHelper(['status', '--request', writeCloudMountRequest(favourite, { includeSecrets: false })]);
+  const payload = result.payload || {};
+  const state = String(payload.state || (payload.mounted ? 'mounted' : payload.running ? 'starting' : payload.error ? 'error' : 'unmounted'));
 
   return {
-    error,
-    logTail,
-    mountInfo,
-    mounted,
+    available: payload.available !== false,
+    error: String(payload.error || ''),
+    errorCode: String(payload.errorCode || ''),
+    linkPath: String(payload.linkPath || runtime.symlinkPath),
+    logTail: Array.isArray(payload.logTail) ? payload.logTail : [],
+    mode: String(payload.mode || 'root_helper'),
+    mountInfo: payload.mountInfo || null,
     mountName: runtime.mountName,
     mountPoint: runtime.mountPoint,
-    pid: pid || null,
+    mounted: Boolean(payload.mounted),
+    pid: payload.pid ? Number(payload.pid) : null,
+    reason: String(payload.reason || (payload.mounted ? 'Mounted via root helper' : payload.error || 'Not mounted')),
     remoteName: runtime.remoteName,
-    running,
+    running: Boolean(payload.running),
     state,
   };
 };
@@ -1316,7 +1513,7 @@ const serializeFtpFavourite = (favourite) => ({
 
 const ensureUniqueFtpMountName = (mountName, excludeFavouriteId = 0) => {
   const normalized = sanitizeFtpFavouriteName(mountName, mountName);
-  const reserved = new Set(['C']);
+  const reserved = new Set('CDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
 
   if (reserved.has(normalized.toUpperCase())) {
     throw new Error(`Mount name '${normalized}' is reserved`);
@@ -1382,183 +1579,16 @@ const getFtpFavouriteOrThrow = (id, { includeSecrets = false } = {}) => {
   return favourite;
 };
 
-const ensureRcloneRemoteForFavourite = (favourite) => {
-  const runtime = getFtpFavouriteRuntime(favourite);
-  const auth = favourite.auth || {};
-  const secureArgs = favourite.secure ? ['explicit_tls', 'true'] : ['explicit_tls', 'false'];
-  const baseArgs = [
-    '--config',
-    RCLONE_CONFIG_PATH,
-    'config',
-    'create',
-    runtime.remoteName,
-    'ftp',
-    'host',
-    favourite.host,
-    'port',
-    String(favourite.port),
-    'user',
-    favourite.username || 'anonymous',
-    'pass',
-    String(auth.password || ''),
-    ...secureArgs,
-    '--obscure',
-  ];
-
-  try {
-    execFileSync(RCLONE_BIN, baseArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (error) {
-    const stderr = String(error?.stderr || '');
-    if (!/already exists/i.test(stderr)) {
-      throw new Error(stderr.trim() || error.message);
-    }
-
-    execFileSync(RCLONE_BIN, [
-      '--config',
-      RCLONE_CONFIG_PATH,
-      'config',
-      'update',
-      runtime.remoteName,
-      'host',
-      favourite.host,
-      'port',
-      String(favourite.port),
-      'user',
-      favourite.username || 'anonymous',
-      'pass',
-      String(auth.password || ''),
-      ...secureArgs,
-      '--obscure',
-    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  }
-
-  return runtime;
-};
-
-const waitForMountState = async (favourite, desiredState, timeoutMs = 6000) => {
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const state = getFtpMountState(favourite);
-    if (state.state === desiredState) {
-      return state;
-    }
-
-    if (desiredState === 'mounted' && state.state === 'error') {
-      return state;
-    }
-
-    await sleep(300);
-  }
-
+const mountFtpFavourite = async (favourite) => {
+  writeCloudMountRequest(favourite, { includeSecrets: true });
+  runCloudMountHelper(['mount', '--request', getFtpFavouriteRuntime(favourite).helperRequestPath]);
   return getFtpMountState(favourite);
 };
 
-const removeEmptyMountDir = (mountPoint) => {
-  try {
-    if (fs.existsSync(mountPoint) && fs.readdirSync(mountPoint).length === 0) {
-      fs.rmdirSync(mountPoint);
-    }
-  } catch {
-    // Ignore non-empty or missing directories.
-  }
-};
-
-const mountFtpFavourite = async (favourite) => {
-  const runtime = ensureRcloneRemoteForFavourite(favourite);
-  const current = getFtpMountState(favourite);
-  if (current.mounted) {
-    return current;
-  }
-
-  if (fs.existsSync(runtime.mountPoint) && !current.mounted) {
-    try {
-      const entries = fs.readdirSync(runtime.mountPoint);
-      if (entries.length > 0) {
-        throw new Error(`Mount point '${runtime.mountName}' is not empty`);
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-    }
-  }
-
-  fs.mkdirSync(runtime.mountPoint, { recursive: true });
-  fs.writeFileSync(runtime.logPath, '');
-
-  const child = spawn(
-    RCLONE_BIN,
-    [
-      '--config',
-      RCLONE_CONFIG_PATH,
-      'mount',
-      getRcloneRemoteSpec(favourite, runtime),
-      runtime.mountPoint,
-      '--vfs-cache-mode',
-      'writes',
-      '--dir-cache-time',
-      '30s',
-      '--poll-interval',
-      '0',
-      '--log-file',
-      runtime.logPath,
-      '--log-level',
-      'INFO',
-    ],
-    {
-      detached: true,
-      stdio: 'ignore',
-    }
-  );
-  child.unref();
-  fs.writeFileSync(runtime.pidPath, `${child.pid}\n`);
-
-  const state = await waitForMountState(favourite, 'mounted');
-  if (!state.mounted) {
-    if (isPidRunning(child.pid)) {
-      try {
-        process.kill(child.pid, 'SIGTERM');
-      } catch {
-        // Ignore if process already exited.
-      }
-    }
-    fs.rmSync(runtime.pidPath, { force: true });
-    removeEmptyMountDir(runtime.mountPoint);
-  }
-
-  return state;
-};
-
 const unmountFtpFavourite = async (favourite) => {
-  const runtime = getFtpFavouriteRuntime(favourite);
-  const current = getFtpMountState(favourite);
-
-  for (const command of [
-    ['fusermount3', ['-u', runtime.mountPoint]],
-    ['fusermount', ['-u', runtime.mountPoint]],
-    ['umount', [runtime.mountPoint]],
-  ]) {
-    const [binary, args] = command;
-    try {
-      execFileSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      break;
-    } catch {
-      // Try the next unmount strategy.
-    }
-  }
-
-  if (current.pid && isPidRunning(current.pid)) {
-    try {
-      process.kill(current.pid, 'SIGTERM');
-    } catch {
-      // Ignore if the process is already gone.
-    }
-  }
-
-  fs.rmSync(runtime.pidPath, { force: true });
-  removeEmptyMountDir(runtime.mountPoint);
-  return waitForMountState(favourite, 'unmounted', 2000);
+  writeCloudMountRequest(favourite, { includeSecrets: false });
+  runCloudMountHelper(['unmount', '--request', getFtpFavouriteRuntime(favourite).helperRequestPath]);
+  return getFtpMountState(favourite);
 };
 
 const resolveFtpFavouritePayload = (payload = {}) => {
@@ -1851,6 +1881,7 @@ const controlHandler = async (req, res) => {
     const output = await runCommand(svc[action]);
     const expectedRunning = action !== 'stop';
     const running = await waitForServiceState(svc, expectedRunning);
+    serviceStateCache[service] = classifyServiceState(running);
 
     pushDebugEvent(
       running === expectedRunning ? 'info' : 'warn',
@@ -1952,6 +1983,202 @@ const drivesCheckHandler = async (req, res) => {
   }
 };
 
+const filesystemListHandler = async (req, res) => {
+  try {
+    res.json(await listFilesystemDirectory(req.query.path || ''));
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to list files');
+    const status = /not found/i.test(message) ? 404 : 400;
+    pushDebugEvent('error', 'Filesystem list failed', { error: message, path: String(req.query.path || '') }, true);
+    res.status(status).json({ error: message });
+  }
+};
+
+const filesystemMkdirHandler = async (req, res) => {
+  try {
+    const parentPath = normalizeLocalRelativePath(req.body?.path || '');
+    const folderName = path.basename(String(req.body?.name || '').replace(/[\\/]+/g, ' ').trim());
+    if (!folderName) {
+      return res.status(400).json({ error: 'Folder name is required' });
+    }
+
+    const targetRelative = normalizeLocalRelativePath(path.join(parentPath, folderName));
+    const { absolutePath } = resolveFsPath(targetRelative);
+    if (fs.existsSync(absolutePath)) {
+      return res.status(400).json({ error: 'Target already exists' });
+    }
+
+    fs.mkdirSync(absolutePath, { recursive: true });
+    pushDebugEvent('info', 'Filesystem directory created', { path: targetRelative }, true);
+    res.json({ success: true, path: targetRelative });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to create folder');
+    pushDebugEvent('error', 'Filesystem mkdir failed', { error: message }, true);
+    res.status(400).json({ error: message });
+  }
+};
+
+const filesystemRenameHandler = async (req, res) => {
+  try {
+    const sourceRelative = normalizeLocalRelativePath(req.body?.path || '');
+    const nextName = path.basename(String(req.body?.name || '').replace(/[\\/]+/g, ' ').trim());
+    if (!sourceRelative || !nextName) {
+      return res.status(400).json({ error: 'Path and next name are required' });
+    }
+    if (isProtectedFsPath(sourceRelative)) {
+      return res.status(403).json({ error: 'This path cannot be renamed' });
+    }
+
+    const parentRelative = path.dirname(sourceRelative) === '.' ? '' : path.dirname(sourceRelative);
+    const targetRelative = normalizeLocalRelativePath(path.join(parentRelative, nextName));
+    const sourcePath = resolveFsPath(sourceRelative).absolutePath;
+    const targetPath = resolveFsPath(targetRelative).absolutePath;
+    if (!fs.existsSync(sourcePath)) {
+      return res.status(404).json({ error: 'Source path not found' });
+    }
+    if (fs.existsSync(targetPath)) {
+      return res.status(400).json({ error: 'Target already exists' });
+    }
+
+    fs.renameSync(sourcePath, targetPath);
+    pushDebugEvent('info', 'Filesystem entry renamed', { from: sourceRelative, to: targetRelative }, true);
+    res.json({ success: true, path: targetRelative });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to rename entry');
+    pushDebugEvent('error', 'Filesystem rename failed', { error: message }, true);
+    res.status(400).json({ error: message });
+  }
+};
+
+const filesystemDeleteHandler = async (req, res) => {
+  try {
+    const sourceRelative = normalizeLocalRelativePath(req.body?.path || '');
+    if (!sourceRelative) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+    if (isProtectedFsPath(sourceRelative)) {
+      return res.status(403).json({ error: 'This path cannot be deleted' });
+    }
+
+    const { absolutePath } = resolveFsPath(sourceRelative);
+    if (!fs.existsSync(absolutePath)) {
+      return res.status(404).json({ error: 'Path not found' });
+    }
+
+    fs.rmSync(absolutePath, { recursive: true, force: true });
+    pushDebugEvent('info', 'Filesystem entry deleted', { path: sourceRelative }, true);
+    res.json({ success: true });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to delete entry');
+    pushDebugEvent('error', 'Filesystem delete failed', { error: message }, true);
+    res.status(400).json({ error: message });
+  }
+};
+
+const filesystemDownloadHandler = async (req, res) => {
+  try {
+    const relativePath = normalizeLocalRelativePath(req.query.path || '');
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+
+    const { absolutePath } = resolveFsPath(relativePath);
+    if (!fs.existsSync(absolutePath)) {
+      return res.status(404).json({ error: 'Path not found' });
+    }
+
+    const stat = fs.statSync(absolutePath);
+    if (!stat.isFile()) {
+      return res.status(400).json({ error: 'Only file downloads are supported right now' });
+    }
+
+    pushDebugEvent('info', 'Filesystem file download requested', { path: relativePath }, true);
+    res.download(absolutePath, path.basename(absolutePath));
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to download file');
+    pushDebugEvent('error', 'Filesystem download failed', { error: message }, true);
+    res.status(400).json({ error: message });
+  }
+};
+
+const filesystemUploadHandler = async (req, res) => {
+  try {
+    const parentRelative = normalizeLocalRelativePath(req.query.path || '');
+    const fileName = path.basename(String(req.query.name || req.headers['x-file-name'] || '').replace(/[\\/]+/g, ' ').trim());
+    if (!fileName) {
+      return res.status(400).json({ error: 'A file name is required' });
+    }
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).json({ error: 'Upload body is missing' });
+    }
+
+    const targetRelative = normalizeLocalRelativePath(path.join(parentRelative, fileName));
+    const { absolutePath } = resolveFsPath(targetRelative);
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    fs.writeFileSync(absolutePath, req.body);
+    pushDebugEvent('info', 'Filesystem file uploaded', { path: targetRelative, size: req.body.length }, true);
+    res.json({ success: true, path: targetRelative });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to upload file');
+    pushDebugEvent('error', 'Filesystem upload failed', { error: message }, true);
+    res.status(400).json({ error: message });
+  }
+};
+
+const filesystemPasteHandler = async (req, res) => {
+  try {
+    const sourceRelative = normalizeLocalRelativePath(req.body?.sourcePath || '');
+    const destinationRelative = normalizeLocalRelativePath(req.body?.destinationPath || '');
+    const mode = String(req.body?.mode || 'copy').toLowerCase();
+
+    if (!sourceRelative || !destinationRelative) {
+      return res.status(400).json({ error: 'Source and destination paths are required' });
+    }
+    if (mode !== 'copy' && mode !== 'move') {
+      return res.status(400).json({ error: 'Mode must be copy or move' });
+    }
+    if (isProtectedFsPath(sourceRelative)) {
+      return res.status(403).json({ error: `This path cannot be ${mode === 'move' ? 'moved' : 'copied'}` });
+    }
+
+    ensureFsTargetAllowed(destinationRelative);
+
+    const source = resolveFsPath(sourceRelative);
+    const destination = resolveFsPath(destinationRelative);
+    if (!fs.existsSync(source.absolutePath)) {
+      return res.status(404).json({ error: 'Source path not found' });
+    }
+    if (!fs.existsSync(destination.absolutePath) || !fs.statSync(destination.absolutePath).isDirectory()) {
+      return res.status(400).json({ error: 'Destination must be an existing folder' });
+    }
+
+    const targetRelative = normalizeLocalRelativePath(path.join(destination.relativePath, path.basename(source.relativePath)));
+    const target = resolveFsPath(targetRelative);
+    if (fs.existsSync(target.absolutePath)) {
+      return res.status(400).json({ error: 'A file or folder with that name already exists in the destination' });
+    }
+    if (target.absolutePath.startsWith(`${source.absolutePath}${path.sep}`)) {
+      return res.status(400).json({ error: 'Cannot paste a folder into itself' });
+    }
+
+    if (mode === 'move') {
+      moveFsEntry(source.absolutePath, target.absolutePath);
+    } else {
+      copyFsEntry(source.absolutePath, target.absolutePath);
+    }
+
+    pushDebugEvent('info', `Filesystem entry ${mode}d`, {
+      from: sourceRelative,
+      to: targetRelative,
+    }, true);
+    res.json({ success: true, path: targetRelative });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to paste entry');
+    pushDebugEvent('error', 'Filesystem paste failed', { error: message }, true);
+    res.status(400).json({ error: message });
+  }
+};
+
 // Health
 app.get('/status', requireAuth, statusHandler);
 app.get('/api/status', requireAuth, statusHandler);
@@ -1972,6 +2199,7 @@ app.get('/dashboard', requireAuth, dashboardHandler);
 app.get('/api/dashboard', requireAuth, dashboardHandler);
 
 const ftpDefaultsHandler = (req, res) => {
+  const ftpMounting = getCloudMountCapability();
   res.json({
     defaultName: DEFAULT_PS4_FTP_NAME,
     host: process.env.FTP_CLIENT_HOST || DEFAULT_PS4_HOST,
@@ -1980,6 +2208,7 @@ const ftpDefaultsHandler = (req, res) => {
     user: process.env.FTP_CLIENT_USER || DEFAULT_PS4_USER,
     secure: process.env.FTP_CLIENT_SECURE === 'true',
     downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
+    ftpMounting,
   });
 };
 
@@ -2023,22 +2252,10 @@ const updateFtpFavouriteHandler = async (req, res) => {
 const deleteFtpFavouriteHandler = async (req, res) => {
   try {
     const favourite = getFtpFavouriteOrThrow(req.params.id, { includeSecrets: true });
-    const runtime = getFtpFavouriteRuntime(favourite);
 
     await unmountFtpFavourite(favourite).catch(() => {});
     appDb.deleteFtpFavourite(favourite.id);
-
-    try {
-      execFileSync(RCLONE_BIN, ['--config', RCLONE_CONFIG_PATH, 'config', 'delete', runtime.remoteName], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } catch {
-      // Ignore missing remotes during deletion.
-    }
-
-    fs.rmSync(runtime.logPath, { force: true });
-    fs.rmSync(runtime.pidPath, { force: true });
+    fs.rmSync(getFtpFavouriteRuntime(favourite).helperRequestPath, { force: true });
 
     pushDebugEvent('info', 'FTP favourite deleted', { id: favourite.id, name: favourite.name }, true);
     res.json({ success: true });
@@ -2057,7 +2274,7 @@ const mountFtpFavouriteHandler = async (req, res) => {
     const payload = serializeFtpFavourite(getFtpFavouriteOrThrow(favourite.id, { includeSecrets: false }));
 
     if (!mount.mounted) {
-      const error = mount.error || 'Mount failed on this host';
+      const error = mount.error || mount.reason || 'Mount failed on this host';
       pushDebugEvent('error', 'FTP favourite mount failed', { id: favourite.id, name: favourite.name, error }, true);
       return res.status(500).json({ error, favourite: payload });
     }
@@ -2218,6 +2435,20 @@ app.get('/drives', requireAuth, drivesHandler);
 app.get('/api/drives', requireAuth, drivesHandler);
 app.post('/drives/check', requireAuth, drivesCheckHandler);
 app.post('/api/drives/check', requireAuth, drivesCheckHandler);
+app.get('/fs/list', requireAuth, filesystemListHandler);
+app.get('/api/fs/list', requireAuth, filesystemListHandler);
+app.post('/fs/mkdir', requireAuth, filesystemMkdirHandler);
+app.post('/api/fs/mkdir', requireAuth, filesystemMkdirHandler);
+app.post('/fs/rename', requireAuth, filesystemRenameHandler);
+app.post('/api/fs/rename', requireAuth, filesystemRenameHandler);
+app.post('/fs/delete', requireAuth, filesystemDeleteHandler);
+app.post('/api/fs/delete', requireAuth, filesystemDeleteHandler);
+app.get('/fs/download', requireAuth, filesystemDownloadHandler);
+app.get('/api/fs/download', requireAuth, filesystemDownloadHandler);
+app.post('/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);
+app.post('/api/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);
+app.post('/fs/paste', requireAuth, filesystemPasteHandler);
+app.post('/api/fs/paste', requireAuth, filesystemPasteHandler);
 app.get('/ftp/defaults', requireAuth, ftpDefaultsHandler);
 app.get('/api/ftp/defaults', requireAuth, ftpDefaultsHandler);
 app.get('/ftp/favourites', requireAuth, ftpFavouritesHandler);

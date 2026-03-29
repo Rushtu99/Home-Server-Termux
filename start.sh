@@ -10,6 +10,7 @@ fi
 USER_HOME="${USER_HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
 SERVER_ENV_FILE="${SERVER_ENV_FILE:-$PROJECT/server/.env}"
+BACKEND_PORT=""
 
 load_shell_env_file() {
     local env_file="$1"
@@ -43,27 +44,43 @@ load_shell_env_file() {
 
 load_shell_env_file "$SERVER_ENV_FILE"
 
+if [ -f "$SERVER_ENV_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            PORT=*)
+                BACKEND_PORT="${line#PORT=}"
+                BACKEND_PORT="${BACKEND_PORT#\"}"
+                BACKEND_PORT="${BACKEND_PORT%\"}"
+                BACKEND_PORT="${BACKEND_PORT#\'}"
+                BACKEND_PORT="${BACKEND_PORT%\'}"
+                break
+                ;;
+        esac
+    done < "$SERVER_ENV_FILE"
+fi
+
 . "$PROJECT/scripts/drive-common.sh"
 
 FILESYSTEM_ROOT="${FILESYSTEM_ROOT:-${FILEBROWSER_ROOT:-$DRIVES_DIR}}"
 LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
 NGINX_PID_PATH="${NGINX_PID_PATH:-$RUNTIME_DIR/nginx.pid}"
-FILEBROWSER_DB_PATH="${FILEBROWSER_DB_PATH:-$RUNTIME_DIR/filebrowser.db}"
 SERVER_NODE_OPTIONS="${SERVER_NODE_OPTIONS:---max-old-space-size=192}"
 DASHBOARD_NODE_OPTIONS="${DASHBOARD_NODE_OPTIONS:---max-old-space-size=384}"
 BACKEND_BIND_HOST="${BACKEND_BIND_HOST:-127.0.0.1}"
-FILEBROWSER_BIND_HOST="${FILEBROWSER_BIND_HOST:-127.0.0.1}"
+BACKEND_PORT="${BACKEND_PORT:-4000}"
 TTYD_BIND_HOST="${TTYD_BIND_HOST:-127.0.0.1}"
 SSHD_BIND_HOST="${SSHD_BIND_HOST:-127.0.0.1}"
 SSHD_PORT="${SSHD_PORT:-8022}"
 ENABLE_SSHD="${ENABLE_SSHD:-false}"
 DRIVE_AGENT_CMD="${DRIVE_AGENT_CMD:-/data/data/com.termux/files/usr/bin/termux-drive-agent}"
+TERMUX_CLOUD_MOUNT_CMD="${TERMUX_CLOUD_MOUNT_CMD:-/data/data/com.termux/files/usr/bin/termux-cloud-mount}"
 
 BACKEND_PID_PATH="${BACKEND_PID_PATH:-$RUNTIME_DIR/backend.pid}"
-FILEBROWSER_PID_PATH="${FILEBROWSER_PID_PATH:-$RUNTIME_DIR/filebrowser.pid}"
 FRONTEND_PID_PATH="${FRONTEND_PID_PATH:-$RUNTIME_DIR/frontend.pid}"
 TTYD_PID_PATH="${TTYD_PID_PATH:-$RUNTIME_DIR/ttyd.pid}"
 SSHD_PID_PATH="${SSHD_PID_PATH:-$RUNTIME_DIR/sshd.pid}"
+FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 
 mkdir -p "$LOG_DIR" "$RUNTIME_DIR" "$MOUNT_RUNTIME_DIR"
 START_LOG="$LOG_DIR/start.log"
@@ -83,6 +100,30 @@ log_warn() {
 
 log_error() {
     printf '[%s] ERROR %s\n' "$(timestamp)" "$1"
+}
+
+ensure_node_dependencies() {
+    local app_dir="$1"
+    local label="$2"
+
+    [ -f "$app_dir/package.json" ] || return 0
+
+    if [ ! -d "$app_dir/node_modules" ]; then
+        log_info "Installing $label dependencies"
+        (cd "$app_dir" && npm install --no-fund --no-audit)
+        return 0
+    fi
+
+    if [ -f "$app_dir/package-lock.json" ] && [ "$app_dir/package-lock.json" -nt "$app_dir/node_modules" ]; then
+        log_info "Refreshing $label dependencies"
+        (cd "$app_dir" && npm install --no-fund --no-audit)
+        return 0
+    fi
+
+    if [ "$app_dir/package.json" -nt "$app_dir/node_modules" ]; then
+        log_info "Refreshing $label dependencies"
+        (cd "$app_dir" && npm install --no-fund --no-audit)
+    fi
 }
 
 warn_conflicting_boot_scripts() {
@@ -242,6 +283,19 @@ run_drive_agent_scan() {
     fi
 }
 
+sync_cloud_mount_links() {
+    if [ ! -x "$TERMUX_CLOUD_MOUNT_CMD" ]; then
+        log_info "termux-cloud-mount not installed; FTP mounts stay in browse-only mode until the helper is added"
+        return 0
+    fi
+
+    if "$TERMUX_CLOUD_MOUNT_CMD" sync-links >/dev/null 2>&1; then
+        log_info "termux-cloud-mount synced FTP drive links"
+    else
+        log_warn "termux-cloud-mount sync-links failed; check root mount helper state"
+    fi
+}
+
 stop_repo_sshd() {
     stop_pidfile_process "sshd" "$SSHD_PID_PATH"
 
@@ -292,12 +346,22 @@ detect_host_ip() {
     fi
 }
 
+build_allowed_dev_origins() {
+    local host_ip
+    host_ip="$(detect_host_ip)"
+    printf '127.0.0.1,localhost,%s,%s:8088\n' "$host_ip" "$host_ip"
+}
+
+HOST_IP="$(detect_host_ip)"
+ALLOWED_DEV_ORIGINS="${ALLOWED_DEV_ORIGINS:-$(build_allowed_dev_origins)}"
+
 log_info "Starting Home Server"
 warn_conflicting_boot_scripts
 
 stop_drive_watcher
 prepare_drives_root
 run_drive_agent_scan
+sync_cloud_mount_links
 
 if command -v termux-wake-lock >/dev/null 2>&1; then
     termux-wake-lock
@@ -306,7 +370,6 @@ fi
 log_info "Cleaning old processes"
 stop_pidfile_process "backend" "$BACKEND_PID_PATH"
 stop_pidfile_process "frontend" "$FRONTEND_PID_PATH"
-stop_pidfile_process "filebrowser" "$FILEBROWSER_PID_PATH"
 stop_pidfile_process "ttyd" "$TTYD_PID_PATH"
 stop_pidfile_process "sshd" "$SSHD_PID_PATH"
 stop_repo_nginx
@@ -318,8 +381,10 @@ stop_matching_process "frontend" "next start -H 127.0.0.1"
 stop_matching_process "frontend" "next dev --webpack --hostname 0.0.0.0"
 stop_matching_process "frontend" "next dev --webpack --hostname 127.0.0.1"
 stop_matching_process "frontend" "next-server"
-stop_matching_process "filebrowser" "filebrowser -d $FILEBROWSER_DB_PATH"
 stop_matching_process "ttyd" "ttyd -W -i $TTYD_BIND_HOST -p 7681 -w $PROJECT"
+
+ensure_node_dependencies "$PROJECT/server" "backend"
+ensure_node_dependencies "$PROJECT/dashboard" "dashboard"
 
 log_info "Checking SSH"
 if [ "$ENABLE_SSHD" = "true" ] && command -v sshd >/dev/null 2>&1; then
@@ -337,21 +402,10 @@ fi
 
 start_background_command \
     "Backend" \
-    4000 \
+    "$BACKEND_PORT" \
     "$BACKEND_PID_PATH" \
-    "mkdir -p '$LOG_DIR'; cd '$PROJECT/server' && export NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST'; exec node '$PROJECT/server/index.js' > '$LOG_DIR/backend.log' 2>&1" \
+    "mkdir -p '$LOG_DIR'; cd '$PROJECT/server' && export NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST' PORT='$BACKEND_PORT'; exec node '$PROJECT/server/index.js' > '$LOG_DIR/backend.log' 2>&1" \
     "$BACKEND_BIND_HOST"
-
-if command -v filebrowser >/dev/null 2>&1; then
-    start_background_command \
-        "FileBrowser" \
-        8080 \
-        "$FILEBROWSER_PID_PATH" \
-        "mkdir -p '$RUNTIME_DIR' '$LOG_DIR' '$FILESYSTEM_ROOT'; filebrowser config set -d '$FILEBROWSER_DB_PATH' --auth.method=noauth >/dev/null 2>&1 || true; exec filebrowser -d '$FILEBROWSER_DB_PATH' -r '$FILESYSTEM_ROOT' -p 8080 -a '$FILEBROWSER_BIND_HOST' -b /files --noauth > '$LOG_DIR/filebrowser.log' 2>&1" \
-        "$FILEBROWSER_BIND_HOST"
-else
-    log_warn "Skipping FileBrowser (command not found)"
-fi
 
 log_info "Starting nginx"
 if command -v nginx >/dev/null 2>&1; then
@@ -376,20 +430,19 @@ fi
 if [ -f "$PROJECT/dashboard/.next/BUILD_ID" ]; then
     start_background_command \
         "Frontend" \
-        3000 \
+        "$FRONTEND_PORT" \
         "$FRONTEND_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS'; exec npm start > '$LOG_DIR/frontend.log' 2>&1" \
+        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS' PORT='$FRONTEND_PORT' ALLOWED_DEV_ORIGINS='$ALLOWED_DEV_ORIGINS'; exec npm start > '$LOG_DIR/frontend.log' 2>&1" \
         "127.0.0.1"
 else
     start_background_command \
         "Frontend" \
-        3000 \
+        "$FRONTEND_PORT" \
         "$FRONTEND_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS'; exec npm run dev > '$LOG_DIR/frontend.log' 2>&1" \
+        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS' PORT='$FRONTEND_PORT' ALLOWED_DEV_ORIGINS='$ALLOWED_DEV_ORIGINS'; exec npm run dev > '$LOG_DIR/frontend.log' 2>&1" \
         "127.0.0.1"
 fi
 
-HOST_IP="$(detect_host_ip)"
 log_info "Home Server started"
 printf '[%s] INFO  Dashboard: http://%s:8088\n' "$(timestamp)" "$HOST_IP"
 printf '[%s] INFO  Files:     http://%s:8088/files\n' "$(timestamp)" "$HOST_IP"

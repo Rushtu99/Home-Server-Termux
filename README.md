@@ -103,6 +103,8 @@ TTYD_BIND_HOST=127.0.0.1
 FTP_BIND_HOST=127.0.0.1
 FTP_SERVER_PORT=2121
 DRIVE_AGENT_CMD=/data/data/com.termux/files/usr/bin/termux-drive-agent
+TERMUX_CLOUD_MOUNT_CMD=/data/data/com.termux/files/usr/bin/termux-cloud-mount
+TERMUX_CLOUD_MOUNT_ROOT=/mnt/cloud/home-server
 DRIVE_STATE_PATH=/data/data/com.termux/files/home/Drives/.state/drives.json
 DRIVE_EVENTS_PATH=/data/data/com.termux/files/home/Drives/.state/drive-events.jsonl
 DRIVE_REFRESH_INTERVAL_MS=60000
@@ -158,7 +160,7 @@ This reloads `server/.env`, clears the repo-managed service processes, and start
 Login through the dashboard first. Those routes are protected by nginx and require the dashboard auth cookie.
 
 ### Remote FTP access
-Open the FTP tab in the dashboard. It now supports saved favourites, direct browsing, and best-effort mount/unmount into `~/Drives/<FavouriteName>`. The default preset is the PS4 host at `192.168.1.8:2121`.
+Open the FTP tab in the dashboard. It now supports saved favourites, direct browsing, and root-helper mount/unmount into `~/Drives/<FavouriteName>`. The default preset is the PS4 host at `192.168.1.8:2121`.
 
 The dashboard FTP client can:
 - browse remote directories
@@ -166,11 +168,11 @@ The dashboard FTP client can:
 - upload a local server file path to the remote host
 - create remote folders
 - save favourite remotes with a drive folder name
-- mount or unmount saved favourites when the host supports `rclone mount`
+- mount or unmount saved favourites through `termux-cloud-mount`
 
 If your PS4 GoldHEN setup uses different credentials or port, override them in the form or in `server/.env`.
 
-On this Termux host, `rclone mount` may fail if FUSE is unavailable. When that happens, the favourite stays saved and browseable, and the mount error is shown directly in the FTP favourites list.
+`termux-cloud-mount` runs `rclone mount` through Magisk root in the global mount namespace and exposes the mounted remote back into `~/Drives` as a symlink. If that helper is unavailable or root FUSE fails, the favourite stays saved and browseable and the UI falls back to browse-only mode.
 
 ### Local FTP server is not available
 The optional local FTP server only appears in service controls when one of these providers exists:
