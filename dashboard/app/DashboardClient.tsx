@@ -23,8 +23,24 @@ const THEME = {
   border: '#2d333a',
 };
 
-type TabKey = 'home' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
+type TabKey = 'home' | 'media' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
 type Services = Record<string, boolean>;
+type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access';
+type ServiceSurface = 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp';
+
+type ServiceCatalogEntry = {
+  available: boolean;
+  blocker?: string;
+  controlMode: 'always_on' | 'optional';
+  description: string;
+  group: ServiceGroupKey;
+  key: string;
+  label: string;
+  placeholder: boolean;
+  route?: string;
+  status: 'working' | 'stopped' | 'stalled' | 'unavailable' | string;
+  surface: ServiceSurface;
+};
 
 type Monitor = {
   cpuCores: number;
@@ -171,7 +187,10 @@ type FtpDefaults = {
 type DashboardPayload = {
   generatedAt: string;
   services: Services;
+  serviceCatalog?: ServiceCatalogEntry[];
+  serviceGroups?: Partial<Record<ServiceGroupKey, string[]>>;
   serviceController?: {
+    locked?: boolean;
     optionalServices?: string[];
   };
   monitor: Monitor;
@@ -223,7 +242,9 @@ const EMPTY_DRIVE_PAYLOAD: DrivePayload = {
 };
 
 const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: 'home', label: 'Dashboard' },
+  { key: 'home', label: 'Home' },
+  { key: 'media', label: 'Media' },
+  { key: 'arr', label: 'ARR' },
   { key: 'terminal', label: 'Terminal' },
   { key: 'filesystem', label: 'Filesystem' },
   { key: 'ftp', label: 'FTP' },
@@ -231,6 +252,19 @@ const TABS: Array<{ key: TabKey; label: string }> = [
 ];
 
 const TAB_KEYS = new Set<TabKey>(TABS.map(({ key }) => key));
+
+const SERVICE_GROUP_LABELS: Record<ServiceGroupKey, string> = {
+  access: 'Access',
+  arr: 'ARR',
+  data: 'Data',
+  media: 'Media',
+  platform: 'Platform',
+};
+
+const WORKFLOW_STEPS: Record<'media' | 'arr', string[]> = {
+  media: ['Requests', 'Downloads', 'Library', 'Streaming'],
+  arr: ['Indexer', 'Discovery', 'Download', 'Subtitle'],
+};
 
 const fmtBytes = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) {
@@ -369,6 +403,8 @@ export default function Dashboard() {
   const [authError, setAuthError] = useState('');
 
   const [services, setServices] = useState<Services>({});
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogEntry[]>([]);
+  const [serviceGroups, setServiceGroups] = useState<Partial<Record<ServiceGroupKey, string[]>>>({});
   const [monitor, setMonitor] = useState<Monitor | null>(null);
   const [connections, setConnections] = useState<ConnectedUser[]>([]);
   const [storage, setStorage] = useState<StorageMount[]>([]);
@@ -383,7 +419,7 @@ export default function Dashboard() {
   const [serviceUnlockPassword, setServiceUnlockPassword] = useState('');
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [logsMarkdown, setLogsMarkdown] = useState('');
-  const [optionalServices, setOptionalServices] = useState<string[]>(['ftp', 'copyparty', 'syncthing', 'samba']);
+  const [optionalServices, setOptionalServices] = useState<string[]>(['ftp', 'copyparty', 'syncthing', 'samba', 'sshd']);
   const [ftpDefaults, setFtpDefaults] = useState<FtpDefaults | null>(null);
   const [ftpHost, setFtpHost] = useState('');
   const [ftpPort, setFtpPort] = useState('2121');
@@ -440,6 +476,8 @@ export default function Dashboard() {
     setSessionUser(null);
     setPassword('');
     setServices({});
+    setServiceCatalog([]);
+    setServiceGroups({});
     setMonitor(null);
     setConnections([]);
     setStorage([]);
@@ -452,7 +490,7 @@ export default function Dashboard() {
     setServiceControllerLocked(true);
     setServiceUnlockBusy(false);
     setServiceUnlockPassword('');
-    setOptionalServices(['ftp', 'copyparty', 'syncthing', 'samba']);
+    setOptionalServices(['ftp', 'copyparty', 'syncthing', 'samba', 'sshd']);
     setLogsMarkdown('');
     setFtpDefaults(null);
     setFtpFavourites([]);
@@ -777,8 +815,13 @@ export default function Dashboard() {
 
   const applyDashboardPayload = (payload: DashboardPayload) => {
     setServices(payload.services || {});
+    setServiceCatalog(Array.isArray(payload.serviceCatalog) ? payload.serviceCatalog : []);
+    setServiceGroups(payload.serviceGroups && typeof payload.serviceGroups === 'object' ? payload.serviceGroups : {});
     if (Array.isArray(payload.serviceController?.optionalServices) && payload.serviceController?.optionalServices.length > 0) {
       setOptionalServices(payload.serviceController.optionalServices);
+    }
+    if (typeof payload.serviceController?.locked === 'boolean') {
+      setServiceControllerLocked(payload.serviceController.locked);
     }
     setMonitor(payload.monitor || null);
     setConnections(Array.isArray(payload.connections?.users) ? payload.connections.users : []);
@@ -817,6 +860,8 @@ export default function Dashboard() {
       if (payload?.services && typeof payload.services === 'object') {
         setServices(payload.services as Services);
       }
+      setServiceCatalog(Array.isArray(payload?.serviceCatalog) ? payload.serviceCatalog : []);
+      setServiceGroups(payload?.serviceGroups && typeof payload.serviceGroups === 'object' ? payload.serviceGroups : {});
       setServiceControllerLocked(payload?.controller?.locked !== false);
       if (Array.isArray(payload?.controller?.optionalServices) && payload.controller.optionalServices.length > 0) {
         setOptionalServices(payload.controller.optionalServices);
@@ -973,12 +1018,102 @@ export default function Dashboard() {
     }
   };
 
+  const statusToneStyle = (status: string): CSSProperties => {
+    if (status === 'working') {
+      return styles.serviceStatusOk;
+    }
+    if (status === 'stopped') {
+      return styles.serviceStatusIdle;
+    }
+    if (status === 'unavailable') {
+      return styles.serviceStatusUnavailable;
+    }
+    return styles.serviceStatusWarn;
+  };
+
+  const renderServiceCard = (entry: ServiceCatalogEntry) => {
+    const linkHref = buildServiceHref(entry.route);
+    const statusLabel = entry.status === 'working'
+      ? 'Working'
+      : entry.status === 'stopped'
+        ? 'Stopped'
+        : entry.status === 'unavailable'
+          ? 'Unavailable'
+          : 'Needs attention';
+    const canOperate = sessionUser?.role === 'admin' && entry.available;
+    const isRunning = entry.status === 'working';
+    const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
+    const restartBusy = Boolean(controlBusy[`${entry.key}:restart`]);
+
+    return (
+      <article key={entry.key} style={styles.serviceCard}>
+        <div style={styles.serviceCardHead}>
+          <div>
+            <h3 style={styles.serviceCardTitle}>{entry.label}</h3>
+            <p style={styles.serviceCardDescription}>{entry.description}</p>
+          </div>
+          <span style={{ ...styles.serviceStatusBadge, ...statusToneStyle(entry.status) }}>{statusLabel}</span>
+        </div>
+        <p style={styles.serviceCardMeta}>
+          {SERVICE_GROUP_LABELS[entry.group]} · {entry.controlMode === 'optional' ? 'Optional service' : 'Core service'}
+        </p>
+        {entry.blocker ? <p style={{ ...styles.smallLabel, color: entry.status === 'unavailable' ? THEME.brightYellow : THEME.muted }}>{entry.blocker}</p> : null}
+        <div style={styles.serviceCardActions}>
+          {linkHref ? (
+            <a href={linkHref} target="_blank" rel="noreferrer" className="ui-button" style={styles.linkBtn}>
+              Open
+            </a>
+          ) : null}
+          {canOperate && entry.controlMode === 'always_on' ? (
+            <>
+              {!isRunning ? (
+                <button className="ui-button" style={styles.actionBtn} type="button" disabled={startBusy} onClick={() => void executeControl(entry.key, 'start')}>
+                  {startBusy ? 'Starting…' : 'Start'}
+                </button>
+              ) : null}
+              <button className="ui-button" style={styles.actionBtn} type="button" disabled={restartBusy} onClick={() => void executeControl(entry.key, 'restart')}>
+                {restartBusy ? 'Restarting…' : 'Restart'}
+              </button>
+            </>
+          ) : null}
+        </div>
+      </article>
+    );
+  };
+
+  const renderWorkflowStrip = (surface: 'media' | 'arr') => (
+    <div style={styles.workflowStrip} aria-label={`${surface} workflow`}>
+      {WORKFLOW_STEPS[surface].map((step, index) => (
+        <div key={step} style={styles.workflowStep}>
+          <span style={styles.workflowIndex}>{index + 1}</span>
+          <span>{step}</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  const serviceCatalogByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
+  const serviceSurfaceEntries = (surface: ServiceSurface) => serviceCatalog.filter((entry) => entry.surface === surface);
+  const homeGroups = (['platform', 'data', 'access'] as const)
+    .map((group) => ({
+      group,
+      items: (serviceGroups[group] || [])
+        .map((key) => serviceCatalogByKey.get(key))
+        .filter((entry): entry is ServiceCatalogEntry => Boolean(entry))
+        .filter((entry) => entry.surface === 'home'),
+    }))
+    .filter((entry) => entry.items.length > 0);
+  const mediaServices = serviceSurfaceEntries('media');
+  const arrServices = serviceSurfaceEntries('arr');
+  const optionalServiceEntries = optionalServices
+    .map((name) => serviceCatalogByKey.get(name))
+    .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+  const controllableServices = optionalServiceEntries.filter((entry) => entry.available);
+  const buildServiceHref = (route?: string) => (route && gatewayBase ? `${gatewayBase}${route}` : '');
+  const catalogRunningServices = serviceCatalog.filter((entry) => entry.status === 'working').length;
   const usedMemPct = monitor ? Math.min((monitor.totalMem > 0 ? (monitor.usedMem / monitor.totalMem) * 100 : 0), 100) : 0;
-  const runningServices = Object.values(services).filter(Boolean).length;
-  const totalServices = Object.keys(services).length || 4;
-  const controllableServices = optionalServices
-    .filter((name) => Object.prototype.hasOwnProperty.call(services, name))
-    .map((name) => [name, Boolean(services[name])] as const);
+  const runningServices = catalogRunningServices || Object.values(services).filter(Boolean).length;
+  const totalServices = serviceCatalog.length || Object.keys(services).length || 4;
   const totalStorage = storage.reduce((sum, mount) => sum + mount.size, 0);
   const usedStorage = storage.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
@@ -1004,6 +1139,7 @@ export default function Dashboard() {
       ? THEME.crimsonRed
       : THEME.ok;
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
+
   const navButtonLabel = (tab: TabKey) => {
     if (!isTablet) {
       return TABS.find((entry) => entry.key === tab)?.label || tab;
@@ -1012,6 +1148,10 @@ export default function Dashboard() {
     switch (tab) {
       case 'home':
         return 'Home';
+      case 'media':
+        return 'Media';
+      case 'arr':
+        return 'ARR';
       case 'terminal':
         return 'Term';
       case 'filesystem':
@@ -1629,7 +1769,7 @@ export default function Dashboard() {
           <div>
             <div style={styles.headerBar}>
               <div>
-                <h1 style={styles.title}>Server overview</h1>
+                <h1 style={styles.title}>Home</h1>
               </div>
               <div style={styles.headerMeta}>
                 <span style={styles.headerPill}>{lastUpdated ? `Updated ${lastUpdated}` : 'Waiting for telemetry'}</span>
@@ -1683,12 +1823,35 @@ export default function Dashboard() {
                     ))}
                   </div>
                 </article>
+
+                <article style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>All Services</h3>
+                      <p style={styles.smallLabel}>Grouped service health and maintenance access for the running stack.</p>
+                    </div>
+                    <span style={styles.headerPill}>{serviceCatalog.length} listed</span>
+                  </div>
+                  <div style={styles.serviceGroupStack}>
+                    {homeGroups.map(({ group, items }) => (
+                      <section key={group} style={styles.serviceGroupSection}>
+                        <div style={styles.serviceGroupHeader}>
+                          <h4 style={styles.serviceGroupTitle}>{SERVICE_GROUP_LABELS[group]}</h4>
+                          <span style={styles.smallLabel}>{items.length} services</span>
+                        </div>
+                        <div style={styles.serviceCardGrid}>
+                          {items.map((entry) => renderServiceCard(entry))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </article>
               </div>
 
               <div style={styles.homeSecondary}>
                 <article style={styles.card}>
                   <div style={styles.logControlRow}>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Service Controls</h3>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Optional Services</h3>
                     <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => void (serviceControllerLocked ? unlockServiceController() : lockServiceController())} disabled={serviceUnlockBusy}>
                       {serviceControllerLocked ? 'Unlock' : 'Lock'}
                     </button>
@@ -1697,7 +1860,7 @@ export default function Dashboard() {
                     {serviceControllerLocked ? (
                       <div style={styles.serviceLockOverlay} aria-hidden={false}>
                         <div style={styles.serviceLockBadge}>Locked</div>
-                        <p style={{ ...styles.smallLabel, marginBottom: 10 }}>Enter the admin action password once to unlock optional services.</p>
+                        <p style={{ ...styles.smallLabel, marginBottom: 10 }}>Enter the admin action password once to unlock optional services for this session.</p>
                         <TextField
                           id="service-unlock-password"
                           label="Admin Action Password"
@@ -1714,16 +1877,19 @@ export default function Dashboard() {
                     ) : null}
                     {controllableServices.length === 0 ? (
                       <p style={styles.smallLabel}>No optional services are available on this host.</p>
-                    ) : controllableServices.map(([name, running]) => (
-                      <div key={name} style={{ ...styles.serviceRow, opacity: serviceControllerLocked ? 0.35 : 1 }}>
-                        <span style={styles.serviceName}>
-                          {name}
-                          <span style={{ ...styles.dot, background: running ? THEME.ok : THEME.crimsonRed }} />
-                        </span>
+                    ) : controllableServices.map((entry) => (
+                      <div key={entry.key} style={{ ...styles.serviceRow, opacity: serviceControllerLocked ? 0.35 : 1 }}>
+                        <div style={styles.serviceRowCopy}>
+                          <span style={styles.serviceName}>
+                            {entry.label}
+                            <span style={{ ...styles.dot, background: entry.status === 'working' ? THEME.ok : THEME.crimsonRed }} />
+                          </span>
+                          <span style={styles.serviceRowMeta}>{entry.description}</span>
+                        </div>
                         <div style={styles.actionWrap}>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(name, 'start')}>Start</button>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(name, 'stop')}>Stop</button>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(name, 'restart')}>Restart</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:start`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(entry.key, 'start')}>Start</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:stop`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(entry.key, 'stop')}>Stop</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:restart`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(entry.key, 'restart')}>Restart</button>
                         </div>
                       </div>
                     ))}
@@ -1905,6 +2071,64 @@ export default function Dashboard() {
                   )}
                 </article>
               </div>
+            </div>
+          </Panel>
+        )}
+
+        {activeTab === 'media' && (
+          <Panel title="Media">
+            <div style={styles.surfaceStack}>
+              <article style={styles.card}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
+                    <p style={styles.smallLabel}>Requests move through downloads into the library and then into playback clients.</p>
+                  </div>
+                  <span style={styles.headerPill}>{mediaServices.filter((entry) => entry.status === 'working').length}/{mediaServices.length} healthy</span>
+                </div>
+                {renderWorkflowStrip('media')}
+              </article>
+
+              <article style={styles.card}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Media Services</h3>
+                    <p style={styles.smallLabel}>Streaming, downloads, and requests stay grouped here so the stack reads like one workflow.</p>
+                  </div>
+                </div>
+                <div style={styles.serviceCardGrid}>
+                  {mediaServices.map((entry) => renderServiceCard(entry))}
+                </div>
+              </article>
+            </div>
+          </Panel>
+        )}
+
+        {activeTab === 'arr' && (
+          <Panel title="ARR">
+            <div style={styles.surfaceStack}>
+              <article style={styles.card}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
+                    <p style={styles.smallLabel}>Indexer management, discovery, and download handoff stay visible in one strip.</p>
+                  </div>
+                  <span style={styles.headerPill}>{arrServices.filter((entry) => entry.status === 'working').length}/{arrServices.length} healthy</span>
+                </div>
+                {renderWorkflowStrip('arr')}
+              </article>
+
+              <article style={styles.card}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>ARR Services</h3>
+                    <p style={styles.smallLabel}>These services are expected to stay up. Restart them here without putting them in the generic controller.</p>
+                  </div>
+                </div>
+                <div style={styles.serviceCardGrid}>
+                  {arrServices.map((entry) => renderServiceCard(entry))}
+                </div>
+              </article>
             </div>
           </Panel>
         )}
@@ -2438,7 +2662,7 @@ function EmbeddedToolPanel({
   demoMode,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   frameTitle: string;
   path: string;
   gatewayBase: string;
@@ -2473,11 +2697,11 @@ function EmbeddedToolPanel({
   );
 }
 
-function Panel({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
     <div>
       <h1 style={styles.title}>{title}</h1>
-      <p style={styles.panelSubtitle}>{subtitle}</p>
+      {subtitle ? <p style={styles.panelSubtitle}>{subtitle}</p> : null}
       {children}
     </div>
   );
@@ -2755,6 +2979,17 @@ const styles: Record<string, CSSProperties> = {
     borderBottom: `1px solid ${THEME.border}`,
     gap: 8,
   },
+  serviceRowCopy: {
+    display: 'grid',
+    gap: 4,
+    minWidth: 0,
+    flex: '1 1 auto',
+  },
+  serviceRowMeta: {
+    color: THEME.muted,
+    fontSize: 12,
+    overflowWrap: 'anywhere',
+  },
   serviceName: { textTransform: 'capitalize', display: 'flex', alignItems: 'center', gap: 8 },
   serviceControllerCard: {
     position: 'relative',
@@ -2788,6 +3023,128 @@ const styles: Record<string, CSSProperties> = {
   actionBtn: {
     padding: '7px 10px',
     fontSize: 12,
+  },
+  surfaceStack: {
+    display: 'grid',
+    gap: 16,
+  },
+  serviceGroupStack: {
+    display: 'grid',
+    gap: 14,
+  },
+  serviceGroupSection: {
+    display: 'grid',
+    gap: 10,
+  },
+  serviceGroupHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  serviceGroupTitle: {
+    margin: 0,
+    fontSize: 13,
+    fontWeight: 600,
+    color: THEME.text,
+  },
+  serviceCardGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: 12,
+  },
+  serviceCard: {
+    display: 'grid',
+    gap: 10,
+    padding: 14,
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+  },
+  serviceCardHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  serviceCardTitle: {
+    margin: '0 0 4px',
+    fontSize: 14,
+    fontWeight: 600,
+    color: THEME.text,
+  },
+  serviceCardDescription: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
+  serviceCardMeta: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 12,
+  },
+  serviceCardActions: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  serviceStatusBadge: {
+    borderRadius: 8,
+    padding: '4px 8px',
+    fontSize: 11,
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+    border: `1px solid ${THEME.border}`,
+  },
+  serviceStatusOk: {
+    color: THEME.ok,
+    background: 'rgba(111, 159, 112, 0.12)',
+    borderColor: 'rgba(111, 159, 112, 0.32)',
+  },
+  serviceStatusIdle: {
+    color: THEME.muted,
+    background: '#15181c',
+  },
+  serviceStatusWarn: {
+    color: THEME.brightYellow,
+    background: 'rgba(184, 139, 69, 0.12)',
+    borderColor: 'rgba(184, 139, 69, 0.32)',
+  },
+  serviceStatusUnavailable: {
+    color: THEME.crimsonRed,
+    background: 'rgba(196, 91, 91, 0.12)',
+    borderColor: 'rgba(196, 91, 91, 0.32)',
+  },
+  workflowStrip: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+    gap: 8,
+  },
+  workflowStep: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '10px 12px',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    background: THEME.panelRaised,
+    fontSize: 13,
+  },
+  workflowIndex: {
+    width: 20,
+    height: 20,
+    borderRadius: 999,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#15181c',
+    color: THEME.text,
+    fontSize: 11,
+    fontWeight: 700,
+    border: `1px solid ${THEME.border}`,
+    flexShrink: 0,
   },
   mountList: { display: 'grid', gap: 8 },
   mountLeft: { minWidth: 0, flex: '1 1 220px' },

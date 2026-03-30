@@ -89,9 +89,44 @@ type DemoRemoteNode = {
   type: 'directory' | 'file';
 };
 
+type DemoServiceCatalogEntry = {
+  available: boolean;
+  blocker?: string;
+  controlMode: 'always_on' | 'optional';
+  description: string;
+  group: 'platform' | 'media' | 'arr' | 'data' | 'access';
+  key: string;
+  label: string;
+  placeholder: boolean;
+  route?: string;
+  status: 'working' | 'stopped' | 'stalled' | 'unavailable';
+  surface: 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp';
+};
+
 const nowIso = () => new Date().toISOString();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+// Keep the preview demo on the same service contract as the live dashboard so
+// GitHub Pages reflects the real product shell instead of a hand-made mock.
+const SERVICE_META: DemoServiceCatalogEntry[] = [
+  { available: true, controlMode: 'always_on', description: 'Single public gateway for the dashboard and companion services.', group: 'platform', key: 'nginx', label: 'nginx', placeholder: false, status: 'working', surface: 'home' },
+  { available: true, controlMode: 'always_on', description: 'Browser terminal access inside the dashboard.', group: 'platform', key: 'ttyd', label: 'ttyd', placeholder: false, route: '/term/', status: 'working', surface: 'terminal' },
+  { available: true, controlMode: 'always_on', description: 'Streams your movie and series library to local clients.', group: 'media', key: 'jellyfin', label: 'Jellyfin', placeholder: false, route: '/jellyfin/', status: 'working', surface: 'media' },
+  { available: true, controlMode: 'always_on', description: 'Handles automated and manual torrent downloads for the media stack.', group: 'media', key: 'qbittorrent', label: 'qBittorrent', placeholder: false, route: '/qb/', status: 'working', surface: 'media' },
+  { available: false, blocker: 'Currently blocked on Android-native Node/chroot packaging.', controlMode: 'always_on', description: 'Request portal for adding movies and shows into the automation flow.', group: 'media', key: 'jellyseerr', label: 'Jellyseerr', placeholder: true, route: '/requests/', status: 'unavailable', surface: 'media' },
+  { available: true, controlMode: 'always_on', description: 'Automates series discovery, tracking, and download handoff.', group: 'arr', key: 'sonarr', label: 'Sonarr', placeholder: false, route: '/sonarr/', status: 'working', surface: 'arr' },
+  { available: true, controlMode: 'always_on', description: 'Automates movie discovery, tracking, and download handoff.', group: 'arr', key: 'radarr', label: 'Radarr', placeholder: false, route: '/radarr/', status: 'working', surface: 'arr' },
+  { available: true, controlMode: 'always_on', description: 'Central indexer manager for Sonarr and Radarr.', group: 'arr', key: 'prowlarr', label: 'Prowlarr', placeholder: false, route: '/prowlarr/', status: 'working', surface: 'arr' },
+  { available: false, blocker: 'Currently blocked on Python native dependencies for this host.', controlMode: 'always_on', description: 'Subtitle automation for imported media libraries.', group: 'arr', key: 'bazarr', label: 'Bazarr', placeholder: true, status: 'unavailable', surface: 'arr' },
+  { available: true, controlMode: 'always_on', description: 'Persistent database for IPTV services and future media metadata.', group: 'data', key: 'postgres', label: 'PostgreSQL', placeholder: false, status: 'working', surface: 'media' },
+  { available: true, controlMode: 'always_on', description: 'Cache and worker coordination for IPTV and background jobs.', group: 'data', key: 'redis', label: 'Redis', placeholder: false, status: 'working', surface: 'media' },
+  { available: true, controlMode: 'optional', description: 'Legacy remote access and PS4-compatible transfer path.', group: 'access', key: 'ftp', label: 'FTP', placeholder: false, status: 'working', surface: 'ftp' },
+  { available: true, controlMode: 'optional', description: 'High-throughput uploads, drop folders, and browser-based transfer.', group: 'access', key: 'copyparty', label: 'copyparty', placeholder: false, route: '/copyparty/', status: 'stopped', surface: 'home' },
+  { available: true, controlMode: 'optional', description: 'Device sync and backup across phones, laptops, and shares.', group: 'access', key: 'syncthing', label: 'Syncthing', placeholder: false, status: 'working', surface: 'home' },
+  { available: true, controlMode: 'optional', description: 'LAN file sharing for desktop and TV clients.', group: 'access', key: 'samba', label: 'Samba', placeholder: false, status: 'stopped', surface: 'home' },
+  { available: true, controlMode: 'optional', description: 'Shell access for maintenance and recovery.', group: 'access', key: 'sshd', label: 'sshd', placeholder: false, status: 'stopped', surface: 'home' },
+];
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -430,14 +465,17 @@ const seedState = (): DemoState => {
       copyparty: false,
       ftp: true,
       jellyfin: true,
+      nginx: true,
       postgres: true,
       prowlarr: true,
       qbittorrent: true,
       radarr: true,
       redis: true,
       samba: false,
+      sshd: false,
       sonarr: true,
       syncthing: true,
+      ttyd: true,
     },
     sessionUser: { role: 'admin', username: 'admin' },
     shares,
@@ -457,8 +495,32 @@ const seedState = (): DemoState => {
 const demoState = seedState();
 
 const optionalServices = ['ftp', 'copyparty', 'syncthing', 'samba', 'sshd'];
+const buildServiceCatalog = (state: DemoState): DemoServiceCatalogEntry[] =>
+  SERVICE_META.map((entry) => {
+    if (!entry.available) {
+      return clone(entry);
+    }
 
-const buildDashboardPayload = (state: DemoState) => ({
+    const running = Boolean(state.services[entry.key]);
+    return {
+      ...entry,
+      status: entry.controlMode === 'optional'
+        ? (running ? 'working' : 'stopped')
+        : (running ? 'working' : 'stalled'),
+    };
+  });
+
+const buildServiceGroups = (catalog: DemoServiceCatalogEntry[]) =>
+  catalog.reduce<Record<string, string[]>>((acc, entry) => {
+    acc[entry.group] ||= [];
+    acc[entry.group].push(entry.key);
+    return acc;
+  }, {});
+
+const buildDashboardPayload = (state: DemoState) => {
+  const serviceCatalog = buildServiceCatalog(state);
+
+  return {
   connections: {
     users: clone(state.connections),
   },
@@ -492,13 +554,17 @@ const buildDashboardPayload = (state: DemoState) => ({
     usedMem: 3_860_000_000,
   },
   serviceController: {
+    locked: state.controllerLocked,
     optionalServices,
   },
+  serviceCatalog,
+  serviceGroups: buildServiceGroups(serviceCatalog),
   services: clone(state.services),
   storage: {
     mounts: clone(state.storage),
   },
-});
+  };
+};
 
 const listChildNodes = (nodes: Map<string, DemoFsNode>, currentPath: string) => {
   const prefix = currentPath ? `${currentPath}/` : '';
@@ -689,13 +755,19 @@ const requireSession = (state: DemoState) => {
   return null;
 };
 
-const buildServiceResponse = (state: DemoState) => ({
-  controller: {
-    locked: state.controllerLocked,
-    optionalServices,
-  },
-  services: clone(state.services),
-});
+const buildServiceResponse = (state: DemoState) => {
+  const serviceCatalog = buildServiceCatalog(state);
+
+  return {
+    controller: {
+      locked: state.controllerLocked,
+      optionalServices,
+    },
+    serviceCatalog,
+    serviceGroups: buildServiceGroups(serviceCatalog),
+    services: clone(state.services),
+  };
+};
 
 const handleFsUpload = async (state: DemoState, url: URL, init?: RequestInit) => {
   const parentPath = normalizeFsPath(url.searchParams.get('path') || '');

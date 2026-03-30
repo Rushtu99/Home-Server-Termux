@@ -377,6 +377,131 @@ const SERVICES = {
   },
 };
 
+// The dashboard renders service tabs from this catalog instead of inferring
+// labels, grouping, or control rules in the client.
+const SERVICE_CATALOG_META = {
+  nginx: {
+    controlMode: 'always_on',
+    description: 'Single public gateway for the dashboard and companion services.',
+    group: 'platform',
+    label: 'nginx',
+    surface: 'home',
+  },
+  ttyd: {
+    controlMode: 'always_on',
+    description: 'Browser terminal access inside the dashboard.',
+    group: 'platform',
+    label: 'ttyd',
+    route: '/term/',
+    surface: 'terminal',
+  },
+  sshd: {
+    controlMode: 'optional',
+    description: 'Shell access for maintenance and recovery.',
+    group: 'access',
+    label: 'sshd',
+    surface: 'home',
+  },
+  ftp: {
+    controlMode: 'optional',
+    description: 'Legacy remote access and PS4-compatible transfer path.',
+    group: 'access',
+    label: 'FTP',
+    surface: 'ftp',
+  },
+  copyparty: {
+    controlMode: 'optional',
+    description: 'High-throughput uploads, drop folders, and browser-based transfer.',
+    group: 'access',
+    label: 'copyparty',
+    route: '/copyparty/',
+    surface: 'home',
+  },
+  syncthing: {
+    controlMode: 'optional',
+    description: 'Device sync and backup across phones, laptops, and shares.',
+    group: 'access',
+    label: 'Syncthing',
+    surface: 'home',
+  },
+  samba: {
+    controlMode: 'optional',
+    description: 'LAN file sharing for desktop and TV clients.',
+    group: 'access',
+    label: 'Samba',
+    surface: 'home',
+  },
+  redis: {
+    controlMode: 'always_on',
+    description: 'Cache and worker coordination for IPTV and background jobs.',
+    group: 'data',
+    label: 'Redis',
+    surface: 'media',
+  },
+  postgres: {
+    controlMode: 'always_on',
+    description: 'Persistent database for IPTV services and future media metadata.',
+    group: 'data',
+    label: 'PostgreSQL',
+    surface: 'media',
+  },
+  jellyfin: {
+    controlMode: 'always_on',
+    description: 'Streams your movie and series library to local clients.',
+    group: 'media',
+    label: 'Jellyfin',
+    route: '/jellyfin/',
+    surface: 'media',
+  },
+  qbittorrent: {
+    controlMode: 'always_on',
+    description: 'Handles automated and manual torrent downloads for the media stack.',
+    group: 'media',
+    label: 'qBittorrent',
+    route: '/qb/',
+    surface: 'media',
+  },
+  sonarr: {
+    controlMode: 'always_on',
+    description: 'Automates series discovery, tracking, and download handoff.',
+    group: 'arr',
+    label: 'Sonarr',
+    route: '/sonarr/',
+    surface: 'arr',
+  },
+  radarr: {
+    controlMode: 'always_on',
+    description: 'Automates movie discovery, tracking, and download handoff.',
+    group: 'arr',
+    label: 'Radarr',
+    route: '/radarr/',
+    surface: 'arr',
+  },
+  prowlarr: {
+    controlMode: 'always_on',
+    description: 'Central indexer manager for Sonarr and Radarr.',
+    group: 'arr',
+    label: 'Prowlarr',
+    route: '/prowlarr/',
+    surface: 'arr',
+  },
+  bazarr: {
+    controlMode: 'always_on',
+    description: 'Subtitle automation for imported media libraries.',
+    group: 'arr',
+    label: 'Bazarr',
+    surface: 'arr',
+  },
+  jellyseerr: {
+    controlMode: 'always_on',
+    description: 'Request portal for adding movies and shows into the automation flow.',
+    group: 'media',
+    label: 'Jellyseerr',
+    route: '/requests/',
+    surface: 'media',
+  },
+};
+
 /* ---------------- HELPERS ---------------- */
 
 const debugEvents = [];
@@ -408,17 +533,10 @@ const OPTIONAL_SERVICE_NAMES = [
   'syncthing',
   'samba',
   'sshd',
-  'redis',
-  'postgres',
-  'jellyfin',
-  'qbittorrent',
-  'sonarr',
-  'radarr',
-  'prowlarr',
-  'bazarr',
-  'jellyseerr',
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
+const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
+const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'access'];
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 
 eventLoopDelay.enable();
@@ -607,6 +725,11 @@ const detectFtpProvider = async (forceRefresh = false) => {
 };
 
 const getControlledServiceNames = async () => {
+  const names = await getManageableServiceNames();
+  return names.filter((name) => OPTIONAL_SERVICE_SET.has(name));
+};
+
+const getManageableServiceNames = async () => {
   const names = [];
 
   for (const name of Object.keys(SERVICES)) {
@@ -622,11 +745,9 @@ const getControlledServiceNames = async () => {
       continue;
     }
 
-    if (OPTIONAL_SERVICE_SET.has(name)) {
-      const install = await resolveServiceInstall(name, SERVICES[name]);
-      if (install.available) {
-        names.push(name);
-      }
+    const install = await resolveServiceInstall(name, SERVICES[name]);
+    if (install.available) {
+      names.push(name);
     }
   }
 
@@ -722,6 +843,60 @@ const checkService = async (svc) => {
 
   return isPortOpen(svc.port, svc.host || '127.0.0.1');
 };
+
+const buildServiceCatalog = async () => {
+  const entries = [];
+
+  for (const [name, meta] of Object.entries(SERVICE_CATALOG_META)) {
+    const svc = SERVICES[name];
+    let available = true;
+    let blocker = '';
+    let running = false;
+
+    if (name === 'sshd' && !ENABLE_SSHD) {
+      available = false;
+      blocker = 'Disabled in single-port mode.';
+    } else if (name === 'ftp' && !(await detectFtpProvider())) {
+      available = false;
+      blocker = 'Requires python3 + pyftpdlib or busybox ftpd.';
+    } else {
+      const install = await resolveServiceInstall(name, svc);
+      available = install.available;
+      if (!install.available) {
+        blocker = PLACEHOLDER_SERVICE_SET.has(name)
+          ? `Currently blocked on ${install.label}.`
+          : `Requires ${install.label}.`;
+      } else {
+        running = await checkService(svc);
+      }
+    }
+
+    entries.push({
+      available,
+      blocker: blocker || undefined,
+      controlMode: meta.controlMode,
+      description: meta.description,
+      group: meta.group,
+      key: name,
+      label: meta.label,
+      placeholder: !available && PLACEHOLDER_SERVICE_SET.has(name),
+      route: meta.route || undefined,
+      status: !available ? 'unavailable' : (running ? 'working' : meta.controlMode === 'optional' ? 'stopped' : 'stalled'),
+      surface: meta.surface,
+    });
+  }
+
+  return entries;
+};
+
+const buildServiceGroups = (catalog) =>
+  SERVICE_GROUP_ORDER.reduce((acc, group) => {
+    const members = catalog.filter((entry) => entry.group === group).map((entry) => entry.key);
+    if (members.length > 0) {
+      acc[group] = members;
+    }
+    return acc;
+  }, {});
 
 const waitForServiceState = async (svc, shouldBeRunning, attempts = 10, delayMs = 300) => {
   for (let i = 0; i < attempts; i += 1) {
@@ -1308,11 +1483,21 @@ const getMonitorSnapshot = () => withTimedCache('monitor', 1500, collectMonitorS
 
 const collectServicesSnapshot = async () => {
   const result = {};
-  const controlledServiceNames = await getControlledServiceNames();
 
-  for (const name of controlledServiceNames) {
+  for (const name of Object.keys(SERVICE_CATALOG_META)) {
+    if (name === 'sshd' && !ENABLE_SSHD) {
+      continue;
+    }
+
+    if (name === 'ftp' && !(await detectFtpProvider())) {
+      continue;
+    }
+
     const svc = SERVICES[name];
-    result[name] = await checkService(svc);
+    const install = await resolveServiceInstall(name, svc);
+    if (install.available) {
+      result[name] = await checkService(svc);
+    }
   }
 
   return result;
@@ -1425,22 +1610,26 @@ const getDriveSnapshot = async () => {
   };
 };
 
-const getDashboardSnapshot = async () => {
-  const [services, monitor, storage, controlledServiceNames] = await Promise.all([
+const getDashboardSnapshot = async (sessionId) => {
+  const [services, monitor, storage, controlledServiceNames, serviceCatalog] = await Promise.all([
     getServicesSnapshot(),
     getMonitorSnapshot(),
     getStorageSnapshot(),
     getControlledServiceNames(),
+    buildServiceCatalog(),
   ]);
 
   return {
     generatedAt: new Date().toISOString(),
     services,
+    serviceCatalog,
+    serviceGroups: buildServiceGroups(serviceCatalog),
     monitor,
     connections: getConnectionsSnapshot(),
     networkDevices: getNetworkDevicesSnapshot(),
     storage,
     serviceController: {
+      locked: !isServiceControllerUnlocked(sessionId),
       optionalServices: controlledServiceNames,
     },
     logs: getLogsSnapshot(),
@@ -2378,9 +2567,10 @@ const statusHandler = (req, res) => {
 };
 
 const servicesHandler = async (req, res) => {
-  const [result, controlledServiceNames] = await Promise.all([
+  const [result, controlledServiceNames, serviceCatalog] = await Promise.all([
     getServicesSnapshot(),
     getControlledServiceNames(),
+    buildServiceCatalog(),
   ]);
 
   pushDebugEvent('info', 'Services snapshot served', { count: Object.keys(result).length });
@@ -2390,6 +2580,8 @@ const servicesHandler = async (req, res) => {
       optionalServices: controlledServiceNames,
     },
     services: result,
+    serviceCatalog,
+    serviceGroups: buildServiceGroups(serviceCatalog),
   });
 };
 
@@ -2424,7 +2616,7 @@ const controlLockHandler = (req, res) => {
 
 const controlHandler = async (req, res) => {
   const { service, action, adminPassword } = req.body || {};
-  const controlledServiceNames = await getControlledServiceNames();
+  const controlledServiceNames = await getManageableServiceNames();
 
   if (!controlledServiceNames.includes(service)) {
     return res.status(400).json({ error: 'Unknown service' });
@@ -2539,7 +2731,7 @@ const loggingPostHandler = (req, res) => {
 
 const dashboardHandler = async (req, res) => {
   try {
-    const payload = await getDashboardSnapshot();
+    const payload = await getDashboardSnapshot(req.session?.id);
     res.json(payload);
   } catch (err) {
     pushDebugEvent('error', 'Dashboard snapshot failed', { error: String(err) }, true);
