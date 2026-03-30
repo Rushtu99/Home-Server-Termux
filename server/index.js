@@ -51,6 +51,9 @@ app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
 const ROOT_DIR = path.resolve(__dirname, '..');
 const HOME_DIR = process.env.HOME || '/data/data/com.termux/files/home';
+const MEDIA_SERVICES_HOME = process.env.MEDIA_SERVICES_HOME || path.join(HOME_DIR, 'services');
+const PROOT_DISTRO_ALIAS = process.env.PROOT_DISTRO_ALIAS || 'debian-hs';
+const CHROOT_ROOTFS = process.env.CHROOT_ROOTFS || path.join('/data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs', PROOT_DISTRO_ALIAS);
 const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'Drives');
 const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
 const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || FILEBROWSER_ROOT;
@@ -66,6 +69,15 @@ const SSHD_PID = process.env.SSHD_PID_PATH || path.join(RUNTIME_DIR, 'sshd.pid')
 const COPYPARTY_PID = process.env.COPYPARTY_PID_PATH || path.join(RUNTIME_DIR, 'copyparty.pid');
 const SYNCTHING_PID = process.env.SYNCTHING_PID_PATH || path.join(RUNTIME_DIR, 'syncthing.pid');
 const SAMBA_PID = process.env.SAMBA_PID_PATH || path.join(RUNTIME_DIR, 'samba.pid');
+const JELLYFIN_PID = process.env.JELLYFIN_PID_PATH || path.join(RUNTIME_DIR, 'jellyfin.pid');
+const QBITTORRENT_PID = process.env.QBITTORRENT_PID_PATH || path.join(RUNTIME_DIR, 'qbittorrent.pid');
+const REDIS_PID = process.env.REDIS_PID_PATH || path.join(RUNTIME_DIR, 'redis.pid');
+const POSTGRES_PID = process.env.POSTGRES_PID_PATH || path.join(RUNTIME_DIR, 'postgres.pid');
+const SONARR_PID = process.env.SONARR_PID_PATH || path.join(RUNTIME_DIR, 'sonarr.pid');
+const RADARR_PID = process.env.RADARR_PID_PATH || path.join(RUNTIME_DIR, 'radarr.pid');
+const PROWLARR_PID = process.env.PROWLARR_PID_PATH || path.join(RUNTIME_DIR, 'prowlarr.pid');
+const BAZARR_PID = process.env.BAZARR_PID_PATH || path.join(RUNTIME_DIR, 'bazarr.pid');
+const JELLYSEERR_PID = process.env.JELLYSEERR_PID_PATH || path.join(RUNTIME_DIR, 'jellyseerr.pid');
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const PORT = Number(process.env.PORT || 4000);
 const BACKEND_BIND_HOST = process.env.BACKEND_BIND_HOST || '127.0.0.1';
@@ -73,10 +85,28 @@ const TTYD_BIND_HOST = process.env.TTYD_BIND_HOST || '127.0.0.1';
 const FTP_BIND_HOST = process.env.FTP_BIND_HOST || '127.0.0.1';
 const COPYPARTY_BIND_HOST = process.env.COPYPARTY_BIND_HOST || '127.0.0.1';
 const SYNCTHING_GUI_BIND_HOST = process.env.SYNCTHING_GUI_BIND_HOST || '127.0.0.1';
+const JELLYFIN_BIND_HOST = process.env.JELLYFIN_BIND_HOST || '127.0.0.1';
+const QBITTORRENT_BIND_HOST = process.env.QBITTORRENT_BIND_HOST || '127.0.0.1';
+const REDIS_BIND_HOST = process.env.REDIS_BIND_HOST || '127.0.0.1';
+const POSTGRES_BIND_HOST = process.env.POSTGRES_BIND_HOST || '127.0.0.1';
+const SONARR_BIND_HOST = process.env.SONARR_BIND_HOST || '127.0.0.1';
+const RADARR_BIND_HOST = process.env.RADARR_BIND_HOST || '127.0.0.1';
+const PROWLARR_BIND_HOST = process.env.PROWLARR_BIND_HOST || '127.0.0.1';
+const BAZARR_BIND_HOST = process.env.BAZARR_BIND_HOST || '127.0.0.1';
+const JELLYSEERR_BIND_HOST = process.env.JELLYSEERR_BIND_HOST || '127.0.0.1';
 const FTP_SERVER_PORT = Number(process.env.FTP_SERVER_PORT || 2121);
 const COPYPARTY_PORT = Number(process.env.COPYPARTY_PORT || 3923);
 const SYNCTHING_GUI_PORT = Number(process.env.SYNCTHING_GUI_PORT || 8384);
 const SAMBA_PORT = Number(process.env.SAMBA_PORT || 445);
+const JELLYFIN_PORT = Number(process.env.JELLYFIN_PORT || 8096);
+const QBITTORRENT_PORT = Number(process.env.QBITTORRENT_PORT || 8081);
+const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
+const POSTGRES_PORT = Number(process.env.POSTGRES_PORT || 5432);
+const SONARR_PORT = Number(process.env.SONARR_PORT || 8989);
+const RADARR_PORT = Number(process.env.RADARR_PORT || 7878);
+const PROWLARR_PORT = Number(process.env.PROWLARR_PORT || 9696);
+const BAZARR_PORT = Number(process.env.BAZARR_PORT || 6767);
+const JELLYSEERR_PORT = Number(process.env.JELLYSEERR_PORT || 5055);
 const DEFAULT_PS4_FTP_NAME = process.env.DEFAULT_PS4_FTP_NAME || 'PS4';
 const DEFAULT_PS4_HOST = process.env.DEFAULT_PS4_HOST || '192.168.1.8';
 const DEFAULT_PS4_PORT = Number(process.env.DEFAULT_PS4_PORT || 2121);
@@ -95,6 +125,28 @@ const SYNCTHING_HOME = process.env.SYNCTHING_HOME || path.join(RUNTIME_DIR, 'syn
 const SAMBA_SERVICE_CMD = process.env.SAMBA_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'samba-service.sh');
 const COPYPARTY_SERVICE_CMD = process.env.COPYPARTY_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'copyparty-service.sh');
 const SYNCTHING_SERVICE_CMD = process.env.SYNCTHING_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'syncthing-service.sh');
+const JELLYFIN_SERVICE_CMD = process.env.JELLYFIN_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'jellyfin-service.sh');
+const QBITTORRENT_SERVICE_CMD = process.env.QBITTORRENT_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'qbittorrent-service.sh');
+const REDIS_SERVICE_CMD = process.env.REDIS_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'redis-service.sh');
+const POSTGRES_SERVICE_CMD = process.env.POSTGRES_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'postgres-service.sh');
+const SONARR_SERVICE_CMD = process.env.SONARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'sonarr-service.sh');
+const RADARR_SERVICE_CMD = process.env.RADARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'radarr-service.sh');
+const PROWLARR_SERVICE_CMD = process.env.PROWLARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'prowlarr-service.sh');
+const BAZARR_SERVICE_CMD = process.env.BAZARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'bazarr-service.sh');
+const JELLYSEERR_SERVICE_CMD = process.env.JELLYSEERR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'jellyseerr-service.sh');
+const SONARR_BASE_PATH = process.env.SONARR_BASE_PATH || '/sonarr';
+const RADARR_BASE_PATH = process.env.RADARR_BASE_PATH || '/radarr';
+const PROWLARR_BASE_PATH = process.env.PROWLARR_BASE_PATH || '/prowlarr';
+const BAZARR_BASE_PATH = process.env.BAZARR_BASE_PATH || '/bazarr';
+const JELLYSEERR_BASE_PATH = process.env.JELLYSEERR_BASE_PATH || '/requests';
+const SONARR_APP_PATH = path.join(CHROOT_ROOTFS, 'opt', 'home-server', 'sonarr', 'app', 'Sonarr');
+const RADARR_APP_PATH = path.join(CHROOT_ROOTFS, 'opt', 'home-server', 'radarr', 'app', 'Radarr');
+const PROWLARR_APP_PATH = path.join(CHROOT_ROOTFS, 'opt', 'home-server', 'prowlarr', 'app', 'Prowlarr');
+const BAZARR_HOME = process.env.BAZARR_HOME || path.join(MEDIA_SERVICES_HOME, 'bazarr');
+const BAZARR_PYTHON_PATH = path.join(BAZARR_HOME, 'venv', 'bin', 'python');
+const BAZARR_APP_PATH = path.join(BAZARR_HOME, 'app', 'bazarr.py');
+const JELLYSEERR_HOME = process.env.JELLYSEERR_HOME || path.join(MEDIA_SERVICES_HOME, 'jellyseerr');
+const JELLYSEERR_DIST_PATH = path.join(JELLYSEERR_HOME, 'app', 'dist', 'index.js');
 const BOOTSTRAP_DASHBOARD_USER = normalizeUsername(process.env.DASHBOARD_USER || 'admin') || 'admin';
 const BOOTSTRAP_DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
 const ADMIN_ACTION_PASSWORD = process.env.ADMIN_ACTION_PASSWORD || BOOTSTRAP_DASHBOARD_PASS;
@@ -236,6 +288,93 @@ const SERVICES = {
     port: SAMBA_PORT,
     binary: 'smbd',
   },
+  redis: {
+    start: `"${REDIS_SERVICE_CMD}" start`,
+    stop: `"${REDIS_SERVICE_CMD}" stop`,
+    restart: `"${REDIS_SERVICE_CMD}" restart`,
+    check: `"${REDIS_SERVICE_CMD}" status`,
+    host: REDIS_BIND_HOST,
+    port: REDIS_PORT,
+    binary: 'redis-server',
+  },
+  postgres: {
+    start: `"${POSTGRES_SERVICE_CMD}" start`,
+    stop: `"${POSTGRES_SERVICE_CMD}" stop`,
+    restart: `"${POSTGRES_SERVICE_CMD}" restart`,
+    check: `"${POSTGRES_SERVICE_CMD}" status`,
+    host: POSTGRES_BIND_HOST,
+    port: POSTGRES_PORT,
+    binary: 'postgres',
+  },
+  jellyfin: {
+    start: `"${JELLYFIN_SERVICE_CMD}" start`,
+    stop: `"${JELLYFIN_SERVICE_CMD}" stop`,
+    restart: `"${JELLYFIN_SERVICE_CMD}" restart`,
+    check: `"${JELLYFIN_SERVICE_CMD}" status`,
+    host: JELLYFIN_BIND_HOST,
+    port: JELLYFIN_PORT,
+    binary: 'jellyfin',
+  },
+  qbittorrent: {
+    start: `"${QBITTORRENT_SERVICE_CMD}" start`,
+    stop: `"${QBITTORRENT_SERVICE_CMD}" stop`,
+    restart: `"${QBITTORRENT_SERVICE_CMD}" restart`,
+    check: `"${QBITTORRENT_SERVICE_CMD}" status`,
+    host: QBITTORRENT_BIND_HOST,
+    port: QBITTORRENT_PORT,
+    binary: 'qbittorrent-nox',
+  },
+  sonarr: {
+    start: `"${SONARR_SERVICE_CMD}" start`,
+    stop: `"${SONARR_SERVICE_CMD}" stop`,
+    restart: `"${SONARR_SERVICE_CMD}" restart`,
+    check: `"${SONARR_SERVICE_CMD}" status`,
+    host: SONARR_BIND_HOST,
+    port: SONARR_PORT,
+    binary: 'Sonarr',
+    installCheckPaths: [SONARR_SERVICE_CMD, SONARR_APP_PATH],
+  },
+  radarr: {
+    start: `"${RADARR_SERVICE_CMD}" start`,
+    stop: `"${RADARR_SERVICE_CMD}" stop`,
+    restart: `"${RADARR_SERVICE_CMD}" restart`,
+    check: `"${RADARR_SERVICE_CMD}" status`,
+    host: RADARR_BIND_HOST,
+    port: RADARR_PORT,
+    binary: 'Radarr',
+    installCheckPaths: [RADARR_SERVICE_CMD, RADARR_APP_PATH],
+  },
+  prowlarr: {
+    start: `"${PROWLARR_SERVICE_CMD}" start`,
+    stop: `"${PROWLARR_SERVICE_CMD}" stop`,
+    restart: `"${PROWLARR_SERVICE_CMD}" restart`,
+    check: `"${PROWLARR_SERVICE_CMD}" status`,
+    host: PROWLARR_BIND_HOST,
+    port: PROWLARR_PORT,
+    binary: 'Prowlarr',
+    installCheckPaths: [PROWLARR_SERVICE_CMD, PROWLARR_APP_PATH],
+  },
+  bazarr: {
+    start: `"${BAZARR_SERVICE_CMD}" start`,
+    stop: `"${BAZARR_SERVICE_CMD}" stop`,
+    restart: `"${BAZARR_SERVICE_CMD}" restart`,
+    check: `"${BAZARR_SERVICE_CMD}" status`,
+    host: BAZARR_BIND_HOST,
+    port: BAZARR_PORT,
+    binary: 'python',
+    installCheckPaths: [BAZARR_SERVICE_CMD, BAZARR_PYTHON_PATH, BAZARR_APP_PATH],
+    installCheckCommand: `"${BAZARR_PYTHON_PATH}" -c "import lxml"`,
+  },
+  jellyseerr: {
+    start: `"${JELLYSEERR_SERVICE_CMD}" start`,
+    stop: `"${JELLYSEERR_SERVICE_CMD}" stop`,
+    restart: `"${JELLYSEERR_SERVICE_CMD}" restart`,
+    check: `"${JELLYSEERR_SERVICE_CMD}" status`,
+    host: JELLYSEERR_BIND_HOST,
+    port: JELLYSEERR_PORT,
+    binary: 'node',
+    installCheckPaths: [JELLYSEERR_SERVICE_CMD, JELLYSEERR_DIST_PATH],
+  },
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -263,7 +402,22 @@ const timedCache = {
 
 const ADMIN_ROLES = new Set(['admin']);
 const RECYCLE_BIN_NAME = '.recycle-bin';
-const OPTIONAL_SERVICE_NAMES = ['ftp', 'copyparty', 'syncthing', 'samba', 'sshd'];
+const OPTIONAL_SERVICE_NAMES = [
+  'ftp',
+  'copyparty',
+  'syncthing',
+  'samba',
+  'sshd',
+  'redis',
+  'postgres',
+  'jellyfin',
+  'qbittorrent',
+  'sonarr',
+  'radarr',
+  'prowlarr',
+  'bazarr',
+  'jellyseerr',
+];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 
@@ -469,7 +623,10 @@ const getControlledServiceNames = async () => {
     }
 
     if (OPTIONAL_SERVICE_SET.has(name)) {
-      names.push(name);
+      const install = await resolveServiceInstall(name, SERVICES[name]);
+      if (install.available) {
+        names.push(name);
+      }
     }
   }
 
@@ -477,6 +634,35 @@ const getControlledServiceNames = async () => {
 };
 
 const resolveServiceInstall = async (serviceName, svc) => {
+  if (Array.isArray(svc.installCheckPaths) && svc.installCheckPaths.length > 0) {
+    const missing = svc.installCheckPaths.filter((candidate) => !fs.existsSync(candidate));
+
+    if (missing.length > 0) {
+      return {
+        available: false,
+        label: missing[0],
+      };
+    }
+  }
+
+  if (svc.installCheckCommand) {
+    try {
+      await runCommand(svc.installCheckCommand);
+    } catch {
+      return {
+        available: false,
+        label: svc.installCheckCommand,
+      };
+    }
+  }
+
+  if (Array.isArray(svc.installCheckPaths) && svc.installCheckPaths.length > 0) {
+    return {
+      available: true,
+      label: svc.installCheckPaths.join(', '),
+    };
+  }
+
   if (serviceName !== 'ftp') {
     return {
       available: await commandExists(svc.binary),
@@ -556,14 +742,10 @@ const pollServiceStateTransitions = async () => {
     return;
   }
 
-  for (const [name, svc] of Object.entries(SERVICES)) {
-    if (name === 'sshd' && !ENABLE_SSHD) {
-      continue;
-    }
+  const controlledServiceNames = await getControlledServiceNames();
 
-    if (name === 'ftp' && !(await detectFtpProvider())) {
-      continue;
-    }
+  for (const name of controlledServiceNames) {
+    const svc = SERVICES[name];
 
     const running = await checkService(svc);
     const state = classifyServiceState(running);
@@ -1244,10 +1426,11 @@ const getDriveSnapshot = async () => {
 };
 
 const getDashboardSnapshot = async () => {
-  const [services, monitor, storage] = await Promise.all([
+  const [services, monitor, storage, controlledServiceNames] = await Promise.all([
     getServicesSnapshot(),
     getMonitorSnapshot(),
     getStorageSnapshot(),
+    getControlledServiceNames(),
   ]);
 
   return {
@@ -1258,7 +1441,7 @@ const getDashboardSnapshot = async () => {
     networkDevices: getNetworkDevicesSnapshot(),
     storage,
     serviceController: {
-      optionalServices: OPTIONAL_SERVICE_NAMES,
+      optionalServices: controlledServiceNames,
     },
     logs: getLogsSnapshot(),
   };
@@ -2168,6 +2351,7 @@ const meHandler = (req, res) => {
 };
 
 const verifyHandler = (req, res) => res.status(204).end();
+const verifyAdminHandler = (req, res) => res.status(204).end();
 
 const logoutHandler = (req, res) => {
   invalidateSessionFromToken(readToken(req));
@@ -2182,6 +2366,8 @@ app.get('/auth/me', requireAuth, meHandler);
 app.get('/api/auth/me', requireAuth, meHandler);
 app.get('/auth/verify', requireAuth, verifyHandler);
 app.get('/api/auth/verify', requireAuth, verifyHandler);
+app.get('/auth/verify-admin', requireAuth, requireAdmin, verifyAdminHandler);
+app.get('/api/auth/verify-admin', requireAuth, requireAdmin, verifyAdminHandler);
 app.post('/auth/logout', logoutHandler);
 app.post('/api/auth/logout', logoutHandler);
 
@@ -2192,13 +2378,16 @@ const statusHandler = (req, res) => {
 };
 
 const servicesHandler = async (req, res) => {
-  const result = await getServicesSnapshot();
+  const [result, controlledServiceNames] = await Promise.all([
+    getServicesSnapshot(),
+    getControlledServiceNames(),
+  ]);
 
   pushDebugEvent('info', 'Services snapshot served', { count: Object.keys(result).length });
   res.json({
     controller: {
       locked: !isServiceControllerUnlocked(req.session?.id),
-      optionalServices: OPTIONAL_SERVICE_NAMES,
+      optionalServices: controlledServiceNames,
     },
     services: result,
   });

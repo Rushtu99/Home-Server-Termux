@@ -75,6 +75,7 @@ SSHD_PORT="${SSHD_PORT:-8022}"
 ENABLE_SSHD="${ENABLE_SSHD:-false}"
 DRIVE_AGENT_CMD="${DRIVE_AGENT_CMD:-/data/data/com.termux/files/usr/bin/termux-drive-agent}"
 TERMUX_CLOUD_MOUNT_CMD="${TERMUX_CLOUD_MOUNT_CMD:-/data/data/com.termux/files/usr/bin/termux-cloud-mount}"
+LOOPBACK_LOCKDOWN_CMD="${LOOPBACK_LOCKDOWN_CMD:-$PROJECT/scripts/loopback-lockdown.sh}"
 
 BACKEND_PID_PATH="${BACKEND_PID_PATH:-$RUNTIME_DIR/backend.pid}"
 FRONTEND_PID_PATH="${FRONTEND_PID_PATH:-$RUNTIME_DIR/frontend.pid}"
@@ -83,7 +84,26 @@ SSHD_PID_PATH="${SSHD_PID_PATH:-$RUNTIME_DIR/sshd.pid}"
 COPYPARTY_PID_PATH="${COPYPARTY_PID_PATH:-$RUNTIME_DIR/copyparty.pid}"
 SYNCTHING_PID_PATH="${SYNCTHING_PID_PATH:-$RUNTIME_DIR/syncthing.pid}"
 SAMBA_PID_PATH="${SAMBA_PID_PATH:-$RUNTIME_DIR/samba.pid}"
+JELLYFIN_PID_PATH="${JELLYFIN_PID_PATH:-$RUNTIME_DIR/jellyfin.pid}"
+QBITTORRENT_PID_PATH="${QBITTORRENT_PID_PATH:-$RUNTIME_DIR/qbittorrent.pid}"
+REDIS_PID_PATH="${REDIS_PID_PATH:-$RUNTIME_DIR/redis.pid}"
+POSTGRES_PID_PATH="${POSTGRES_PID_PATH:-$RUNTIME_DIR/postgres.pid}"
+SONARR_PID_PATH="${SONARR_PID_PATH:-$RUNTIME_DIR/sonarr.pid}"
+RADARR_PID_PATH="${RADARR_PID_PATH:-$RUNTIME_DIR/radarr.pid}"
+PROWLARR_PID_PATH="${PROWLARR_PID_PATH:-$RUNTIME_DIR/prowlarr.pid}"
+BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
+JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+MEDIA_SHARE_NAME="${MEDIA_SHARE_NAME:-Media}"
+MEDIA_ROOT="${MEDIA_ROOT:-$FILESYSTEM_ROOT/$MEDIA_SHARE_NAME}"
+MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-$MEDIA_ROOT/movies}"
+MEDIA_SERIES_DIR="${MEDIA_SERIES_DIR:-$MEDIA_ROOT/series}"
+MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-$MEDIA_ROOT/downloads}"
+MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-$MEDIA_DOWNLOADS_DIR/movies}"
+MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-$MEDIA_DOWNLOADS_DIR/series}"
+MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-$MEDIA_DOWNLOADS_DIR/manual}"
+MEDIA_IPTV_CACHE_DIR="${MEDIA_IPTV_CACHE_DIR:-$MEDIA_ROOT/iptv-cache}"
+MEDIA_IPTV_EPG_DIR="${MEDIA_IPTV_EPG_DIR:-$MEDIA_ROOT/iptv-epg}"
 
 mkdir -p "$LOG_DIR" "$RUNTIME_DIR" "$MOUNT_RUNTIME_DIR"
 START_LOG="$LOG_DIR/start.log"
@@ -299,6 +319,47 @@ sync_cloud_mount_links() {
     fi
 }
 
+apply_loopback_lockdown() {
+    local exempt_ports=""
+    local current_ssh_port=""
+
+    if [ ! -x "$LOOPBACK_LOCKDOWN_CMD" ]; then
+        log_warn "loopback-lockdown helper not installed; internal services may remain reachable outside nginx"
+        return 0
+    fi
+
+    if [ "$ENABLE_SSHD" = "true" ] && [ -n "$SSHD_PORT" ]; then
+        exempt_ports="$SSHD_PORT"
+    fi
+
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        current_ssh_port="$(printf '%s\n' "$SSH_CONNECTION" | awk '{ print $4 }')"
+        if [ -n "$current_ssh_port" ] && [ "$current_ssh_port" != "$exempt_ports" ]; then
+            exempt_ports="${exempt_ports:+$exempt_ports,}$current_ssh_port"
+        fi
+    fi
+
+    if LOOPBACK_LOCKDOWN_EXEMPT_TCP_PORTS="$exempt_ports" "$LOOPBACK_LOCKDOWN_CMD" apply >/dev/null 2>&1; then
+        log_info "Applied loopback-only firewall rules for internal service ports"
+    else
+        log_warn "Failed to apply loopback-only firewall rules"
+    fi
+}
+
+ensure_media_layout() {
+    mkdir -p \
+        "$MEDIA_ROOT" \
+        "$MEDIA_MOVIES_DIR" \
+        "$MEDIA_SERIES_DIR" \
+        "$MEDIA_DOWNLOADS_DIR" \
+        "$MEDIA_DOWNLOADS_MOVIES_DIR" \
+        "$MEDIA_DOWNLOADS_SERIES_DIR" \
+        "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+        "$MEDIA_IPTV_CACHE_DIR" \
+        "$MEDIA_IPTV_EPG_DIR"
+    log_info "Media share ready at $MEDIA_ROOT"
+}
+
 stop_repo_sshd() {
     stop_pidfile_process "sshd" "$SSHD_PID_PATH"
 
@@ -363,8 +424,10 @@ warn_conflicting_boot_scripts
 
 stop_drive_watcher
 prepare_drives_root
+ensure_media_layout
 run_drive_agent_scan
 sync_cloud_mount_links
+apply_loopback_lockdown
 
 if command -v termux-wake-lock >/dev/null 2>&1; then
     termux-wake-lock
@@ -378,6 +441,15 @@ stop_pidfile_process "sshd" "$SSHD_PID_PATH"
 stop_pidfile_process "copyparty" "$COPYPARTY_PID_PATH"
 stop_pidfile_process "syncthing" "$SYNCTHING_PID_PATH"
 stop_pidfile_process "samba" "$SAMBA_PID_PATH"
+stop_pidfile_process "redis" "$REDIS_PID_PATH"
+stop_pidfile_process "postgres" "$POSTGRES_PID_PATH"
+stop_pidfile_process "jellyfin" "$JELLYFIN_PID_PATH"
+stop_pidfile_process "qbittorrent" "$QBITTORRENT_PID_PATH"
+stop_pidfile_process "sonarr" "$SONARR_PID_PATH"
+stop_pidfile_process "radarr" "$RADARR_PID_PATH"
+stop_pidfile_process "prowlarr" "$PROWLARR_PID_PATH"
+stop_pidfile_process "bazarr" "$BAZARR_PID_PATH"
+stop_pidfile_process "jellyseerr" "$JELLYSEERR_PID_PATH"
 stop_repo_nginx
 
 stop_matching_process "backend" "$PROJECT/server/index.js"
@@ -391,6 +463,15 @@ stop_matching_process "ttyd" "ttyd -W -i $TTYD_BIND_HOST -p 7681 -w $PROJECT"
 stop_matching_process "copyparty" "copyparty -i"
 stop_matching_process "syncthing" "syncthing serve --no-browser"
 stop_matching_process "samba" "smbd -i -s"
+stop_matching_process "redis" "redis-server "
+stop_matching_process "postgres" "postgres -D"
+stop_matching_process "jellyfin" "jellyfin-server"
+stop_matching_process "qbittorrent" "qbittorrent-nox"
+stop_matching_process "sonarr" "Sonarr -nobrowser"
+stop_matching_process "radarr" "Radarr -nobrowser"
+stop_matching_process "prowlarr" "Prowlarr -nobrowser"
+stop_matching_process "bazarr" "bazarr.py"
+stop_matching_process "jellyseerr" "server/index.js"
 
 ensure_node_dependencies "$PROJECT/server" "backend"
 ensure_node_dependencies "$PROJECT/dashboard" "dashboard"
@@ -456,5 +537,10 @@ log_info "Home Server started"
 printf '[%s] INFO  Dashboard: http://%s:8088\n' "$(timestamp)" "$HOST_IP"
 printf '[%s] INFO  Files:     http://%s:8088/files\n' "$(timestamp)" "$HOST_IP"
 printf '[%s] INFO  Terminal:  http://%s:8088/term\n' "$(timestamp)" "$HOST_IP"
+printf '[%s] INFO  Jellyfin:  http://%s:8088/jellyfin/\n' "$(timestamp)" "$HOST_IP"
+printf '[%s] INFO  qBittorrent: http://%s:8088/qb/\n' "$(timestamp)" "$HOST_IP"
+if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
+    printf '[%s] INFO  Requests:  http://%s:8088/requests/\n' "$(timestamp)" "$HOST_IP"
+fi
 
 wait
