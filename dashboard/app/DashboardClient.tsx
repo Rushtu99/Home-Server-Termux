@@ -148,6 +148,26 @@ type DashboardPayload = {
   };
 };
 
+type SessionUser = {
+  role: 'admin' | 'user' | string;
+  username: string;
+};
+
+type ManagedUser = {
+  createdAt: string;
+  id: number;
+  isDisabled: boolean;
+  role: 'admin' | 'user' | string;
+  updatedAt: string;
+  username: string;
+};
+
+type UserDraft = {
+  password: string;
+  role: 'admin' | 'user';
+  username: string;
+};
+
 type ControlTarget = {
   service: string;
   action: string;
@@ -219,6 +239,12 @@ const createFtpFavouriteDraft = (defaults: Partial<FtpFavouriteDraft> = {}): Ftp
   mountName: defaults.mountName || '',
 });
 
+const createUserDraft = (): UserDraft => ({
+  password: '',
+  role: 'user',
+  username: '',
+});
+
 const createFtpFavouriteDraftFromFavourite = (favourite: FtpFavourite): FtpFavouriteDraft =>
   createFtpFavouriteDraft({
     name: favourite.name,
@@ -257,6 +283,7 @@ export default function Dashboard() {
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -295,6 +322,10 @@ export default function Dashboard() {
   const [ftpEditingFavouriteId, setFtpEditingFavouriteId] = useState<number | null>(null);
   const [ftpActiveFavouriteId, setFtpActiveFavouriteId] = useState<number | null>(null);
   const [ftpEntryMenuKey, setFtpEntryMenuKey] = useState<string | null>(null);
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [usersBusy, setUsersBusy] = useState(false);
+  const [userStatus, setUserStatus] = useState('');
+  const [userDraft, setUserDraft] = useState<UserDraft>(() => createUserDraft());
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
@@ -314,6 +345,7 @@ export default function Dashboard() {
 
     setIsAuthed(false);
     setAuthBusy(false);
+    setSessionUser(null);
     setPassword('');
     setServices({});
     setMonitor(null);
@@ -343,6 +375,9 @@ export default function Dashboard() {
     setFtpUploadLocalPath('');
     setFtpUploadRemotePath('');
     setFtpFolderName('');
+    setManagedUsers([]);
+    setUserStatus('');
+    setUserDraft(createUserDraft());
     setAuthError(message);
   };
 
@@ -359,7 +394,14 @@ export default function Dashboard() {
         }
 
         if (res.ok) {
+          const payload = await res.json().catch(() => ({}));
           setIsAuthed(true);
+          if (payload?.user?.username) {
+            setSessionUser({
+              role: String(payload.user.role || 'user'),
+              username: String(payload.user.username || ''),
+            });
+          }
           setAuthError('');
         }
       } catch {
@@ -401,7 +443,7 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthed) {
+    if (!isAuthed || sessionUser?.role !== 'admin') {
       return;
     }
 
@@ -422,7 +464,7 @@ export default function Dashboard() {
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', refreshTelemetry);
     };
-  }, [activeTab, isAuthed]);
+  }, [activeTab, isAuthed, sessionUser?.role]);
 
   useEffect(() => {
     if (!tabSyncReadyRef.current) {
@@ -439,7 +481,7 @@ export default function Dashboard() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (!isAuthed) {
+    if (!isAuthed || sessionUser?.role !== 'admin') {
       return;
     }
 
@@ -493,7 +535,45 @@ export default function Dashboard() {
     };
 
     void bootstrapFtp();
-  }, [isAuthed]);
+  }, [isAuthed, sessionUser?.role]);
+
+  const loadManagedUsers = async () => {
+    if (sessionUser?.role !== 'admin') {
+      setManagedUsers([]);
+      return;
+    }
+
+    setUsersBusy(true);
+    try {
+      const res = await authFetch(`${API}/users`);
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!res.ok) {
+        setUserStatus('Unable to load users');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      setManagedUsers(Array.isArray(payload?.users) ? payload.users : []);
+    } catch {
+      setUserStatus('Unable to load users');
+    } finally {
+      if (mountedRef.current) {
+        setUsersBusy(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!isAuthed || activeTab !== 'settings' || sessionUser?.role !== 'admin') {
+      return;
+    }
+
+    void loadManagedUsers();
+  }, [activeTab, isAuthed, sessionUser?.role]);
 
   useEffect(() => {
     setFtpEntryMenuKey(null);
@@ -544,6 +624,9 @@ export default function Dashboard() {
   };
 
   const fetchAll = async () => {
+    if (sessionUser?.role !== 'admin') {
+      return;
+    }
     if (fetchInFlightRef.current) {
       return;
     }
@@ -672,6 +755,12 @@ export default function Dashboard() {
       }
 
       setIsAuthed(true);
+      if (payload?.user?.username) {
+        setSessionUser({
+          role: String(payload.user.role || 'user'),
+          username: String(payload.user.username || ''),
+        });
+      }
       setUsername('');
       setPassword('');
       setControlStatus('');
@@ -707,6 +796,71 @@ export default function Dashboard() {
       void fetchAll();
     } catch {
       setControlStatus('Unable to update logging mode');
+    }
+  };
+
+  const createManagedUser = async () => {
+    setUserStatus('');
+    setUsersBusy(true);
+    try {
+      const res = await authFetch(`${API}/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userDraft),
+      });
+      const payload = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!res.ok) {
+        setUserStatus(String(payload?.error || 'Unable to create user'));
+        return;
+      }
+
+      setUserDraft(createUserDraft());
+      setUserStatus(`Created user ${payload?.user?.username || userDraft.username}`);
+      await loadManagedUsers();
+    } catch {
+      setUserStatus('Unable to create user');
+    } finally {
+      if (mountedRef.current) {
+        setUsersBusy(false);
+      }
+    }
+  };
+
+  const updateManagedUser = async (user: ManagedUser, updates: { role?: string; isDisabled?: boolean; password?: string }) => {
+    setUserStatus('');
+    setUsersBusy(true);
+    try {
+      const res = await authFetch(`${API}/users/${user.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      const payload = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!res.ok) {
+        setUserStatus(String(payload?.error || 'Unable to update user'));
+        return;
+      }
+
+      setUserStatus(`Updated ${payload?.user?.username || user.username}`);
+      await loadManagedUsers();
+    } catch {
+      setUserStatus('Unable to update user');
+    } finally {
+      if (mountedRef.current) {
+        setUsersBusy(false);
+      }
     }
   };
 
@@ -1594,7 +1748,7 @@ export default function Dashboard() {
           <Panel title="Settings" subtitle="Session, logging, and diagnostics controls.">
             <div style={styles.card}>
               <h3 style={styles.cardTitle}>Session</h3>
-              <p style={styles.smallLabel}>Theme switching is fixed to a single stable palette now. Session access is cookie-based and invalidates on logout or timeout.</p>
+              <p style={styles.smallLabel}>Signed in as <strong>{sessionUser?.username || 'unknown'}</strong> with role <strong>{sessionUser?.role || 'user'}</strong>. Session access is cookie-based and invalidates on logout or timeout.</p>
               <div style={styles.actionWrap}>
                 <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
               </div>
@@ -1604,6 +1758,120 @@ export default function Dashboard() {
                 <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(true)}>Enable Verbose</button>
                 <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(false)}>Disable Verbose</button>
               </div>
+
+              {sessionUser?.role === 'admin' ? (
+                <>
+                  <h3 style={{ ...styles.cardTitle, marginTop: 16 }}>Users</h3>
+                  <div style={styles.tableWrap}>
+                    <table style={styles.table}>
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>Username</th>
+                          <th style={styles.th}>Role</th>
+                          <th style={styles.th}>Status</th>
+                          <th style={styles.th}>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {managedUsers.length === 0 && (
+                          <tr>
+                            <td style={styles.td} colSpan={4}>{usersBusy ? 'Loading users…' : 'No users found.'}</td>
+                          </tr>
+                        )}
+                        {managedUsers.map((user) => (
+                          <tr key={user.id}>
+                            <td style={styles.td}>{user.username}</td>
+                            <td style={styles.td}>{user.role}</td>
+                            <td style={styles.td}>{user.isDisabled ? 'disabled' : 'active'}</td>
+                            <td style={styles.td}>
+                              <div style={styles.ftpRowActions}>
+                                <button
+                                  className="ui-button"
+                                  style={styles.actionBtn}
+                                  type="button"
+                                  disabled={usersBusy || user.username === sessionUser?.username}
+                                  onClick={() => void updateManagedUser(user, { role: user.role === 'admin' ? 'user' : 'admin' })}
+                                >
+                                  {user.role === 'admin' ? 'Make User' : 'Make Admin'}
+                                </button>
+                                <button
+                                  className="ui-button"
+                                  style={styles.actionBtn}
+                                  type="button"
+                                  disabled={usersBusy || user.username === sessionUser?.username}
+                                  onClick={() => void updateManagedUser(user, { isDisabled: !user.isDisabled })}
+                                >
+                                  {user.isDisabled ? 'Enable' : 'Disable'}
+                                </button>
+                                <button
+                                  className="ui-button"
+                                  style={styles.actionBtn}
+                                  type="button"
+                                  disabled={usersBusy}
+                                  onClick={() => {
+                                    const nextPassword = window.prompt(`Set a new password for ${user.username}`);
+                                    if (!nextPassword) {
+                                      return;
+                                    }
+                                    void updateManagedUser(user, { password: nextPassword });
+                                  }}
+                                >
+                                  Reset Password
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ ...styles.sectionHeader, marginTop: 16 }}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Create User</h3>
+                    <span style={styles.smallLabel}>Use this for per-user share grants and controlled read-only access.</span>
+                  </div>
+                  <div style={styles.ftpActionGroup}>
+                    <TextField
+                      id="user-create-name"
+                      label="Username"
+                      name="userCreateName"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="username"
+                      spellCheck={false}
+                      placeholder="guest-user"
+                      value={userDraft.username}
+                      onChange={(value) => setUserDraft((current) => ({ ...current, username: value }))}
+                    />
+                    <TextField
+                      id="user-create-password"
+                      label="Password"
+                      name="userCreatePassword"
+                      type="password"
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      placeholder="at least 8 characters"
+                      value={userDraft.password}
+                      onChange={(value) => setUserDraft((current) => ({ ...current, password: value }))}
+                    />
+                    <label style={styles.field}>
+                      <span style={styles.fieldLabel}>Role</span>
+                      <select
+                        className="ui-input"
+                        value={userDraft.role}
+                        onChange={(event) => setUserDraft((current) => ({ ...current, role: event.target.value === 'admin' ? 'admin' : 'user' }))}
+                      >
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </label>
+                    <button className="ui-button" style={styles.actionBtn} type="button" disabled={usersBusy} onClick={() => void createManagedUser()}>
+                      {usersBusy ? 'Saving…' : 'Create User'}
+                    </button>
+                  </div>
+                  {userStatus ? <p style={{ ...styles.smallLabel, color: userStatus.toLowerCase().includes('unable') || userStatus.toLowerCase().includes('error') ? THEME.crimsonRed : THEME.ok }}>{userStatus}</p> : null}
+                </>
+              ) : null}
             </div>
           </Panel>
         )}

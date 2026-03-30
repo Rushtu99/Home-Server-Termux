@@ -78,6 +78,41 @@ type FsClipboard = {
   type: string;
 } | null;
 
+type SharePermission = {
+  accessLevel: 'deny' | 'read' | 'write' | string;
+  subjectKey: string;
+  subjectType: 'role' | 'user' | 'group' | string;
+};
+
+type ShareRecord = {
+  createdAt: string;
+  description: string;
+  id: number;
+  isHidden: boolean;
+  isReadOnly: boolean;
+  name: string;
+  pathKey: string;
+  permissions: SharePermission[];
+  sourceType: string;
+  updatedAt: string;
+};
+
+type FilesUser = {
+  id: number;
+  isDisabled: boolean;
+  role: string;
+  username: string;
+};
+
+type ShareFormState = {
+  defaultRoleAccess: 'deny' | 'read' | 'write';
+  description: string;
+  isHidden: boolean;
+  isReadOnly: boolean;
+  name: string;
+  userPermissions: Record<string, 'inherit' | 'deny' | 'read' | 'write'>;
+};
+
 const EMPTY_PAYLOAD: DrivePayload = {
   agentInstalled: false,
   checkedAt: null,
@@ -174,6 +209,46 @@ const normalizeFsPayload = (payload: Partial<FsPayload> | null | undefined): FsP
 });
 
 const topLevelName = (value: string) => value.split('/').filter(Boolean)[0] || value;
+const normalizeDefaultRoleAccess = (value: string | null | undefined) => (value === 'read' || value === 'write' ? value : 'deny');
+const normalizeUserOverrideAccess = (value: string | null | undefined): 'inherit' | 'deny' | 'read' | 'write' =>
+  value === 'deny' || value === 'read' || value === 'write' ? value : 'inherit';
+
+const normalizeShareRecord = (payload: Partial<ShareRecord> | null | undefined): ShareRecord => ({
+  createdAt: String(payload?.createdAt || ''),
+  description: String(payload?.description || ''),
+  id: Number(payload?.id || 0),
+  isHidden: Boolean(payload?.isHidden),
+  isReadOnly: Boolean(payload?.isReadOnly),
+  name: String(payload?.name || ''),
+  pathKey: String(payload?.pathKey || ''),
+  permissions: Array.isArray(payload?.permissions)
+    ? payload.permissions.map((entry) => ({
+        accessLevel: String(entry?.accessLevel || 'deny'),
+        subjectKey: String(entry?.subjectKey || ''),
+        subjectType: String(entry?.subjectType || 'role'),
+      }))
+    : [],
+  sourceType: String(payload?.sourceType || 'folder'),
+  updatedAt: String(payload?.updatedAt || ''),
+});
+
+const getShareDefaultRoleAccess = (share: ShareRecord | null) =>
+  normalizeDefaultRoleAccess(
+    share?.permissions.find((entry) => entry.subjectType === 'role' && entry.subjectKey.toLowerCase() === 'user')?.accessLevel
+  );
+
+const getShareUserPermissionMap = (share: ShareRecord | null): Record<string, 'inherit' | 'deny' | 'read' | 'write'> => {
+  if (!share) {
+    return {};
+  }
+
+  return share.permissions.reduce<Record<string, 'inherit' | 'deny' | 'read' | 'write'>>((acc, entry) => {
+    if (entry.subjectType === 'user' && entry.subjectKey) {
+      acc[entry.subjectKey.toLowerCase()] = normalizeUserOverrideAccess(entry.accessLevel);
+    }
+    return acc;
+  }, {});
+};
 
 export default function FilesPage() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -186,6 +261,12 @@ export default function FilesPage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [driveAccessDenied, setDriveAccessDenied] = useState(false);
   const [showDriveLog, setShowDriveLog] = useState(false);
+  const [shareInventory, setShareInventory] = useState<ShareRecord[]>([]);
+  const [usersInventory, setUsersInventory] = useState<FilesUser[]>([]);
+  const [shareAdminAvailable, setShareAdminAvailable] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareStatus, setShareStatus] = useState('');
+  const [shareForm, setShareForm] = useState<ShareFormState | null>(null);
   const [selectedPath, setSelectedPath] = useState('');
   const [search, setSearch] = useState('');
   const [clipboard, setClipboard] = useState<FsClipboard>(null);
@@ -204,6 +285,47 @@ export default function FilesPage() {
 
     setDriveAccessDenied(false);
     return normalizeDrivePayload(await res.json());
+  };
+
+  const loadShares = async () => {
+    const res = await fetch(`${API}/shares`, { credentials: 'include' });
+    if (res.status === 403) {
+      setShareAdminAvailable(false);
+      setShareInventory([]);
+      return [];
+    }
+    if (!res.ok) {
+      throw new Error(res.status === 401 ? 'Login required to manage shares' : 'Unable to read shares');
+    }
+
+    const payload = await res.json().catch(() => ({}));
+    const shares = Array.isArray(payload?.shares) ? payload.shares.map((entry: Partial<ShareRecord>) => normalizeShareRecord(entry)) : [];
+    setShareAdminAvailable(true);
+    setShareInventory(shares);
+    return shares;
+  };
+
+  const loadUsers = async () => {
+    const res = await fetch(`${API}/users`, { credentials: 'include' });
+    if (res.status === 403) {
+      setUsersInventory([]);
+      return [];
+    }
+    if (!res.ok) {
+      throw new Error(res.status === 401 ? 'Login required to manage users' : 'Unable to read users');
+    }
+
+    const payload = await res.json().catch(() => ({}));
+    const users = Array.isArray(payload?.users)
+      ? payload.users.map((entry: Partial<FilesUser>) => ({
+          id: Number(entry?.id || 0),
+          isDisabled: Boolean(entry?.isDisabled),
+          role: String(entry?.role || 'user'),
+          username: String(entry?.username || ''),
+        }))
+      : [];
+    setUsersInventory(users);
+    return users;
   };
 
   const loadDirectory = async (targetPath = '', options?: { preserveSelection?: boolean }) => {
@@ -273,8 +395,37 @@ export default function FilesPage() {
   }, []);
 
   useEffect(() => {
+    void loadShares().catch(() => {});
+    void loadUsers().catch(() => {});
+  }, []);
+
+  useEffect(() => {
     setMenuPath('');
   }, [browser.path]);
+
+  const selectedShare = browser.path === ''
+    ? shareInventory.find((share) => share.pathKey === selectedPath) || null
+    : browser.share
+      ? shareInventory.find((share) => share.id === browser.share?.id) || null
+      : null;
+
+  useEffect(() => {
+    if (!selectedShare) {
+      setShareForm(null);
+      setShareStatus('');
+      return;
+    }
+
+    setShareForm({
+      defaultRoleAccess: getShareDefaultRoleAccess(selectedShare),
+      description: selectedShare.description,
+      isHidden: selectedShare.isHidden,
+      isReadOnly: selectedShare.isReadOnly,
+      name: selectedShare.name,
+      userPermissions: getShareUserPermissionMap(selectedShare),
+    });
+    setShareStatus('');
+  }, [selectedShare]);
 
   const runManualCheck = async () => {
     setManualBusy(true);
@@ -339,12 +490,52 @@ export default function FilesPage() {
         if (!res.ok) {
           throw new Error(String(payload?.error || 'Unable to create share'));
         }
+        await loadShares();
+        setSelectedPath(String(payload?.share?.pathKey || ''));
       } else {
         await runFsCommand('/fs/mkdir', { name, path: browser.path });
       }
       await loadDirectory(browser.path, { preserveSelection: true });
     } catch (error) {
       setBrowserError(String(error instanceof Error ? error.message : error || `Unable to create ${browser.path === '' ? 'share' : 'folder'}`));
+    }
+  };
+
+  const saveSharePolicy = async () => {
+    if (!selectedShare || !shareForm) {
+      return;
+    }
+
+    setShareBusy(true);
+    setShareStatus('');
+    try {
+      const res = await fetch(`${API}/shares/${selectedShare.id}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          defaultRoleAccess: shareForm.defaultRoleAccess,
+          description: shareForm.description,
+          isHidden: shareForm.isHidden,
+          isReadOnly: shareForm.isReadOnly,
+          name: shareForm.name,
+          userPermissions: Object.entries(shareForm.userPermissions)
+            .filter(([, accessLevel]) => accessLevel !== 'inherit')
+            .map(([username, accessLevel]) => ({ username, accessLevel })),
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String(payload?.error || 'Unable to update share'));
+      }
+
+      await loadShares();
+      await loadDirectory(browser.path || '', { preserveSelection: true });
+      setShareStatus('Share policy saved.');
+    } catch (error) {
+      setShareStatus(String(error instanceof Error ? error.message : error || 'Unable to update share'));
+    } finally {
+      setShareBusy(false);
     }
   };
 
@@ -489,6 +680,7 @@ export default function FilesPage() {
   const canWriteCurrentFolder = browser.path === ''
     ? false
     : browser.share?.accessLevel === 'write' && browser.share?.isReadOnly !== true;
+  const canCreateShare = browser.path === '' && shareAdminAvailable;
   const quickLinks = browser.path === ''
     ? browser.entries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink')
     : browser.entries
@@ -615,14 +807,116 @@ export default function FilesPage() {
               {selectedEntry ? (
                 <div className="fs-selection">
                   <p>{selectedEntry.name}</p>
-                  <span>{selectedEntry.type}</span>
-                  <span>{selectedEntry.type === 'file' ? formatBytes(selectedEntry.size) : 'directory'}</span>
+                  <span>{browser.path === '' ? (selectedEntry.shareSourceType || 'share') : selectedEntry.type}</span>
+                  <span>{browser.path === '' ? `${selectedEntry.accessLevel || 'read'} access` : selectedEntry.type === 'file' ? formatBytes(selectedEntry.size) : 'directory'}</span>
                   <span>{formatEntryTime(selectedEntry.modifiedAt)}</span>
                 </div>
               ) : (
                 <p className="tool-banner__meta">Pick a file or folder to act on it.</p>
               )}
             </div>
+
+            {browser.path === '' && shareAdminAvailable && selectedShare && shareForm ? (
+              <div className="fs-sidebar__section">
+                <div className="fs-sidebar__header">
+                  <strong>Share Policy</strong>
+                </div>
+                <div className="fs-policy-form">
+                  <label className="fs-policy-field">
+                    <span>Name</span>
+                    <input
+                      className="ui-input"
+                      type="text"
+                      value={shareForm.name}
+                      onChange={(event) => setShareForm((current) => current ? { ...current, name: event.target.value } : current)}
+                    />
+                  </label>
+                  <label className="fs-policy-field">
+                    <span>Description</span>
+                    <textarea
+                      className="ui-input fs-policy-textarea"
+                      value={shareForm.description}
+                      onChange={(event) => setShareForm((current) => current ? { ...current, description: event.target.value } : current)}
+                      rows={3}
+                    />
+                  </label>
+                  <label className="fs-policy-field">
+                    <span>Default user access</span>
+                    <select
+                      className="ui-input"
+                      value={shareForm.defaultRoleAccess}
+                      onChange={(event) => setShareForm((current) => current ? { ...current, defaultRoleAccess: normalizeDefaultRoleAccess(event.target.value) } : current)}
+                    >
+                      <option value="deny">Deny</option>
+                      <option value="read">Read only</option>
+                      <option value="write">Read and write</option>
+                    </select>
+                  </label>
+                  {usersInventory.filter((user) => user.role !== 'admin').length > 0 ? (
+                    <div className="fs-policy-field">
+                      <span>User-specific access</span>
+                      <div className="fs-policy-user-list">
+                        {usersInventory
+                          .filter((user) => user.role !== 'admin')
+                          .map((user) => (
+                            <label key={user.id} className="fs-policy-user-row">
+                              <div>
+                                <strong>{user.username}</strong>
+                                <small>{user.isDisabled ? 'disabled account' : 'user override'}</small>
+                              </div>
+                              <select
+                                className="ui-input"
+                                value={shareForm.userPermissions[user.username.toLowerCase()] || 'inherit'}
+                                onChange={(event) => {
+                                  const nextValue = normalizeUserOverrideAccess(event.target.value);
+                                  setShareForm((current) => current ? {
+                                    ...current,
+                                    userPermissions: {
+                                      ...current.userPermissions,
+                                      [user.username.toLowerCase()]: nextValue,
+                                    },
+                                  } : current);
+                                }}
+                              >
+                                <option value="inherit">Inherit default</option>
+                                <option value="deny">Deny</option>
+                                <option value="read">Read only</option>
+                                <option value="write">Read and write</option>
+                              </select>
+                            </label>
+                          ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <label className="fs-policy-check">
+                    <input
+                      type="checkbox"
+                      checked={shareForm.isReadOnly}
+                      onChange={(event) => setShareForm((current) => current ? { ...current, isReadOnly: event.target.checked } : current)}
+                    />
+                    <span>Mark this share read-only</span>
+                  </label>
+                  <label className="fs-policy-check">
+                    <input
+                      type="checkbox"
+                      checked={shareForm.isHidden}
+                      onChange={(event) => setShareForm((current) => current ? { ...current, isHidden: event.target.checked } : current)}
+                    />
+                    <span>Hide this share from non-admin users unless explicitly granted</span>
+                  </label>
+                  <div className="fs-policy-meta">
+                    <span>Path: {selectedShare.pathKey}</span>
+                    <span>Source: {selectedShare.sourceType}</span>
+                  </div>
+                  <div className="fs-policy-actions">
+                    <button className="ui-button ui-button--primary" type="button" onClick={() => void saveSharePolicy()} disabled={shareBusy}>
+                      {shareBusy ? 'Saving…' : 'Save Policy'}
+                    </button>
+                  </div>
+                  {shareStatus ? <p className={`status-message ${shareStatus.includes('saved') ? '' : 'status-message--error'}`}>{shareStatus}</p> : null}
+                </div>
+              </div>
+            ) : null}
           </aside>
 
           <div className="fs-main">
@@ -661,7 +955,7 @@ export default function FilesPage() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
-                <button className="ui-button" type="button" onClick={createFolder} disabled={browser.path !== '' && !canWriteCurrentFolder}>
+                <button className="ui-button" type="button" onClick={createFolder} disabled={browser.path === '' ? !canCreateShare : !canWriteCurrentFolder}>
                   {browser.path === '' ? 'New Share' : 'New Folder'}
                 </button>
                 <button className="ui-button" type="button" onClick={handleUploadTrigger} disabled={uploadBusy || !canWriteCurrentFolder}>

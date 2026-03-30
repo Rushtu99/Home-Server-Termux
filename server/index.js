@@ -2265,6 +2265,150 @@ const sharesHandler = async (req, res) => {
   res.json({ shares });
 };
 
+const usersHandler = (req, res) => {
+  res.json({ users: appDb.listUsers() });
+};
+
+const createUserHandler = (req, res) => {
+  try {
+    const username = normalizeUsername(req.body?.username || '');
+    const password = String(req.body?.password || '');
+    const role = String(req.body?.role || 'user').trim().toLowerCase();
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+    if (!['admin', 'user'].includes(role)) {
+      return res.status(400).json({ error: 'Role must be admin or user' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    if (appDb.findUserByUsername(username)) {
+      return res.status(400).json({ error: 'Username already exists' });
+    }
+
+    const user = appDb.createUser({ username, password, role, isDisabled: false });
+    pushAuditEvent(req, 'info', 'User created', { userId: user.id, username: user.username, role: user.role });
+    return res.status(201).json({ user });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to create user');
+    pushAuditEvent(req, 'error', 'User creation failed', { error: message });
+    return res.status(400).json({ error: message });
+  }
+};
+
+const updateUserHandler = (req, res) => {
+  try {
+    const user = appDb.getUserById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const nextRole = req.body?.role == null ? user.role : String(req.body.role || '').trim().toLowerCase();
+    if (!['admin', 'user'].includes(nextRole)) {
+      return res.status(400).json({ error: 'Role must be admin or user' });
+    }
+
+    const disableRequested = req.body?.isDisabled === true;
+    const password = req.body?.password == null ? '' : String(req.body.password || '');
+
+    if (user.username === String(req.user?.sub || req.session?.username || '').trim() && disableRequested) {
+      return res.status(400).json({ error: 'You cannot disable your own account' });
+    }
+    if (user.username === String(req.user?.sub || req.session?.username || '').trim() && nextRole !== 'admin') {
+      return res.status(400).json({ error: 'You cannot remove your own admin role' });
+    }
+
+    const updatedUser = appDb.updateUser(user.id, {
+      isDisabled: disableRequested,
+      role: nextRole,
+    });
+    if (password) {
+      if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      }
+      appDb.setUserPassword(user.id, password);
+    }
+
+    pushAuditEvent(req, 'info', 'User updated', {
+      userId: updatedUser.id,
+      username: updatedUser.username,
+      role: updatedUser.role,
+      isDisabled: updatedUser.isDisabled,
+      passwordChanged: Boolean(password),
+    });
+    return res.json({ user: appDb.getUserById(user.id) });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to update user');
+    pushAuditEvent(req, 'error', 'User update failed', { error: message, userId: req.params.id });
+    return res.status(/not found/i.test(message) ? 404 : 400).json({ error: message });
+  }
+};
+
+const updateShareHandler = async (req, res) => {
+  try {
+    const existing = appDb.getShareById(req.params.id, { includePermissions: true });
+    if (!existing) {
+      return res.status(404).json({ error: 'Share not found' });
+    }
+
+    const requestedName = sanitizeShareName(req.body?.name || existing.name);
+    if (!requestedName) {
+      return res.status(400).json({ error: 'Share name is required' });
+    }
+
+    const defaultRoleAccess = normalizeAccessLevel(req.body?.defaultRoleAccess || 'deny', 'deny');
+    const userPermissions = Array.isArray(req.body?.userPermissions)
+      ? req.body.userPermissions
+          .map((entry) => ({
+            accessLevel: String(entry?.accessLevel || '').trim().toLowerCase(),
+            subjectKey: normalizeUsername(entry?.username).toLowerCase(),
+          }))
+          .filter((entry) => entry.subjectKey && ['deny', 'read', 'write'].includes(entry.accessLevel) && appDb.findUserByUsername(entry.subjectKey))
+      : [];
+    const existingPermissions = Array.isArray(existing.permissions) ? existing.permissions : [];
+    const preservedPermissions = existingPermissions.filter((entry) => {
+      if (entry.subjectType === 'user') {
+        return false;
+      }
+      if (entry.subjectType !== 'role') {
+        return true;
+      }
+      const subjectKey = String(entry.subjectKey || '').toLowerCase();
+      return subjectKey !== 'admin' && subjectKey !== 'user';
+    });
+
+    const permissions = [
+      ...preservedPermissions,
+      { subjectType: 'role', subjectKey: 'admin', accessLevel: 'write' },
+      { subjectType: 'role', subjectKey: 'user', accessLevel: defaultRoleAccess },
+      ...userPermissions.map((entry) => ({ subjectType: 'user', subjectKey: entry.subjectKey, accessLevel: entry.accessLevel })),
+    ];
+
+    const share = appDb.updateShare(existing.id, {
+      description: String(req.body?.description || '').trim(),
+      isHidden: req.body?.isHidden === true,
+      isReadOnly: req.body?.isReadOnly === true,
+      name: requestedName,
+      permissions,
+      sourceType: existing.sourceType,
+    });
+
+    pushAuditEvent(req, 'info', 'Share updated', {
+      shareId: share.id,
+      shareName: share.name,
+      defaultRoleAccess,
+      isHidden: share.isHidden,
+      isReadOnly: share.isReadOnly,
+    });
+    res.json({ share });
+  } catch (err) {
+    const message = String(err?.message || err || 'Unable to update share');
+    pushAuditEvent(req, 'error', 'Share update failed', { error: message, shareId: req.params.id });
+    res.status(/not found/i.test(message) ? 404 : 400).json({ error: message });
+  }
+};
+
 const createShareHandler = async (req, res) => {
   let createdPath = '';
   try {
@@ -2798,6 +2942,14 @@ app.get('/shares', requireAuth, requireAdmin, sharesHandler);
 app.get('/api/shares', requireAuth, requireAdmin, sharesHandler);
 app.post('/shares', requireAuth, requireAdmin, createShareHandler);
 app.post('/api/shares', requireAuth, requireAdmin, createShareHandler);
+app.put('/shares/:id', requireAuth, requireAdmin, updateShareHandler);
+app.put('/api/shares/:id', requireAuth, requireAdmin, updateShareHandler);
+app.get('/users', requireAuth, requireAdmin, usersHandler);
+app.get('/api/users', requireAuth, requireAdmin, usersHandler);
+app.post('/users', requireAuth, requireAdmin, createUserHandler);
+app.post('/api/users', requireAuth, requireAdmin, createUserHandler);
+app.put('/users/:id', requireAuth, requireAdmin, updateUserHandler);
+app.put('/api/users/:id', requireAuth, requireAdmin, updateUserHandler);
 app.get('/fs/list', requireAuth, filesystemListHandler);
 app.get('/api/fs/list', requireAuth, filesystemListHandler);
 app.post('/fs/mkdir', requireAuth, filesystemMkdirHandler);

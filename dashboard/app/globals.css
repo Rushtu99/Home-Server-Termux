@@ -502,6 +502,78 @@ select {
   font-size: 12px;
 }
 
+.fs-policy-form {
+  display: grid;
+  gap: 10px;
+}
+
+.fs-policy-field {
+  display: grid;
+  gap: 6px;
+}
+
+.fs-policy-field span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fs-policy-user-list {
+  display: grid;
+  gap: 8px;
+}
+
+.fs-policy-user-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);
+  gap: 10px;
+  align-items: center;
+}
+
+.fs-policy-user-row strong,
+.fs-policy-user-row small {
+  display: block;
+}
+
+.fs-policy-user-row strong {
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.fs-policy-user-row small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.fs-policy-textarea {
+  min-height: 84px;
+  resize: vertical;
+  font: inherit;
+}
+
+.fs-policy-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--foreground);
+}
+
+.fs-policy-check input {
+  margin-top: 2px;
+}
+
+.fs-policy-meta {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fs-policy-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .fs-main {
   display: grid;
   gap: 12px;
@@ -930,6 +1002,10 @@ select {
   .fs-row-menu__panel {
     left: 0;
     right: auto;
+  }
+
+  .fs-policy-user-row {
+    grid-template-columns: 1fr;
   }
 }
 

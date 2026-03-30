@@ -214,6 +214,17 @@ const createAppDb = ({ dbPath }) => {
 
   const statements = {
     countUsers: db.prepare('SELECT COUNT(*) AS count FROM users'),
+    listUsers: db.prepare(`
+      SELECT id, username, role, is_disabled AS isDisabled, created_at AS createdAt, updated_at AS updatedAt
+      FROM users
+      ORDER BY lower(username), id
+    `),
+    getUserById: db.prepare(`
+      SELECT id, username, role, is_disabled AS isDisabled, created_at AS createdAt, updated_at AS updatedAt
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+    `),
     findUserByUsername: db.prepare(`
       SELECT id, username, password_hash AS passwordHash, role, is_disabled AS isDisabled, created_at AS createdAt, updated_at AS updatedAt
       FROM users
@@ -227,6 +238,11 @@ const createAppDb = ({ dbPath }) => {
     updateUserPassword: db.prepare(`
       UPDATE users
       SET password_hash = ?, updated_at = ?
+      WHERE id = ?
+    `),
+    updateUserProfile: db.prepare(`
+      UPDATE users
+      SET role = ?, is_disabled = ?, updated_at = ?
       WHERE id = ?
     `),
     getSetting: db.prepare('SELECT value FROM app_settings WHERE key = ? LIMIT 1'),
@@ -482,6 +498,21 @@ const createAppDb = ({ dbPath }) => {
     return payload;
   };
 
+  const serializeUser = (row) => {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      createdAt: normalizeText(row.createdAt),
+      id: Number(row.id),
+      isDisabled: Boolean(row.isDisabled),
+      role: normalizeText(row.role) || 'user',
+      updatedAt: normalizeText(row.updatedAt),
+      username: normalizeUsername(row.username),
+    };
+  };
+
   const api = {
     dbPath,
     bootstrapAdmin({ username, password, role = 'admin' }) {
@@ -505,6 +536,17 @@ const createAppDb = ({ dbPath }) => {
     countUsers() {
       return Number(statements.countUsers.get()?.count || 0);
     },
+    listUsers() {
+      return statements.listUsers.all().map((row) => serializeUser(row));
+    },
+    getUserById(userId) {
+      const numericUserId = Number(userId);
+      if (!Number.isInteger(numericUserId) || numericUserId <= 0) {
+        return null;
+      }
+
+      return serializeUser(statements.getUserById.get(numericUserId));
+    },
     findUserByUsername(username) {
       const normalizedUsername = normalizeUsername(username);
       if (!normalizedUsername) {
@@ -520,6 +562,42 @@ const createAppDb = ({ dbPath }) => {
       }
 
       statements.updateUserPassword.run(hashPassword(password), nowIso(), numericUserId);
+    },
+    createUser({ username, password, role = 'user', isDisabled = false } = {}) {
+      const normalizedUsername = normalizeUsername(username);
+      if (!normalizedUsername) {
+        throw new Error('Username is required');
+      }
+      if (!password) {
+        throw new Error('Password is required');
+      }
+
+      const timestamp = nowIso();
+      statements.insertUser.run(
+        normalizedUsername,
+        hashPassword(password),
+        normalizeText(role) || 'user',
+        isDisabled ? 1 : 0,
+        timestamp,
+        timestamp
+      );
+
+      return this.getUserById(db.prepare('SELECT last_insert_rowid() AS id').get().id);
+    },
+    updateUser(userId, { role, isDisabled } = {}) {
+      const existing = this.getUserById(userId);
+      if (!existing) {
+        throw new Error('User not found');
+      }
+
+      statements.updateUserProfile.run(
+        normalizeText(role || existing.role) || 'user',
+        isDisabled == null ? (existing.isDisabled ? 1 : 0) : isDisabled ? 1 : 0,
+        nowIso(),
+        Number(existing.id)
+      );
+
+      return this.getUserById(existing.id);
     },
     getSetting(key, fallbackValue = null) {
       const row = statements.getSetting.get(String(key || ''));
