@@ -169,6 +169,9 @@ type FtpDefaults = {
 type DashboardPayload = {
   generatedAt: string;
   services: Services;
+  serviceController?: {
+    optionalServices?: string[];
+  };
   monitor: Monitor;
   connections: {
     users: ConnectedUser[];
@@ -202,11 +205,6 @@ type UserDraft = {
   role: 'admin' | 'user';
   username: string;
 };
-
-type ControlTarget = {
-  service: string;
-  action: string;
-} | null;
 
 type LayoutMode = 'desktop' | 'tablet' | 'mobile';
 
@@ -377,10 +375,12 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState('');
   const [controlStatus, setControlStatus] = useState('');
   const [controlBusy, setControlBusy] = useState<Record<string, boolean>>({});
+  const [serviceControllerLocked, setServiceControllerLocked] = useState(true);
+  const [serviceUnlockBusy, setServiceUnlockBusy] = useState(false);
+  const [serviceUnlockPassword, setServiceUnlockPassword] = useState('');
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [logsMarkdown, setLogsMarkdown] = useState('');
-  const [controlTarget, setControlTarget] = useState<ControlTarget>(null);
-  const [controlPassword, setControlPassword] = useState('');
+  const [optionalServices, setOptionalServices] = useState<string[]>(['ftp', 'copyparty', 'syncthing', 'samba']);
   const [ftpDefaults, setFtpDefaults] = useState<FtpDefaults | null>(null);
   const [ftpHost, setFtpHost] = useState('');
   const [ftpPort, setFtpPort] = useState('2121');
@@ -446,6 +446,10 @@ export default function Dashboard() {
     setLastUpdated('');
     setControlStatus('');
     setControlBusy({});
+    setServiceControllerLocked(true);
+    setServiceUnlockBusy(false);
+    setServiceUnlockPassword('');
+    setOptionalServices(['ftp', 'copyparty', 'syncthing', 'samba']);
     setLogsMarkdown('');
     setFtpDefaults(null);
     setFtpFavourites([]);
@@ -753,22 +757,6 @@ export default function Dashboard() {
   }, [ftpPath]);
 
   useEffect(() => {
-    if (!controlTarget) {
-      return;
-    }
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setControlTarget(null);
-        setControlPassword('');
-      }
-    };
-
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [controlTarget]);
-
-  useEffect(() => {
     drawTrend(cpuCanvas.current, cpuHistory, THEME.accent, THEME.accentFill);
   }, [cpuHistory]);
 
@@ -786,6 +774,9 @@ export default function Dashboard() {
 
   const applyDashboardPayload = (payload: DashboardPayload) => {
     setServices(payload.services || {});
+    if (Array.isArray(payload.serviceController?.optionalServices) && payload.serviceController?.optionalServices.length > 0) {
+      setOptionalServices(payload.serviceController.optionalServices);
+    }
     setMonitor(payload.monitor || null);
     setConnections(Array.isArray(payload.connections?.users) ? payload.connections.users : []);
     setStorage(Array.isArray(payload.storage?.mounts) ? payload.storage.mounts : []);
@@ -801,6 +792,34 @@ export default function Dashboard() {
 
     if (payload.generatedAt) {
       setLastUpdated(new Date(payload.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    }
+  };
+
+  const syncServiceControllerState = async () => {
+    if (sessionUser?.role !== 'admin') {
+      return;
+    }
+
+    try {
+      const res = await authFetch(`${API}/services`);
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+      if (!res.ok) {
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (payload?.services && typeof payload.services === 'object') {
+        setServices(payload.services as Services);
+      }
+      setServiceControllerLocked(payload?.controller?.locked !== false);
+      if (Array.isArray(payload?.controller?.optionalServices) && payload.controller.optionalServices.length > 0) {
+        setOptionalServices(payload.controller.optionalServices);
+      }
+    } catch {
+      // Ignore controller state refresh failures.
     }
   };
 
@@ -836,6 +855,8 @@ export default function Dashboard() {
           applyDashboardPayload(payload as DashboardPayload);
         });
       }
+
+      await syncServiceControllerState();
     } catch (err) {
       if (mountedRef.current) {
         setControlStatus(`Telemetry fetch error: ${String(err)}`);
@@ -845,23 +866,76 @@ export default function Dashboard() {
     }
   };
 
-  const openControlPopup = (service: string, action: string) => {
-    setControlTarget({ service, action });
-    setControlPassword('');
-    setControlStatus('');
-  };
-
-  const closeControlPopup = () => {
-    setControlTarget(null);
-    setControlPassword('');
-  };
-
-  const executeControl = async () => {
-    if (!controlTarget) {
+  const unlockServiceController = async () => {
+    if (!serviceUnlockPassword.trim()) {
+      setControlStatus('Enter the admin action password to unlock service controls');
       return;
     }
 
-    const { service, action } = controlTarget;
+    setServiceUnlockBusy(true);
+    setControlStatus('');
+    try {
+      const res = await authFetch(`${API}/control/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminPassword: serviceUnlockPassword }),
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setControlStatus(String(payload?.error || 'Unable to unlock service controls'));
+        return;
+      }
+
+      setServiceControllerLocked(false);
+      setServiceUnlockPassword('');
+      setControlStatus('Service controls unlocked');
+    } catch {
+      setControlStatus('Unable to unlock service controls');
+    } finally {
+      if (mountedRef.current) {
+        setServiceUnlockBusy(false);
+      }
+    }
+  };
+
+  const lockServiceController = async () => {
+    setServiceUnlockBusy(true);
+    setControlStatus('');
+    try {
+      const res = await authFetch(`${API}/control/lock`, {
+        method: 'POST',
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setControlStatus(String(payload?.error || 'Unable to lock service controls'));
+        return;
+      }
+
+      setServiceControllerLocked(true);
+      setServiceUnlockPassword('');
+      setControlStatus('Service controls locked');
+    } catch {
+      setControlStatus('Unable to lock service controls');
+    } finally {
+      if (mountedRef.current) {
+        setServiceUnlockBusy(false);
+      }
+    }
+  };
+
+  const executeControl = async (service: string, action: string) => {
     const key = `${service}:${action}`;
     setControlStatus('');
     setControlBusy((prev) => ({ ...prev, [key]: true }));
@@ -873,7 +947,6 @@ export default function Dashboard() {
         body: JSON.stringify({
           service,
           action,
-          ...(controlPassword.trim() ? { adminPassword: controlPassword } : {}),
         }),
       });
 
@@ -888,19 +961,21 @@ export default function Dashboard() {
         setControlStatus(message);
       } else {
         setControlStatus(`${service} ${action} succeeded`);
-        closeControlPopup();
       }
     } catch {
       setControlStatus(`Unable to ${action} ${service}`);
     } finally {
       setControlBusy((prev) => ({ ...prev, [key]: false }));
-      void fetchAll();
+      void syncServiceControllerState();
     }
   };
 
   const usedMemPct = monitor ? Math.min((monitor.totalMem > 0 ? (monitor.usedMem / monitor.totalMem) * 100 : 0), 100) : 0;
   const runningServices = Object.values(services).filter(Boolean).length;
   const totalServices = Object.keys(services).length || 4;
+  const controllableServices = optionalServices
+    .filter((name) => Object.prototype.hasOwnProperty.call(services, name))
+    .map((name) => [name, Boolean(services[name])] as const);
   const totalStorage = storage.reduce((sum, mount) => sum + mount.size, 0);
   const usedStorage = storage.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
@@ -1609,20 +1684,47 @@ export default function Dashboard() {
 
               <div style={styles.homeSecondary}>
                 <article style={styles.card}>
-                  <h3 style={styles.cardTitle}>Service Controls</h3>
-                  {Object.entries(services).map(([name, running]) => (
-                    <div key={name} style={styles.serviceRow}>
-                      <span style={styles.serviceName}>
-                        {name}
-                        <span style={{ ...styles.dot, background: running ? THEME.ok : THEME.crimsonRed }} />
-                      </span>
-                      <div style={styles.actionWrap}>
-                        <button className="ui-button" disabled={!!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'start')}>Start</button>
-                        <button className="ui-button" disabled={!!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'stop')}>Stop</button>
-                        <button className="ui-button" disabled={!!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => openControlPopup(name, 'restart')}>Restart</button>
+                  <div style={styles.logControlRow}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Service Controls</h3>
+                    <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => void (serviceControllerLocked ? unlockServiceController() : lockServiceController())} disabled={serviceUnlockBusy}>
+                      {serviceControllerLocked ? 'Unlock' : 'Lock'}
+                    </button>
+                  </div>
+                  <div style={styles.serviceControllerCard}>
+                    {serviceControllerLocked ? (
+                      <div style={styles.serviceLockOverlay} aria-hidden={false}>
+                        <div style={styles.serviceLockBadge}>Locked</div>
+                        <p style={{ ...styles.smallLabel, marginBottom: 10 }}>Enter the admin action password once to unlock optional services.</p>
+                        <TextField
+                          id="service-unlock-password"
+                          label="Admin Action Password"
+                          name="serviceUnlockPassword"
+                          type="password"
+                          autoComplete="current-password"
+                          value={serviceUnlockPassword}
+                          onChange={setServiceUnlockPassword}
+                        />
+                        <button className="ui-button ui-button--primary" style={styles.actionBtn} type="button" onClick={() => void unlockServiceController()} disabled={serviceUnlockBusy}>
+                          {serviceUnlockBusy ? 'Unlocking…' : 'Unlock Controls'}
+                        </button>
                       </div>
-                    </div>
-                  ))}
+                    ) : null}
+                    {controllableServices.length === 0 ? (
+                      <p style={styles.smallLabel}>No optional services are available on this host.</p>
+                    ) : controllableServices.map(([name, running]) => (
+                      <div key={name} style={{ ...styles.serviceRow, opacity: serviceControllerLocked ? 0.35 : 1 }}>
+                        <span style={styles.serviceName}>
+                          {name}
+                          <span style={{ ...styles.dot, background: running ? THEME.ok : THEME.crimsonRed }} />
+                        </span>
+                        <div style={styles.actionWrap}>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${name}:start`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(name, 'start')}>Start</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${name}:stop`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(name, 'stop')}>Stop</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${name}:restart`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(name, 'restart')}>Restart</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                   <p
                     style={{ ...styles.smallLabel, marginTop: 8, color: controlStatusColor }}
                     role="status"
@@ -2234,42 +2336,6 @@ export default function Dashboard() {
           </Panel>
         )}
 
-        {controlTarget && (
-          <div
-            style={styles.modalOverlay}
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) {
-                closeControlPopup();
-              }
-            }}
-          >
-            <div
-              style={styles.modalCard}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="control-dialog-title"
-              aria-describedby="control-dialog-copy"
-            >
-              <h3 id="control-dialog-title" style={{ marginTop: 0 }}>Confirm Service Action</h3>
-              <p id="control-dialog-copy" style={styles.smallLabel}>
-                Confirm you want to <strong>{controlTarget.action}</strong> <strong>{controlTarget.service}</strong>. Admin session access is required. The password field is optional step-up confirmation.
-              </p>
-              <TextField
-                id="control-password"
-                label="Admin Password"
-                name="controlPassword"
-                type="password"
-                autoComplete="current-password"
-                value={controlPassword}
-                onChange={setControlPassword}
-              />
-              <div style={styles.actionWrap}>
-                <button className="ui-button ui-button--primary" style={styles.actionBtn} type="button" onClick={executeControl}>Confirm</button>
-                <button className="ui-button" style={styles.actionBtn} type="button" onClick={closeControlPopup}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        )}
       </main>
 
       {isPhone && (
@@ -2680,6 +2746,33 @@ const styles: Record<string, CSSProperties> = {
     gap: 8,
   },
   serviceName: { textTransform: 'capitalize', display: 'flex', alignItems: 'center', gap: 8 },
+  serviceControllerCard: {
+    position: 'relative',
+    display: 'grid',
+    gap: 10,
+  },
+  serviceLockOverlay: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 2,
+    display: 'grid',
+    alignContent: 'center',
+    gap: 10,
+    padding: 16,
+    background: 'rgba(17, 19, 21, 0.86)',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+  },
+  serviceLockBadge: {
+    width: 'fit-content',
+    padding: '4px 8px',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    background: THEME.panelRaised,
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: 600,
+  },
   dot: { width: 8, height: 8, borderRadius: '50%', display: 'inline-block' },
   actionWrap: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   actionBtn: {

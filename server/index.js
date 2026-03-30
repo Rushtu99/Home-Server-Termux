@@ -63,12 +63,20 @@ const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pi
 const TTYD_PID = process.env.TTYD_PID_PATH || path.join(RUNTIME_DIR, 'ttyd.pid');
 const FTP_PID = process.env.FTP_PID_PATH || path.join(RUNTIME_DIR, 'ftp.pid');
 const SSHD_PID = process.env.SSHD_PID_PATH || path.join(RUNTIME_DIR, 'sshd.pid');
+const COPYPARTY_PID = process.env.COPYPARTY_PID_PATH || path.join(RUNTIME_DIR, 'copyparty.pid');
+const SYNCTHING_PID = process.env.SYNCTHING_PID_PATH || path.join(RUNTIME_DIR, 'syncthing.pid');
+const SAMBA_PID = process.env.SAMBA_PID_PATH || path.join(RUNTIME_DIR, 'samba.pid');
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const PORT = Number(process.env.PORT || 4000);
 const BACKEND_BIND_HOST = process.env.BACKEND_BIND_HOST || '127.0.0.1';
 const TTYD_BIND_HOST = process.env.TTYD_BIND_HOST || '127.0.0.1';
 const FTP_BIND_HOST = process.env.FTP_BIND_HOST || '127.0.0.1';
+const COPYPARTY_BIND_HOST = process.env.COPYPARTY_BIND_HOST || '127.0.0.1';
+const SYNCTHING_GUI_BIND_HOST = process.env.SYNCTHING_GUI_BIND_HOST || '127.0.0.1';
 const FTP_SERVER_PORT = Number(process.env.FTP_SERVER_PORT || 2121);
+const COPYPARTY_PORT = Number(process.env.COPYPARTY_PORT || 3923);
+const SYNCTHING_GUI_PORT = Number(process.env.SYNCTHING_GUI_PORT || 8384);
+const SAMBA_PORT = Number(process.env.SAMBA_PORT || 445);
 const DEFAULT_PS4_FTP_NAME = process.env.DEFAULT_PS4_FTP_NAME || 'PS4';
 const DEFAULT_PS4_HOST = process.env.DEFAULT_PS4_HOST || '192.168.1.8';
 const DEFAULT_PS4_PORT = Number(process.env.DEFAULT_PS4_PORT || 2121);
@@ -81,6 +89,12 @@ const DRIVE_REFRESH_INTERVAL_MS = Math.max(60000, Number(process.env.DRIVE_REFRE
 const SSHD_BIND_HOST = process.env.SSHD_BIND_HOST || '127.0.0.1';
 const SSHD_PORT = Number(process.env.SSHD_PORT || 8022);
 const ENABLE_SSHD = process.env.ENABLE_SSHD === 'true';
+const COPYPARTY_BASE_PATH = process.env.COPYPARTY_BASE_PATH || '/copyparty';
+const SYNCTHING_BASE_PATH = process.env.SYNCTHING_BASE_PATH || '/syncthing';
+const SYNCTHING_HOME = process.env.SYNCTHING_HOME || path.join(RUNTIME_DIR, 'syncthing');
+const SAMBA_SERVICE_CMD = process.env.SAMBA_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'samba-service.sh');
+const COPYPARTY_SERVICE_CMD = process.env.COPYPARTY_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'copyparty-service.sh');
+const SYNCTHING_SERVICE_CMD = process.env.SYNCTHING_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'syncthing-service.sh');
 const BOOTSTRAP_DASHBOARD_USER = normalizeUsername(process.env.DASHBOARD_USER || 'admin') || 'admin';
 const BOOTSTRAP_DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
 const ADMIN_ACTION_PASSWORD = process.env.ADMIN_ACTION_PASSWORD || BOOTSTRAP_DASHBOARD_PASS;
@@ -195,6 +209,33 @@ const SERVICES = {
     port: FTP_SERVER_PORT,
     binary: 'python3',
   },
+  copyparty: {
+    start: `"${COPYPARTY_SERVICE_CMD}" start`,
+    stop: `"${COPYPARTY_SERVICE_CMD}" stop`,
+    restart: `"${COPYPARTY_SERVICE_CMD}" restart`,
+    check: `"${COPYPARTY_SERVICE_CMD}" status`,
+    host: COPYPARTY_BIND_HOST,
+    port: COPYPARTY_PORT,
+    binary: 'copyparty',
+  },
+  syncthing: {
+    start: `"${SYNCTHING_SERVICE_CMD}" start`,
+    stop: `"${SYNCTHING_SERVICE_CMD}" stop`,
+    restart: `"${SYNCTHING_SERVICE_CMD}" restart`,
+    check: `"${SYNCTHING_SERVICE_CMD}" status`,
+    host: SYNCTHING_GUI_BIND_HOST,
+    port: SYNCTHING_GUI_PORT,
+    binary: 'syncthing',
+  },
+  samba: {
+    start: `mkdir -p "${ROOT_DIR}/logs" "${RUNTIME_DIR}" && "${SAMBA_SERVICE_CMD}" start`,
+    stop: `"${SAMBA_SERVICE_CMD}" stop`,
+    restart: `"${SAMBA_SERVICE_CMD}" restart`,
+    check: `"${SAMBA_SERVICE_CMD}" status`,
+    host: '127.0.0.1',
+    port: SAMBA_PORT,
+    binary: 'smbd',
+  },
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -202,6 +243,7 @@ const SERVICES = {
 const debugEvents = [];
 const recentConnections = new Map();
 const activeSessions = new Map();
+const unlockedServiceControllers = new Map();
 const loginAttempts = new Map();
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 const MAX_DEBUG_EVENTS = 300;
@@ -221,6 +263,9 @@ const timedCache = {
 
 const ADMIN_ROLES = new Set(['admin']);
 const RECYCLE_BIN_NAME = '.recycle-bin';
+const OPTIONAL_SERVICE_NAMES = ['ftp', 'copyparty', 'syncthing', 'samba', 'sshd'];
+const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
+const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 
 eventLoopDelay.enable();
 
@@ -423,7 +468,9 @@ const getControlledServiceNames = async () => {
       continue;
     }
 
-    names.push(name);
+    if (OPTIONAL_SERVICE_SET.has(name)) {
+      names.push(name);
+    }
   }
 
   return names;
@@ -611,6 +658,7 @@ const invalidateSession = (sessionId) => {
   }
 
   activeSessions.delete(sessionId);
+  unlockedServiceControllers.delete(sessionId);
 };
 
 const invalidateSessionFromToken = (token) => {
@@ -1113,6 +1161,30 @@ const getLogsSnapshot = () => ({
   verboseLoggingEnabled,
 });
 
+const isServiceControllerUnlocked = (sessionId) => {
+  if (!sessionId) {
+    return false;
+  }
+
+  const expiresAt = unlockedServiceControllers.get(sessionId) || 0;
+  if (expiresAt <= Date.now()) {
+    unlockedServiceControllers.delete(sessionId);
+    return false;
+  }
+
+  return true;
+};
+
+const unlockServiceController = (sessionId) => {
+  if (!sessionId) {
+    return 0;
+  }
+
+  const expiresAt = Date.now() + SERVICE_UNLOCK_TTL_MS;
+  unlockedServiceControllers.set(sessionId, expiresAt);
+  return expiresAt;
+};
+
 const readJsonFile = (filePath, fallbackValue) => {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -1185,6 +1257,9 @@ const getDashboardSnapshot = async () => {
     connections: getConnectionsSnapshot(),
     networkDevices: getNetworkDevicesSnapshot(),
     storage,
+    serviceController: {
+      optionalServices: OPTIONAL_SERVICE_NAMES,
+    },
     logs: getLogsSnapshot(),
   };
 };
@@ -2120,7 +2195,42 @@ const servicesHandler = async (req, res) => {
   const result = await getServicesSnapshot();
 
   pushDebugEvent('info', 'Services snapshot served', { count: Object.keys(result).length });
-  res.json(result);
+  res.json({
+    controller: {
+      locked: !isServiceControllerUnlocked(req.session?.id),
+      optionalServices: OPTIONAL_SERVICE_NAMES,
+    },
+    services: result,
+  });
+};
+
+const controlUnlockHandler = (req, res) => {
+  const password = String(req.body?.adminPassword || '');
+  if (!password) {
+    return res.status(400).json({ error: 'Admin password is required' });
+  }
+
+  if (!secureCompare(password, ADMIN_ACTION_PASSWORD)) {
+    pushAuditEvent(req, 'warn', 'Service controller unlock rejected (bad admin password)');
+    return res.status(403).json({ error: 'Invalid admin password' });
+  }
+
+  const expiresAt = unlockServiceController(req.session?.id);
+  pushAuditEvent(req, 'info', 'Service controller unlocked', { expiresAt: new Date(expiresAt).toISOString() });
+  return res.json({
+    success: true,
+    locked: false,
+    expiresAt: new Date(expiresAt).toISOString(),
+  });
+};
+
+const controlLockHandler = (req, res) => {
+  if (req.session?.id) {
+    unlockedServiceControllers.delete(req.session.id);
+  }
+
+  pushAuditEvent(req, 'info', 'Service controller locked');
+  return res.json({ success: true, locked: true });
 };
 
 const controlHandler = async (req, res) => {
@@ -2135,7 +2245,19 @@ const controlHandler = async (req, res) => {
     return res.status(400).json({ error: 'Invalid action' });
   }
 
-  if (String(adminPassword || '').trim() && !secureCompare(adminPassword || '', ADMIN_ACTION_PASSWORD)) {
+  const providedPassword = String(adminPassword || '').trim();
+  const unlocked = isServiceControllerUnlocked(req.session?.id);
+
+  if (!unlocked) {
+    if (!providedPassword) {
+      return res.status(423).json({ error: 'Service controller is locked' });
+    }
+    if (!secureCompare(providedPassword, ADMIN_ACTION_PASSWORD)) {
+      pushAuditEvent(req, 'warn', 'Service control rejected (bad admin password)', { service, action });
+      return res.status(403).json({ error: 'Invalid admin password' });
+    }
+    unlockServiceController(req.session?.id);
+  } else if (providedPassword && !secureCompare(providedPassword, ADMIN_ACTION_PASSWORD)) {
     pushAuditEvent(req, 'warn', 'Service control rejected (bad admin password)', { service, action });
     return res.status(403).json({ error: 'Invalid admin password' });
   }
@@ -2781,6 +2903,10 @@ app.get('/services', requireAuth, requireAdmin, servicesHandler);
 app.get('/api/services', requireAuth, requireAdmin, servicesHandler);
 
 // Control services
+app.post('/control/unlock', requireAuth, requireAdmin, controlUnlockHandler);
+app.post('/api/control/unlock', requireAuth, requireAdmin, controlUnlockHandler);
+app.post('/control/lock', requireAuth, requireAdmin, controlLockHandler);
+app.post('/api/control/lock', requireAuth, requireAdmin, controlLockHandler);
 app.post('/control', requireAuth, requireAdmin, controlHandler);
 app.post('/api/control', requireAuth, requireAdmin, controlHandler);
 

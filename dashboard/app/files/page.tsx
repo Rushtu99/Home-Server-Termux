@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
 
 const API = '/api';
@@ -844,6 +845,9 @@ export default function FilesPage() {
           <p>Drives, shares, and local transfers.</p>
         </div>
         <div className="tool-toolbar__actions">
+          <Link href="/?tab=home" className="ui-button">
+            Home
+          </Link>
           {!driveAccessDenied ? (
             <button className="ui-button ui-button--primary" type="button" onClick={runManualCheck} disabled={manualBusy}>
               {manualBusy ? 'Checking…' : 'Check Drives'}
