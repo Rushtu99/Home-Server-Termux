@@ -2,6 +2,8 @@
 
 import type { CSSProperties, FormEvent, InputHTMLAttributes, ReactNode } from 'react';
 import { startTransition, useEffect, useRef, useState } from 'react';
+import { appFetch, getDemoTerminalLines } from './demo-api';
+import { isDemoMode } from './demo-mode';
 import { useGatewayBase } from './useGatewayBase';
 
 const API = process.env.NEXT_PUBLIC_API || '/api';
@@ -355,6 +357,7 @@ const describeFtpMount = (mount?: FtpMountState | null) => {
 };
 
 export default function Dashboard() {
+  const demoMode = isDemoMode();
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('desktop');
   const [authChecked, setAuthChecked] = useState(false);
@@ -425,7 +428,7 @@ export default function Dashboard() {
 
   const clearSession = (message = '') => {
     if (typeof window !== 'undefined') {
-      void fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+      void appFetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
     }
 
     if (!mountedRef.current) {
@@ -482,12 +485,12 @@ export default function Dashboard() {
   };
 
   const authFetch = (path: string, init: RequestInit = {}) =>
-    fetch(path, { ...init, credentials: init.credentials || 'include' });
+    appFetch(path, { ...init, credentials: init.credentials || 'include' });
 
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const res = await fetch(`${API}/auth/me`, { credentials: 'include' });
+        const res = await appFetch(`${API}/auth/me`, { credentials: 'include' });
 
         if (!mountedRef.current) {
           return;
@@ -1028,7 +1031,7 @@ export default function Dashboard() {
     setAuthBusy(true);
 
     try {
-      const res = await fetch(`${API}/auth/login`, {
+      const res = await appFetch(`${API}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -1802,6 +1805,7 @@ export default function Dashboard() {
             path="/term/"
             gatewayBase={gatewayBase}
             isCompact={isCompact}
+            demoMode={demoMode}
           />
         )}
 
@@ -2431,6 +2435,7 @@ function EmbeddedToolPanel({
   path,
   gatewayBase,
   isCompact,
+  demoMode,
 }: {
   title: string;
   subtitle: string;
@@ -2438,6 +2443,7 @@ function EmbeddedToolPanel({
   path: string;
   gatewayBase: string;
   isCompact: boolean;
+  demoMode: boolean;
 }) {
   const frameSrc = gatewayBase ? `${gatewayBase}${path}` : '';
 
@@ -2452,7 +2458,11 @@ function EmbeddedToolPanel({
           <span style={styles.smallLabel}>Resolving gateway…</span>
         )}
       </div>
-      {gatewayBase ? (
+      {demoMode ? (
+        <div style={{ ...styles.framePlaceholder, ...(isCompact ? styles.frameCompact : {}) }} role="img" aria-label="Demo terminal output">
+          <pre style={styles.demoTerminal}>{getDemoTerminalLines().join('\n')}</pre>
+        </div>
+      ) : gatewayBase ? (
         <iframe title={frameTitle} src={frameSrc} style={{ ...styles.frame, ...(isCompact ? styles.frameCompact : {}) }} />
       ) : (
         <div style={styles.framePlaceholder} role="status" aria-live="polite">
@@ -2861,6 +2871,20 @@ const styles: Record<string, CSSProperties> = {
     placeItems: 'center',
     padding: 24,
     textAlign: 'center',
+  },
+  demoTerminal: {
+    margin: 0,
+    width: '100%',
+    minHeight: 300,
+    padding: 20,
+    overflowX: 'auto',
+    borderRadius: 8,
+    background: '#101314',
+    color: '#dfe7d7',
+    fontFamily: 'var(--font-geist-mono), monospace',
+    fontSize: 13,
+    lineHeight: 1.6,
+    textAlign: 'left',
   },
   panelActions: { marginBottom: 10 },
   sectionHeader: {

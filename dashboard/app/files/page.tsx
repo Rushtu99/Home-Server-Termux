@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
+import { appFetch, createDemoDownloadUrl } from '../demo-api';
+import { isDemoMode } from '../demo-mode';
 
 const API = '/api';
 
@@ -261,6 +263,7 @@ const getShareUserPermissionMap = (share: ShareRecord | null): Record<string, 'i
 };
 
 export default function FilesPage() {
+  const demoMode = isDemoMode();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const menuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [driveState, setDriveState] = useState<DrivePayload>(EMPTY_PAYLOAD);
@@ -289,7 +292,7 @@ export default function FilesPage() {
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
   const loadDriveState = async () => {
-    const res = await fetch(`${API}/drives`, { credentials: 'include' });
+    const res = await appFetch(`${API}/drives`, { credentials: 'include' });
     if (res.status === 403) {
       setDriveAccessDenied(true);
       return EMPTY_PAYLOAD;
@@ -303,7 +306,7 @@ export default function FilesPage() {
   };
 
   const loadShares = async () => {
-    const res = await fetch(`${API}/shares`, { credentials: 'include' });
+    const res = await appFetch(`${API}/shares`, { credentials: 'include' });
     if (res.status === 403) {
       setShareAdminAvailable(false);
       setShareInventory([]);
@@ -321,7 +324,7 @@ export default function FilesPage() {
   };
 
   const loadUsers = async () => {
-    const res = await fetch(`${API}/users`, { credentials: 'include' });
+    const res = await appFetch(`${API}/users`, { credentials: 'include' });
     if (res.status === 403) {
       setUsersInventory([]);
       return [];
@@ -352,7 +355,7 @@ export default function FilesPage() {
       }
 
       const suffix = query.toString() ? `?${query.toString()}` : '';
-      const res = await fetch(`${API}/fs/list${suffix}`, { credentials: 'include' });
+      const res = await appFetch(`${API}/fs/list${suffix}`, { credentials: 'include' });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(String(payload?.error || (res.status === 401 ? 'Login required to read files' : 'Unable to load files')));
@@ -459,7 +462,7 @@ export default function FilesPage() {
   const runManualCheck = async () => {
     setManualBusy(true);
     try {
-      const res = await fetch(`${API}/drives/check`, {
+      const res = await appFetch(`${API}/drives/check`, {
         method: 'POST',
         credentials: 'include',
       });
@@ -487,7 +490,7 @@ export default function FilesPage() {
   };
 
   const runFsCommand = async (endpoint: string, body: Record<string, unknown>) => {
-    const res = await fetch(`${API}${endpoint}`, {
+    const res = await appFetch(`${API}${endpoint}`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -561,7 +564,7 @@ export default function FilesPage() {
 
     try {
       if (browser.path === '') {
-        const res = await fetch(`${API}/shares`, {
+        const res = await appFetch(`${API}/shares`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -590,7 +593,7 @@ export default function FilesPage() {
     setShareBusy(true);
     setShareStatus('');
     try {
-      const res = await fetch(`${API}/shares/${selectedShare.id}`, {
+      const res = await appFetch(`${API}/shares/${selectedShare.id}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -678,7 +681,13 @@ export default function FilesPage() {
       return;
     }
 
-    window.open(`${API}/fs/download?path=${encodeURIComponent(entry.path)}`, '_blank', 'noopener,noreferrer');
+    window.open(
+      demoMode
+        ? createDemoDownloadUrl(entry.path)
+        : `${API}/fs/download?path=${encodeURIComponent(entry.path)}`,
+      '_blank',
+      'noopener,noreferrer'
+    );
   };
 
   const setClipboardFromEntries = (entries: FsEntry[], mode: 'copy' | 'move') => {
@@ -775,7 +784,7 @@ export default function FilesPage() {
         name: file.name,
         path: browser.path,
       });
-      const res = await fetch(`${API}/fs/upload?${params.toString()}`, {
+      const res = await appFetch(`${API}/fs/upload?${params.toString()}`, {
         method: 'POST',
         credentials: 'include',
         headers: {

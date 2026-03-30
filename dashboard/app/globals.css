@@ -241,6 +241,27 @@ select {
   background: #121519;
 }
 
+.tool-frame--mock {
+  min-height: calc(100dvh - 162px);
+  height: auto;
+  padding: 18px;
+  background: #121519;
+}
+
+.tool-frame__terminal-copy {
+  margin: 0;
+  width: 100%;
+  min-height: calc(100dvh - 198px);
+  overflow-x: auto;
+  border-radius: 10px;
+  padding: 18px;
+  background: #101314;
+  color: #dfe7d7;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .tool-empty {
   min-height: 52dvh;
   display: grid;
