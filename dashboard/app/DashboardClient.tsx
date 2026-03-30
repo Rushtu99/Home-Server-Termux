@@ -1105,6 +1105,8 @@ export default function Dashboard() {
     .filter((entry) => entry.items.length > 0);
   const mediaServices = serviceSurfaceEntries('media');
   const arrServices = serviceSurfaceEntries('arr');
+  const mediaHealthyCount = mediaServices.filter((entry) => entry.status === 'working').length;
+  const arrHealthyCount = arrServices.filter((entry) => entry.status === 'working').length;
   const optionalServiceEntries = optionalServices
     .map((name) => serviceCatalogByKey.get(name))
     .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
@@ -1139,6 +1141,8 @@ export default function Dashboard() {
       ? THEME.crimsonRed
       : THEME.ok;
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
+  const mountedFtpFavourites = ftpFavourites.filter((favourite) => favourite.mount?.mounted).length;
+  const terminalService = serviceCatalogByKey.get('ttyd') || null;
 
   const navButtonLabel = (tab: TabKey) => {
     if (!isTablet) {
@@ -1967,6 +1971,7 @@ export default function Dashboard() {
           <EmbeddedToolPanel
             title="Terminal"
             subtitle="Interactive shell via ttyd."
+            meta={[terminalService ? `ttyd ${terminalService.status}` : 'ttyd status unknown']}
             frameTitle="Embedded Terminal"
             path="/term/"
             gatewayBase={gatewayBase}
@@ -1976,7 +1981,11 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'filesystem' && (
-          <Panel title="Filesystem" subtitle="Drive state, drive health, and a direct path into the full workspace.">
+          <Panel
+            title="Filesystem"
+            subtitle="Drive state, drive health, and a direct path into the full workspace."
+            meta={[filesystemStatus, `${dashboardShares.length} shortcuts`]}
+          >
             <div style={{ ...styles.homeLayout, ...(isCompact ? styles.homeLayoutCompact : {}) }}>
               <div style={styles.homePrimary}>
                 <article style={styles.card}>
@@ -2076,7 +2085,11 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'media' && (
-          <Panel title="Media">
+          <Panel
+            title="Media"
+            subtitle="Streaming, downloads, requests, and media-side infrastructure."
+            meta={[`${mediaHealthyCount}/${mediaServices.length} healthy`, `${storage.find((entry) => entry.category === 'media') ? 'Media storage online' : 'Media storage unknown'}`]}
+          >
             <div style={styles.surfaceStack}>
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
@@ -2084,7 +2097,7 @@ export default function Dashboard() {
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
                     <p style={styles.smallLabel}>Requests move through downloads into the library and then into playback clients.</p>
                   </div>
-                  <span style={styles.headerPill}>{mediaServices.filter((entry) => entry.status === 'working').length}/{mediaServices.length} healthy</span>
+                  <span style={styles.headerPill}>{mediaHealthyCount}/{mediaServices.length} healthy</span>
                 </div>
                 {renderWorkflowStrip('media')}
               </article>
@@ -2105,7 +2118,11 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'arr' && (
-          <Panel title="ARR">
+          <Panel
+            title="ARR"
+            subtitle="Indexer, discovery, and automation services for the media pipeline."
+            meta={[`${arrHealthyCount}/${arrServices.length} healthy`, `${arrServices.filter((entry) => entry.placeholder).length} placeholders`]}
+          >
             <div style={styles.surfaceStack}>
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
@@ -2113,7 +2130,7 @@ export default function Dashboard() {
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
                     <p style={styles.smallLabel}>Indexer management, discovery, and download handoff stay visible in one strip.</p>
                   </div>
-                  <span style={styles.headerPill}>{arrServices.filter((entry) => entry.status === 'working').length}/{arrServices.length} healthy</span>
+                  <span style={styles.headerPill}>{arrHealthyCount}/{arrServices.length} healthy</span>
                 </div>
                 {renderWorkflowStrip('arr')}
               </article>
@@ -2134,7 +2151,11 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'ftp' && (
-          <Panel title="FTP" subtitle="Save remotes, browse them directly, and mount them into ~/Drives when this host allows it.">
+          <Panel
+            title="FTP"
+            subtitle="Save remotes, browse them directly, and mount them into ~/Drives when this host allows it."
+            meta={[`${ftpFavourites.length} favourites`, `${mountedFtpFavourites} mounted`]}
+          >
             <div style={{ ...styles.ftpWorkspace, ...(isCompact ? styles.ftpWorkspaceCompact : {}) }}>
               <div style={styles.ftpSidebar}>
                 <div style={styles.card}>
@@ -2433,23 +2454,35 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'settings' && (
-          <Panel title="Settings" subtitle="Session, logging, and diagnostics controls.">
-            <div style={styles.card}>
-              <h3 style={styles.cardTitle}>Session</h3>
-              <p style={styles.smallLabel}>Signed in as <strong>{sessionUser?.username || 'unknown'}</strong> with role <strong>{sessionUser?.role || 'user'}</strong>. Session access is cookie-based and invalidates on logout or timeout.</p>
-              <div style={styles.actionWrap}>
-                <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
+          <Panel
+            title="Settings"
+            subtitle="Session, logging, and diagnostics controls."
+            meta={[`Signed in as ${sessionUser?.username || 'unknown'}`, `Role: ${sessionUser?.role || 'user'}`]}
+          >
+            <div style={styles.surfaceStack}>
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Session</h3>
+                <p style={styles.smallLabel}>Session access is cookie-based and invalidates on logout or timeout.</p>
+                <div style={styles.actionWrap}>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
+                </div>
               </div>
 
-              <h3 style={{ ...styles.cardTitle, marginTop: 16 }}>Logging</h3>
-              <div style={styles.actionWrap}>
-                <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(true)}>Enable Verbose</button>
-                <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(false)}>Disable Verbose</button>
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Logging</h3>
+                <p style={styles.smallLabel}>Verbose mode keeps richer audit and service transition entries in the dashboard log.</p>
+                <div style={styles.actionWrap}>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(true)}>Enable Verbose</button>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(false)}>Disable Verbose</button>
+                </div>
               </div>
 
               {sessionUser?.role === 'admin' ? (
-                <>
-                  <h3 style={{ ...styles.cardTitle, marginTop: 16 }}>Users</h3>
+                <div style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Users</h3>
+                    <span style={styles.smallLabel}>{managedUsers.length} managed users</span>
+                  </div>
                   <div style={styles.tableWrap}>
                     <table style={styles.table}>
                       <thead>
@@ -2558,7 +2591,7 @@ export default function Dashboard() {
                     </button>
                   </div>
                   {userStatus ? <p style={{ ...styles.smallLabel, color: userStatus.toLowerCase().includes('unable') || userStatus.toLowerCase().includes('error') ? THEME.crimsonRed : THEME.ok }}>{userStatus}</p> : null}
-                </>
+                </div>
               ) : null}
             </div>
           </Panel>
@@ -2655,6 +2688,7 @@ function Progress({ label, value }: { label: string; value: number }) {
 function EmbeddedToolPanel({
   title,
   subtitle,
+  meta = [],
   frameTitle,
   path,
   gatewayBase,
@@ -2663,6 +2697,7 @@ function EmbeddedToolPanel({
 }: {
   title: string;
   subtitle?: string;
+  meta?: string[];
   frameTitle: string;
   path: string;
   gatewayBase: string;
@@ -2672,16 +2707,18 @@ function EmbeddedToolPanel({
   const frameSrc = gatewayBase ? `${gatewayBase}${path}` : '';
 
   return (
-    <Panel title={title} subtitle={subtitle}>
-      <div style={styles.panelActions}>
-        {gatewayBase ? (
-          <a href={frameSrc} target="_blank" rel="noreferrer" className="ui-button" style={styles.linkBtn}>
-            Open In New Tab
-          </a>
-        ) : (
-          <span style={styles.smallLabel}>Resolving gateway…</span>
-        )}
-      </div>
+    <Panel
+      title={title}
+      subtitle={subtitle}
+      meta={meta}
+      action={gatewayBase ? (
+        <a href={frameSrc} target="_blank" rel="noreferrer" className="ui-button" style={styles.linkBtn}>
+          Open In New Tab
+        </a>
+      ) : (
+        <span style={styles.smallLabel}>Resolving gateway…</span>
+      )}
+    >
       {demoMode ? (
         <div style={{ ...styles.framePlaceholder, ...(isCompact ? styles.frameCompact : {}) }} role="img" aria-label="Demo terminal output">
           <pre style={styles.demoTerminal}>{getDemoTerminalLines().join('\n')}</pre>
@@ -2697,11 +2734,39 @@ function EmbeddedToolPanel({
   );
 }
 
-function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+function Panel({
+  title,
+  subtitle,
+  meta = [],
+  action,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  meta?: string[];
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div>
-      <h1 style={styles.title}>{title}</h1>
-      {subtitle ? <p style={styles.panelSubtitle}>{subtitle}</p> : null}
+      <div style={styles.pageHeader}>
+        <div style={styles.pageHeaderCopy}>
+          <h1 style={styles.title}>{title}</h1>
+          {subtitle ? <p style={styles.panelSubtitle}>{subtitle}</p> : null}
+        </div>
+        {(meta.length > 0 || action) ? (
+          <div style={styles.pageHeaderSide}>
+            {meta.length > 0 ? (
+              <div style={styles.headerMeta}>
+                {meta.map((item) => (
+                  <span key={item} style={styles.headerPill}>{item}</span>
+                ))}
+              </div>
+            ) : null}
+            {action ? <div style={styles.pageHeaderAction}>{action}</div> : null}
+          </div>
+        ) : null}
+      </div>
       {children}
     </div>
   );
@@ -2875,6 +2940,30 @@ const styles: Record<string, CSSProperties> = {
   mainPhone: { padding: 16, overflowY: 'visible' },
   title: { margin: '0 0 4px', fontSize: 24, fontWeight: 700, color: THEME.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   panelSubtitle: { margin: '0 0 16px', color: THEME.muted, fontSize: 12, maxWidth: 680, overflowWrap: 'anywhere' },
+  pageHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+    flexWrap: 'wrap',
+    marginBottom: 16,
+  },
+  pageHeaderCopy: {
+    minWidth: 0,
+    flex: '1 1 420px',
+  },
+  pageHeaderSide: {
+    display: 'grid',
+    justifyItems: 'end',
+    gap: 10,
+    minWidth: 0,
+  },
+  pageHeaderAction: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
   headerBar: {
     display: 'flex',
     justifyContent: 'space-between',
