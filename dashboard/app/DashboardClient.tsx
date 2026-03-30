@@ -75,6 +75,41 @@ type DebugLog = {
   meta?: unknown;
 };
 
+type DriveEntry = {
+  device: string;
+  dirName: string;
+  error: string;
+  filesystem: string;
+  letter: string;
+  mountPoint: string;
+  name: string;
+  state: string;
+  uuid: string;
+};
+
+type DriveEvent = {
+  timestamp: string;
+  level: string;
+  event: string;
+  error?: string;
+  letter?: string;
+  mountPoint?: string;
+  name?: string;
+  filesystem?: string;
+};
+
+type DrivePayload = {
+  agentInstalled: boolean;
+  checkedAt: string | null;
+  events: DriveEvent[];
+  manifest: {
+    generatedAt: string | null;
+    intervalMs: number;
+    drives: DriveEntry[];
+  };
+  refreshIntervalMs: number;
+};
+
 type FtpEntry = {
   name: string;
   type: 'file' | 'directory';
@@ -173,6 +208,20 @@ type ControlTarget = {
   action: string;
 } | null;
 
+type LayoutMode = 'desktop' | 'tablet' | 'mobile';
+
+const EMPTY_DRIVE_PAYLOAD: DrivePayload = {
+  agentInstalled: false,
+  checkedAt: null,
+  events: [],
+  manifest: {
+    generatedAt: null,
+    intervalMs: 60000,
+    drives: [],
+  },
+  refreshIntervalMs: 60000,
+};
+
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'home', label: 'Dashboard' },
   { key: 'terminal', label: 'Terminal' },
@@ -208,6 +257,36 @@ const fmtTime = (iso: string) => {
 
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
+
+const fmtDateTime = (iso?: string | null) => {
+  if (!iso) {
+    return '--';
+  }
+
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return '--';
+  }
+
+  return d.toLocaleString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
+const normalizeDrivePayload = (payload: Partial<DrivePayload> | null | undefined): DrivePayload => ({
+  agentInstalled: Boolean(payload?.agentInstalled),
+  checkedAt: typeof payload?.checkedAt === 'string' ? payload.checkedAt : null,
+  events: Array.isArray(payload?.events) ? payload.events : [],
+  manifest: {
+    generatedAt: typeof payload?.manifest?.generatedAt === 'string' ? payload.manifest.generatedAt : null,
+    intervalMs: Math.max(60000, Number(payload?.manifest?.intervalMs || payload?.refreshIntervalMs || 60000) || 60000),
+    drives: Array.isArray(payload?.manifest?.drives) ? payload.manifest.drives : [],
+  },
+  refreshIntervalMs: Math.max(60000, Number(payload?.refreshIntervalMs || payload?.manifest?.intervalMs || 60000) || 60000),
+});
 
 const joinRemotePath = (basePath: string, child: string) => {
   const parts = `${basePath === '/' ? '' : basePath}/${child}`
@@ -279,7 +358,7 @@ const describeFtpMount = (mount?: FtpMountState | null) => {
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
-  const [isCompact, setIsCompact] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('desktop');
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -321,18 +400,28 @@ export default function Dashboard() {
   const [ftpFavouriteDraft, setFtpFavouriteDraft] = useState<FtpFavouriteDraft>(() => createFtpFavouriteDraft());
   const [ftpEditingFavouriteId, setFtpEditingFavouriteId] = useState<number | null>(null);
   const [ftpActiveFavouriteId, setFtpActiveFavouriteId] = useState<number | null>(null);
-  const [ftpEntryMenuKey, setFtpEntryMenuKey] = useState<string | null>(null);
+  const [ftpEntryMenuState, setFtpEntryMenuState] = useState<{ key: string; upward: boolean } | null>(null);
+  const [ftpSearch, setFtpSearch] = useState('');
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [usersBusy, setUsersBusy] = useState(false);
   const [userStatus, setUserStatus] = useState('');
   const [userDraft, setUserDraft] = useState<UserDraft>(() => createUserDraft());
+  const [driveState, setDriveState] = useState<DrivePayload>(EMPTY_DRIVE_PAYLOAD);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveError, setDriveError] = useState('');
+  const [showDriveLog, setShowDriveLog] = useState(false);
+  const [dashboardShares, setDashboardShares] = useState<Array<{ id: number; name: string; pathKey: string; sourceType: string }>>([]);
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
+  const ftpMenuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const fetchInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const tabSyncReadyRef = useRef(false);
   const gatewayBase = useGatewayBase();
+  const isCompact = layoutMode !== 'desktop';
+  const isPhone = layoutMode === 'mobile';
+  const isTablet = layoutMode === 'tablet';
 
   const clearSession = (message = '') => {
     if (typeof window !== 'undefined') {
@@ -364,6 +453,8 @@ export default function Dashboard() {
     setFtpEditingFavouriteId(null);
     setFtpActiveFavouriteId(null);
     setFtpEntries([]);
+    setFtpEntryMenuState(null);
+    setFtpSearch('');
     setFtpPath('/');
     setFtpStatus('');
     setFtpHost('');
@@ -378,6 +469,11 @@ export default function Dashboard() {
     setManagedUsers([]);
     setUserStatus('');
     setUserDraft(createUserDraft());
+    setDriveState(EMPTY_DRIVE_PAYLOAD);
+    setDriveBusy(false);
+    setDriveError('');
+    setShowDriveLog(false);
+    setDashboardShares([]);
     setAuthError(message);
   };
 
@@ -429,7 +525,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     const updateLayout = () => {
-      setIsCompact(window.innerWidth < 980);
+      const width = window.innerWidth;
+      setLayoutMode(width < 760 ? 'mobile' : width < 1200 ? 'tablet' : 'desktop');
     };
     updateLayout();
     window.addEventListener('resize', updateLayout);
@@ -567,6 +664,82 @@ export default function Dashboard() {
     }
   };
 
+  const loadDriveConsole = async () => {
+    if (!isAuthed) {
+      return;
+    }
+
+    setDriveBusy(true);
+    try {
+      const [driveRes, shareRes] = await Promise.all([
+        authFetch(`${API}/drives`),
+        authFetch(`${API}/shares`),
+      ]);
+
+      if (driveRes.status === 401 || shareRes.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!driveRes.ok) {
+        const payload = await driveRes.json().catch(() => ({}));
+        setDriveError(String(payload?.error || 'Unable to load drive state'));
+      } else {
+        const payload = await driveRes.json().catch(() => ({}));
+        setDriveState(normalizeDrivePayload(payload));
+        setDriveError('');
+      }
+
+      if (shareRes.ok) {
+        const sharePayload = await shareRes.json().catch(() => ({}));
+        setDashboardShares(Array.isArray(sharePayload?.shares)
+          ? sharePayload.shares.map((entry: { id?: number; name?: string; pathKey?: string; sourceType?: string }) => ({
+              id: Number(entry?.id || 0),
+              name: String(entry?.name || ''),
+              pathKey: String(entry?.pathKey || ''),
+              sourceType: String(entry?.sourceType || 'folder'),
+            }))
+          : []);
+      } else {
+        setDashboardShares([]);
+      }
+    } catch {
+      setDriveError('Unable to load drive state');
+    } finally {
+      if (mountedRef.current) {
+        setDriveBusy(false);
+      }
+    }
+  };
+
+  const runDriveCheck = async () => {
+    setDriveBusy(true);
+    setDriveError('');
+    try {
+      const res = await authFetch(`${API}/drives/check`, { method: 'POST' });
+      const payload = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!res.ok) {
+        setDriveError(String(payload?.error || 'Drive check failed'));
+        return;
+      }
+
+      setDriveState(normalizeDrivePayload(payload));
+      await loadDriveConsole();
+    } catch {
+      setDriveError('Drive check failed');
+    } finally {
+      if (mountedRef.current) {
+        setDriveBusy(false);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!isAuthed || activeTab !== 'settings' || sessionUser?.role !== 'admin') {
       return;
@@ -576,7 +749,7 @@ export default function Dashboard() {
   }, [activeTab, isAuthed, sessionUser?.role]);
 
   useEffect(() => {
-    setFtpEntryMenuKey(null);
+    setFtpEntryMenuState(null);
   }, [ftpPath]);
 
   useEffect(() => {
@@ -602,6 +775,14 @@ export default function Dashboard() {
   useEffect(() => {
     drawTrend(ramCanvas.current, ramHistory, THEME.brightYellow, 'rgba(255,228,77,0.14)');
   }, [ramHistory]);
+
+  useEffect(() => {
+    if (!isAuthed || activeTab !== 'filesystem') {
+      return;
+    }
+
+    void loadDriveConsole();
+  }, [activeTab, isAuthed, sessionUser?.role]);
 
   const applyDashboardPayload = (payload: DashboardPayload) => {
     setServices(payload.services || {});
@@ -723,6 +904,17 @@ export default function Dashboard() {
   const totalStorage = storage.reduce((sum, mount) => sum + mount.size, 0);
   const usedStorage = storage.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
+  const driveCount = driveState.manifest.drives.length;
+  const filesystemStatus = !driveState.agentInstalled
+    ? 'Drive agent missing'
+    : driveCount > 0
+      ? `${driveCount} removable drives mounted`
+      : 'Only C is present';
+  const latestDriveEvent = driveState.events[0] || null;
+  const ftpBreadcrumbs = ftpPath.split('/').filter(Boolean);
+  const filteredFtpEntries = ftpSearch.trim()
+    ? ftpEntries.filter((entry) => entry.name.toLowerCase().includes(ftpSearch.trim().toLowerCase()))
+    : ftpEntries;
   const controlStatusColor = !controlStatus
     ? THEME.muted
     : controlStatus.includes('succeeded')
@@ -734,6 +926,26 @@ export default function Dashboard() {
       ? THEME.crimsonRed
       : THEME.ok;
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
+  const navButtonLabel = (tab: TabKey) => {
+    if (!isTablet) {
+      return TABS.find((entry) => entry.key === tab)?.label || tab;
+    }
+
+    switch (tab) {
+      case 'home':
+        return 'Home';
+      case 'terminal':
+        return 'Term';
+      case 'filesystem':
+        return 'Files';
+      case 'ftp':
+        return 'FTP';
+      case 'settings':
+        return 'Prefs';
+      default:
+        return tab;
+    }
+  };
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1155,7 +1367,7 @@ export default function Dashboard() {
         return;
       }
 
-      setFtpEntryMenuKey(null);
+      setFtpEntryMenuState(null);
       setFtpStatus(`${payload.entryType === 'directory' ? 'Directory' : 'File'} saved to ${payload.localPath}`);
     } catch {
       setFtpStatus('Download failed');
@@ -1167,8 +1379,15 @@ export default function Dashboard() {
   const setUploadTargetFromEntry = (entry: FtpEntry) => {
     const remotePath = joinRemotePath(ftpPath, entry.name);
     setFtpUploadRemotePath(entry.type === 'directory' ? `${remotePath}/` : remotePath);
-    setFtpEntryMenuKey(null);
+    setFtpEntryMenuState(null);
     setFtpStatus(`Upload target set to ${entry.type === 'directory' ? `${remotePath}/` : remotePath}`);
+  };
+
+  const openFtpEntryMenu = (menuKey: string) => {
+    const trigger = ftpMenuButtonRefs.current[menuKey];
+    const rect = trigger?.getBoundingClientRect();
+    const upward = rect ? rect.bottom > window.innerHeight - 180 : false;
+    setFtpEntryMenuState((current) => current?.key === menuKey ? null : { key: menuKey, upward });
   };
 
   const uploadToFtp = async () => {
@@ -1298,40 +1517,41 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ ...styles.app, ...(isCompact ? styles.appCompact : {}) }}>
-      <aside style={{ ...styles.sidebar, ...(isCompact ? styles.sidebarCompact : {}) }}>
-        <div style={styles.brand}>HmSTx</div>
-        <nav aria-label="Dashboard Sections" style={{ ...styles.navGroup, ...(isCompact ? styles.navGroupCompact : {}) }}>
-          {TABS.map((tab) => (
-            <button
-              key={tab.key}
-              className="ui-button"
-              aria-pressed={activeTab === tab.key}
-              style={{ ...styles.navBtn, ...(activeTab === tab.key ? styles.navBtnActive : {}), ...(isCompact ? styles.navBtnCompact : {}) }}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-        <button
-          className="ui-button"
-          style={{ ...styles.navBtn, ...styles.logoutBtn, ...(isCompact ? styles.navBtnCompact : {}) }}
-          type="button"
-          onClick={() => clearSession()}
-        >
-          Log Out
-        </button>
-      </aside>
+    <div style={{ ...styles.app, ...(isPhone ? styles.appPhone : {}), ...(isTablet ? styles.appTablet : {}) }}>
+      {!isPhone && (
+        <aside style={{ ...styles.sidebar, ...(isTablet ? styles.sidebarTablet : {}) }}>
+          <div style={styles.brand}>{isTablet ? 'HS' : 'Home Server'}</div>
+          <nav aria-label="Dashboard Sections" style={{ ...styles.navGroup, ...(isTablet ? styles.navGroupTablet : {}) }}>
+            {TABS.map((tab) => (
+              <button
+                key={tab.key}
+                className="ui-button"
+                aria-pressed={activeTab === tab.key}
+                style={{ ...styles.navBtn, ...(activeTab === tab.key ? styles.navBtnActive : {}), ...(isTablet ? styles.navBtnTablet : {}) }}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+              >
+                {navButtonLabel(tab.key)}
+              </button>
+            ))}
+          </nav>
+          <button
+            className="ui-button"
+            style={{ ...styles.navBtn, ...styles.logoutBtn, ...(isTablet ? styles.navBtnTablet : {}) }}
+            type="button"
+            onClick={() => clearSession()}
+          >
+            {isTablet ? 'Exit' : 'Log Out'}
+          </button>
+        </aside>
+      )}
 
-      <main id="app-main" style={{ ...styles.main, ...(isCompact ? styles.mainCompact : {}) }}>
+      <main id="app-main" style={{ ...styles.main, ...(isTablet ? styles.mainTablet : {}), ...(isPhone ? styles.mainPhone : {}) }}>
         {activeTab === 'home' && (
           <div>
             <div style={styles.headerBar}>
               <div>
-                <h1 style={styles.title}>Server</h1>
-                <p style={styles.smallLabel}>Runtime, drives, services, and live telemetry.</p>
+                <h1 style={styles.title}>Server overview</h1>
               </div>
               <div style={styles.headerMeta}>
                 <span style={styles.headerPill}>{lastUpdated ? `Updated ${lastUpdated}` : 'Waiting for telemetry'}</span>
@@ -1484,14 +1704,103 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'filesystem' && (
-          <EmbeddedToolPanel
-            title="Filesystem"
-            subtitle="Drive state, manual checks, and the embedded FileBrowser."
-            frameTitle="Embedded File Manager"
-            path="/files"
-            gatewayBase={gatewayBase}
-            isCompact={isCompact}
-          />
+          <Panel title="Filesystem" subtitle="Drive state, drive health, and a direct path into the full workspace.">
+            <div style={{ ...styles.homeLayout, ...(isCompact ? styles.homeLayoutCompact : {}) }}>
+              <div style={styles.homePrimary}>
+                <article style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Drive Summary</h3>
+                      <p style={styles.smallLabel}>{filesystemStatus}</p>
+                    </div>
+                    <div style={styles.actionWrap}>
+                      <button className="ui-button" style={styles.actionBtn} type="button" disabled={driveBusy} onClick={() => void runDriveCheck()}>
+                        {driveBusy ? 'Checking…' : 'Check Drives'}
+                      </button>
+                      {gatewayBase ? (
+                        <a href={`${gatewayBase}/files`} className="ui-button ui-button--primary" style={styles.linkBtn}>
+                          Open Full Filesystem
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div style={styles.mountList}>
+                    <div style={styles.mountRow}>
+                      <div style={styles.mountLeft}>
+                        <strong>C</strong>
+                        <p style={styles.mountMeta}>Internal storage</p>
+                      </div>
+                      <div style={styles.mountRight}>
+                        <span>Always mounted</span>
+                        <span style={styles.mountMeta}>Shared Android storage</span>
+                      </div>
+                    </div>
+                    {driveState.manifest.drives.map((drive) => (
+                      <div key={`${drive.device}-${drive.mountPoint}`} style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>{drive.dirName || `${drive.letter} (${drive.name})`}</strong>
+                          <p style={styles.mountMeta}>{drive.mountPoint}</p>
+                        </div>
+                        <div style={styles.mountRight}>
+                          <span>{drive.state}</span>
+                          <span style={styles.mountMeta}>{drive.filesystem || 'drive'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {driveError ? <p style={{ ...styles.smallLabel, color: THEME.crimsonRed, marginTop: 12 }}>{driveError}</p> : null}
+                </article>
+
+                <article style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Quick Links</h3>
+                      <p style={styles.smallLabel}>Jump straight into the full workspace at the share root you want.</p>
+                    </div>
+                  </div>
+                  <div style={styles.mountList}>
+                    {dashboardShares.length === 0 ? (
+                      <p style={styles.smallLabel}>No share shortcuts available yet.</p>
+                    ) : (
+                      dashboardShares.slice(0, 8).map((share) => (
+                        <a key={share.id} href={`${gatewayBase}/files`} style={styles.quickLink}>
+                          <strong>{share.name}</strong>
+                          <span>{share.sourceType} · {share.pathKey}</span>
+                        </a>
+                      ))
+                    )}
+                  </div>
+                </article>
+              </div>
+
+              <div style={styles.homeSecondary}>
+                <article style={styles.card}>
+                  <div style={styles.logControlRow}>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Drive Log</h3>
+                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setShowDriveLog((value) => !value)}>
+                      {showDriveLog ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {!showDriveLog ? (
+                    <p style={styles.smallLabel}>{latestDriveEvent ? `${latestDriveEvent.event} · ${fmtDateTime(latestDriveEvent.timestamp)}` : 'No drive events yet.'}</p>
+                  ) : (
+                    <div style={styles.logBoxCompact}>
+                      {driveState.events.length === 0 && <p style={styles.smallLabel}>No drive events yet.</p>}
+                      {driveState.events.map((event, idx) => (
+                        <p key={`${event.timestamp}-${idx}`} style={styles.logLine}>
+                          <span style={styles.logTime}>{fmtTime(event.timestamp)}</span>
+                          <span style={{ ...styles.logLevel, color: event.level === 'error' ? THEME.crimsonRed : event.level === 'warn' ? THEME.brightYellow : THEME.accent }}>
+                            {event.level.toUpperCase()}
+                          </span>
+                          <span>{event.event}{event.letter ? ` · ${event.letter}` : ''}{event.name ? ` · ${event.name}` : ''}</span>
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              </div>
+            </div>
+          </Panel>
         )}
 
         {activeTab === 'ftp' && (
@@ -1677,66 +1986,115 @@ export default function Dashboard() {
                 </div>
 
                 <div style={styles.card}>
-                  <div style={styles.sectionHeader}>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Remote Listing</h3>
-                    <span style={styles.smallLabel}>Primary action stays visible. Additional actions live behind the overflow button on the right.</span>
-                  </div>
-                  <div style={styles.tableWrap}>
-                    <table style={styles.table}>
-                      <thead>
-                        <tr>
-                          <th style={styles.th}>Name</th>
-                          <th style={styles.th}>Type</th>
-                          <th style={styles.th}>Size</th>
-                          <th style={styles.th}>Modified</th>
-                          <th style={styles.th}>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ftpEntries.length === 0 && (
-                          <tr>
-                            <td style={styles.td} colSpan={5}>No listing loaded yet.</td>
-                          </tr>
-                        )}
-                        {ftpEntries.map((entry) => {
-                          const menuKey = `${entry.type}:${entry.name}`;
-
+                  <div className="fs-topbar fs-topbar--path">
+                    <div className="fs-pathbar-shell">
+                      <div className="fs-pathbar" aria-label="Remote path">
+                        <button className="fs-crumb fs-crumb--path" type="button" onClick={() => void loadFtpDirectory('/')}>
+                          <span>/</span>
+                          {ftpBreadcrumbs.length > 0 ? <span className="fs-crumb__divider">/</span> : null}
+                        </button>
+                        {ftpBreadcrumbs.map((segment, index) => {
+                          const crumbPath = `/${ftpBreadcrumbs.slice(0, index + 1).join('/')}`;
                           return (
-                            <tr key={menuKey}>
-                              <td style={styles.td}>{entry.name}</td>
-                              <td style={styles.td}>{entry.type}</td>
-                              <td style={styles.td}>{entry.type === 'file' ? fmtBytes(entry.size) : '--'}</td>
-                              <td style={styles.td}>{entry.modifiedAt ? fmtTime(entry.modifiedAt) : entry.rawModifiedAt || '--'}</td>
-                              <td style={styles.td}>
-                                <div style={styles.ftpRowActions}>
-                                  {entry.type === 'directory' ? (
-                                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
-                                  ) : (
-                                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void downloadFtpEntry(entry)}>Pull File</button>
-                                  )}
-                                  <div style={styles.ftpMenuCell}>
-                                    <button className="ui-button" disabled={ftpBusy} style={styles.ftpMenuButton} type="button" onClick={() => setFtpEntryMenuKey((current) => current === menuKey ? null : menuKey)}>...</button>
-                                    {ftpEntryMenuKey === menuKey && (
-                                      <div style={styles.ftpMenu}>
-                                        {entry.type === 'directory' && (
-                                          <button className="ui-button" style={styles.ftpMenuItem} type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open Folder</button>
-                                        )}
-                                        <button className="ui-button" style={styles.ftpMenuItem} type="button" onClick={() => void downloadFtpEntry(entry, { recursive: entry.type === 'directory' })}>
-                                          {entry.type === 'directory' ? 'Pull Folder' : 'Pull File'}
-                                        </button>
-                                        <button className="ui-button" style={styles.ftpMenuItem} type="button" onClick={() => setUploadTargetFromEntry(entry)}>
-                                          {entry.type === 'directory' ? 'Use For Uploads' : 'Use Path'}
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
+                            <button key={crumbPath} className="fs-crumb fs-crumb--path" type="button" onClick={() => void loadFtpDirectory(crumbPath)}>
+                              <span>{segment}</span>
+                              {index < ftpBreadcrumbs.length - 1 ? <span className="fs-crumb__divider">/</span> : null}
+                            </button>
                           );
                         })}
-                      </tbody>
-                    </table>
+                      </div>
+                    </div>
+                    <div className="fs-topbar__actions">
+                      <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(ftpPath)}>Refresh</button>
+                      <button className="ui-button" disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(parentRemotePath(ftpPath))}>Up</button>
+                    </div>
+                  </div>
+                  <div className="fs-topbar fs-topbar--details">
+                    <div className="fs-titlebar">
+                      <h2>Remote entries</h2>
+                      <div className="fs-titlebar__meta">
+                        <span>{activeFtpFavourite?.name || ftpHost || 'Manual session'}</span>
+                        <span>{filteredFtpEntries.filter((entry) => entry.type === 'directory').length} folders</span>
+                        <span>{filteredFtpEntries.filter((entry) => entry.type !== 'directory').length} files</span>
+                      </div>
+                    </div>
+                    <div className="fs-actions fs-actions--rail">
+                      <input
+                        className="ui-input fs-search"
+                        type="search"
+                        placeholder="Filter remote entries"
+                        value={ftpSearch}
+                        onChange={(event) => setFtpSearch(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="fs-meta">
+                    <span>{activeFtpFavourite ? `${activeFtpFavourite.host}:${activeFtpFavourite.port}` : `${ftpHost || 'No host'}:${ftpPort}`}</span>
+                    <span>{ftpPath}</span>
+                    <span style={{ color: ftpStatusColor }}>{ftpStatus || 'Ready'}</span>
+                  </div>
+                  <div className="fs-browser-list">
+                    {filteredFtpEntries.length === 0 ? (
+                      <div className="tool-empty fs-empty">
+                        {ftpBusy ? 'Loading remote folder…' : 'No listing loaded yet.'}
+                      </div>
+                    ) : (
+                      filteredFtpEntries.map((entry) => {
+                        const menuKey = `${entry.type}:${entry.name}`;
+                        const isDirectory = entry.type === 'directory';
+
+                        return (
+                          <article key={menuKey} className="fs-browser-item fs-browser-item--no-check">
+                            <button className="fs-browser-main" type="button" onClick={() => isDirectory ? void loadFtpDirectory(joinRemotePath(ftpPath, entry.name)) : void downloadFtpEntry(entry)}>
+                              <span className={`fs-entry-icon fs-entry-icon--${isDirectory ? 'directory' : 'file'} fs-entry-icon--tile`} aria-hidden="true" />
+                              <span className="fs-browser-copy">
+                                <strong>{entry.name}</strong>
+                                <span>{isDirectory ? 'Folder' : 'File'} · {entry.modifiedAt ? fmtTime(entry.modifiedAt) : entry.rawModifiedAt || '--'}</span>
+                              </span>
+                            </button>
+
+                            <div className="fs-browser-meta">
+                              <span>{isDirectory ? '—' : fmtBytes(entry.size)}</span>
+                              <span>{entry.permissions || (isDirectory ? 'remote folder' : 'remote file')}</span>
+                            </div>
+
+                            <div className="fs-browser-actions">
+                              {isDirectory ? (
+                                <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
+                              ) : (
+                                <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void downloadFtpEntry(entry)}>Pull</button>
+                              )}
+                              <div className="fs-row-menu">
+                                <button
+                                  className="ui-button fs-row-menu__trigger"
+                                  disabled={ftpBusy}
+                                  ref={(node) => {
+                                    ftpMenuButtonRefs.current[menuKey] = node;
+                                  }}
+                                  type="button"
+                                  onClick={() => openFtpEntryMenu(menuKey)}
+                                >
+                                  ⋯
+                                </button>
+                                {ftpEntryMenuState?.key === menuKey && (
+                                  <div className={`fs-row-menu__panel ${ftpEntryMenuState.upward ? 'fs-row-menu__panel--upward' : ''}`}>
+                                    {isDirectory ? (
+                                      <button className="ui-button fs-row-menu__item" type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open folder</button>
+                                    ) : null}
+                                    <button className="ui-button fs-row-menu__item" type="button" onClick={() => void downloadFtpEntry(entry, { recursive: isDirectory })}>
+                                      {isDirectory ? 'Pull folder' : 'Pull file'}
+                                    </button>
+                                    <button className="ui-button fs-row-menu__item" type="button" onClick={() => setUploadTargetFromEntry(entry)}>
+                                      {isDirectory ? 'Use for uploads' : 'Use path'}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               </div>
@@ -1913,6 +2271,23 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+
+      {isPhone && (
+        <nav aria-label="Dashboard Sections" style={styles.bottomNav}>
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              className="ui-button"
+              aria-pressed={activeTab === tab.key}
+              style={{ ...styles.bottomNavBtn, ...(activeTab === tab.key ? styles.bottomNavBtnActive : {}) }}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      )}
     </div>
   );
 }
@@ -2150,38 +2525,45 @@ const styles: Record<string, CSSProperties> = {
     overflowX: 'hidden',
     fontFamily: 'var(--font-geist-sans), sans-serif',
   },
-  appCompact: { flexDirection: 'column', minHeight: 'auto' },
+  appTablet: { minHeight: '100dvh' },
+  appPhone: {
+    minHeight: '100dvh',
+    paddingBottom: 76,
+  },
   sidebar: {
     width: 248,
     minHeight: '100dvh',
     borderRight: `1px solid ${THEME.border}`,
-    padding: 20,
+    padding: 16,
     background: '#15181c',
     overflowY: 'auto',
   },
-  sidebarCompact: {
-    width: '100%',
-    minHeight: 'auto',
-    borderRight: 'none',
-    borderBottom: `1px solid ${THEME.border}`,
-    padding: 14,
-    overflowY: 'visible',
+  sidebarTablet: {
+    width: 72,
+    padding: 12,
   },
   brand: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 700,
     marginBottom: 18,
     color: THEME.text,
+    whiteSpace: 'nowrap',
   },
   navGroup: { display: 'flex', flexDirection: 'column', gap: 8 },
-  navGroupCompact: { flexDirection: 'row', flexWrap: 'wrap' },
+  navGroupTablet: { gap: 6 },
   navBtn: {
     padding: '10px 12px',
     textAlign: 'left',
     fontWeight: 500,
     justifyContent: 'flex-start',
   },
-  navBtnCompact: { flex: '1 1 118px' },
+  navBtnTablet: {
+    width: '100%',
+    justifyContent: 'center',
+    textAlign: 'center',
+    padding: '10px 6px',
+    fontSize: 12,
+  },
   navBtnActive: {
     background: THEME.panelRaised,
     color: THEME.text,
@@ -2189,9 +2571,10 @@ const styles: Record<string, CSSProperties> = {
   },
   logoutBtn: { marginTop: 14 },
   main: { flex: 1, minHeight: 0, padding: 24, overflowY: 'auto' },
-  mainCompact: { padding: 16, overflowY: 'visible' },
-  title: { margin: '0 0 6px', fontSize: 28, fontWeight: 700, color: THEME.text },
-  panelSubtitle: { margin: '0 0 18px', color: THEME.muted, fontSize: 13, maxWidth: 680 },
+  mainTablet: { padding: 18 },
+  mainPhone: { padding: 16, overflowY: 'visible' },
+  title: { margin: '0 0 4px', fontSize: 24, fontWeight: 700, color: THEME.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  panelSubtitle: { margin: '0 0 16px', color: THEME.muted, fontSize: 12, maxWidth: 680, overflowWrap: 'anywhere' },
   headerBar: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -2505,6 +2888,40 @@ const styles: Record<string, CSSProperties> = {
     padding: '8px 12px',
     fontSize: 13,
     textDecoration: 'none',
+  },
+  quickLink: {
+    display: 'grid',
+    gap: 3,
+    padding: '10px 12px',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 8,
+    background: THEME.panelRaised,
+    color: THEME.text,
+    textDecoration: 'none',
+  },
+  bottomNav: {
+    position: 'fixed',
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 40,
+    display: 'grid',
+    gridTemplateColumns: `repeat(${TABS.length}, minmax(0, 1fr))`,
+    gap: 8,
+    padding: '10px 12px 12px',
+    borderTop: `1px solid ${THEME.border}`,
+    background: '#15181c',
+  },
+  bottomNavBtn: {
+    padding: '10px 8px',
+    justifyContent: 'center',
+    fontSize: 12,
+    whiteSpace: 'nowrap',
+  },
+  bottomNavBtnActive: {
+    background: THEME.panelRaised,
+    borderColor: THEME.border,
+    color: THEME.text,
   },
   modalOverlay: {
     position: 'fixed',

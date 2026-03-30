@@ -2541,23 +2541,68 @@ const filesystemRenameHandler = async (req, res) => {
 
 const filesystemDeleteHandler = async (req, res) => {
   try {
-    const sourceRelative = normalizeLocalRelativePath(req.body?.path || '');
-    if (!sourceRelative) {
-      return res.status(400).json({ error: 'Path is required' });
-    }
-    await ensureShareAccess(sourceRelative, req, 'write');
-    if (await isProtectedFsPath(sourceRelative)) {
-      return res.status(403).json({ error: 'This path cannot be deleted' });
+    const sourceRelatives = Array.isArray(req.body?.paths)
+      ? req.body.paths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
+      : [];
+    const singleRelative = normalizeLocalRelativePath(req.body?.path || '');
+    const targets = sourceRelatives.length > 0
+      ? [...new Set(sourceRelatives)]
+      : singleRelative
+        ? [singleRelative]
+        : [];
+
+    if (targets.length === 0) {
+      return res.status(400).json({ error: 'At least one path is required' });
     }
 
-    const { absolutePath } = resolveFsPath(sourceRelative);
-    if (!fs.existsSync(absolutePath)) {
-      return res.status(404).json({ error: 'Path not found' });
+    const recycledItems = [];
+    const failures = [];
+
+    for (const sourceRelative of targets) {
+      try {
+        await ensureShareAccess(sourceRelative, req, 'write');
+        if (await isProtectedFsPath(sourceRelative)) {
+          throw new Error('This path cannot be deleted');
+        }
+
+        const { absolutePath } = resolveFsPath(sourceRelative);
+        if (!fs.existsSync(absolutePath)) {
+          throw new Error('Path not found');
+        }
+
+        const recycled = moveFsEntryToRecycleBin(sourceRelative);
+        recycledItems.push({
+          path: sourceRelative,
+          recyclePath: recycled.path,
+          recycledAt: recycled.recycledAt,
+        });
+        pushAuditEvent(req, 'info', 'Filesystem entry recycled', { from: sourceRelative, to: recycled.path, recycledAt: recycled.recycledAt });
+      } catch (error) {
+        failures.push({
+          error: String(error instanceof Error ? error.message : error || 'Unable to delete entry'),
+          path: sourceRelative,
+        });
+      }
     }
 
-    const recycled = moveFsEntryToRecycleBin(sourceRelative);
-    pushAuditEvent(req, 'info', 'Filesystem entry recycled', { from: sourceRelative, to: recycled.path, recycledAt: recycled.recycledAt });
-    res.json({ success: true, recycled: true, recyclePath: recycled.path });
+    if (recycledItems.length === 0) {
+      return res.status(400).json({
+        error: failures[0]?.error || 'Unable to delete entries',
+        failureCount: failures.length,
+        failures,
+        successCount: 0,
+      });
+    }
+
+    res.json({
+      success: failures.length === 0,
+      recycled: true,
+      recyclePath: recycledItems[0]?.recyclePath || '',
+      recycledItems,
+      failureCount: failures.length,
+      failures,
+      successCount: recycledItems.length,
+    });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to delete entry');
     pushAuditEvent(req, 'error', 'Filesystem delete failed', { error: message });
@@ -2625,56 +2670,101 @@ const filesystemUploadHandler = async (req, res) => {
 
 const filesystemPasteHandler = async (req, res) => {
   try {
+    const sourceRelatives = Array.isArray(req.body?.sourcePaths)
+      ? req.body.sourcePaths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
+      : [];
     const sourceRelative = normalizeLocalRelativePath(req.body?.sourcePath || '');
     const destinationRelative = normalizeLocalRelativePath(req.body?.destinationPath || '');
     const mode = String(req.body?.mode || 'copy').toLowerCase();
+    const sources = sourceRelatives.length > 0
+      ? [...new Set(sourceRelatives)]
+      : sourceRelative
+        ? [sourceRelative]
+        : [];
 
-    if (!sourceRelative || !destinationRelative) {
-      return res.status(400).json({ error: 'Source and destination paths are required' });
+    if (sources.length === 0 || !destinationRelative) {
+      return res.status(400).json({ error: 'Source paths and destination path are required' });
     }
     if (mode !== 'copy' && mode !== 'move') {
       return res.status(400).json({ error: 'Mode must be copy or move' });
     }
-    await ensureShareAccess(sourceRelative, req, mode === 'move' ? 'write' : 'read');
     await ensureShareAccess(destinationRelative, req, 'write');
-    if (await isProtectedFsPath(sourceRelative)) {
-      return res.status(403).json({ error: `This path cannot be ${mode === 'move' ? 'moved' : 'copied'}` });
-    }
 
     ensureFsTargetAllowed(destinationRelative);
 
-    const source = resolveFsPath(sourceRelative);
     const destination = resolveFsPath(destinationRelative);
-    if (!fs.existsSync(source.absolutePath)) {
-      return res.status(404).json({ error: 'Source path not found' });
-    }
     if (!fs.existsSync(destination.absolutePath) || !fs.statSync(destination.absolutePath).isDirectory()) {
       return res.status(400).json({ error: 'Destination must be an existing folder' });
     }
 
-    const targetRelative = normalizeLocalRelativePath(path.join(destination.relativePath, path.basename(source.relativePath)));
-    if (await isProtectedFsPath(targetRelative)) {
-      return res.status(403).json({ error: 'This destination is protected' });
-    }
-    const target = resolveFsPath(targetRelative);
-    if (fs.existsSync(target.absolutePath)) {
-      return res.status(400).json({ error: 'A file or folder with that name already exists in the destination' });
-    }
-    if (target.absolutePath.startsWith(`${source.absolutePath}${path.sep}`)) {
-      return res.status(400).json({ error: 'Cannot paste a folder into itself' });
+    const pastedItems = [];
+    const failures = [];
+
+    for (const sourceItemRelative of sources) {
+      try {
+        await ensureShareAccess(sourceItemRelative, req, mode === 'move' ? 'write' : 'read');
+        if (await isProtectedFsPath(sourceItemRelative)) {
+          throw new Error(`This path cannot be ${mode === 'move' ? 'moved' : 'copied'}`);
+        }
+
+        const source = resolveFsPath(sourceItemRelative);
+        if (!fs.existsSync(source.absolutePath)) {
+          throw new Error('Source path not found');
+        }
+
+        const targetRelative = normalizeLocalRelativePath(path.join(destination.relativePath, path.basename(source.relativePath)));
+        if (await isProtectedFsPath(targetRelative)) {
+          throw new Error('This destination is protected');
+        }
+
+        const target = resolveFsPath(targetRelative);
+        if (fs.existsSync(target.absolutePath)) {
+          throw new Error('A file or folder with that name already exists in the destination');
+        }
+        if (target.absolutePath.startsWith(`${source.absolutePath}${path.sep}`)) {
+          throw new Error('Cannot paste a folder into itself');
+        }
+
+        if (mode === 'move') {
+          moveFsEntry(source.absolutePath, target.absolutePath);
+        } else {
+          copyFsEntry(source.absolutePath, target.absolutePath);
+        }
+
+        pastedItems.push({
+          from: sourceItemRelative,
+          path: targetRelative,
+        });
+      } catch (error) {
+        failures.push({
+          error: String(error instanceof Error ? error.message : error || 'Unable to paste entry'),
+          path: sourceItemRelative,
+        });
+      }
     }
 
-    if (mode === 'move') {
-      moveFsEntry(source.absolutePath, target.absolutePath);
-    } else {
-      copyFsEntry(source.absolutePath, target.absolutePath);
+    if (pastedItems.length === 0) {
+      return res.status(400).json({
+        error: failures[0]?.error || 'Unable to paste entries',
+        failureCount: failures.length,
+        failures,
+        successCount: 0,
+      });
     }
 
-    pushAuditEvent(req, 'info', `Filesystem entry ${mode}d`, {
-      from: sourceRelative,
-      to: targetRelative,
+    pushAuditEvent(req, 'info', `Filesystem entr${pastedItems.length === 1 ? 'y' : 'ies'} ${mode}d`, {
+      destination: destinationRelative,
+      failureCount: failures.length,
+      items: pastedItems,
     });
-    res.json({ success: true, path: targetRelative });
+    res.json({
+      success: failures.length === 0,
+      path: pastedItems[0]?.path || '',
+      pastedItems,
+      failureCount: failures.length,
+      failures,
+      successCount: pastedItems.length,
+    });
   } catch (err) {
     const message = String(err?.message || err || 'Unable to paste entry');
     pushAuditEvent(req, 'error', 'Filesystem paste failed', { error: message });

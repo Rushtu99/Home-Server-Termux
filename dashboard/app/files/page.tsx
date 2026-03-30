@@ -71,11 +71,20 @@ type FsPayload = {
   };
 };
 
-type FsClipboard = {
-  mode: 'copy' | 'move';
+type FsClipboardItem = {
   name: string;
   path: string;
   type: string;
+};
+
+type FsClipboard = {
+  mode: 'copy' | 'move';
+  items: FsClipboardItem[];
+} | null;
+
+type FsMenuState = {
+  path: string;
+  upward: boolean;
 } | null;
 
 type SharePermission = {
@@ -252,6 +261,7 @@ const getShareUserPermissionMap = (share: ShareRecord | null): Record<string, 'i
 
 export default function FilesPage() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const menuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [driveState, setDriveState] = useState<DrivePayload>(EMPTY_PAYLOAD);
   const [browser, setBrowser] = useState<FsPayload>(EMPTY_FS);
   const [loadError, setLoadError] = useState('');
@@ -268,9 +278,13 @@ export default function FilesPage() {
   const [shareStatus, setShareStatus] = useState('');
   const [shareForm, setShareForm] = useState<ShareFormState | null>(null);
   const [selectedPath, setSelectedPath] = useState('');
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [clipboard, setClipboard] = useState<FsClipboard>(null);
-  const [menuPath, setMenuPath] = useState('');
+  const [menuState, setMenuState] = useState<FsMenuState>(null);
+  const [locationsOpen, setLocationsOpen] = useState(false);
+  const [isNarrowLayout, setIsNarrowLayout] = useState(false);
+  const [isPhoneLayout, setIsPhoneLayout] = useState(false);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
   const loadDriveState = async () => {
@@ -350,6 +364,7 @@ export default function FilesPage() {
         if (!options?.preserveSelection || !normalizedPayload.entries.some((entry) => entry.path === selectedPath)) {
           setSelectedPath('');
         }
+        setSelectedPaths((current) => current.filter((entryPath) => normalizedPayload.entries.some((entry) => entry.path === entryPath)));
       });
     } catch (error) {
       setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to load files'));
@@ -400,8 +415,21 @@ export default function FilesPage() {
   }, []);
 
   useEffect(() => {
-    setMenuPath('');
+    setMenuState(null);
+    setLocationsOpen(false);
   }, [browser.path]);
+
+  useEffect(() => {
+    const syncLayout = () => {
+      const width = window.innerWidth;
+      setIsNarrowLayout(width < 900);
+      setIsPhoneLayout(width < 760);
+    };
+
+    syncLayout();
+    window.addEventListener('resize', syncLayout);
+    return () => window.removeEventListener('resize', syncLayout);
+  }, []);
 
   const selectedShare = browser.path === ''
     ? shareInventory.find((share) => share.pathKey === selectedPath) || null
@@ -457,7 +485,7 @@ export default function FilesPage() {
     }
   };
 
-  const runFsCommand = async (endpoint: string, body: Record<string, string>) => {
+  const runFsCommand = async (endpoint: string, body: Record<string, unknown>) => {
     const res = await fetch(`${API}${endpoint}`, {
       method: 'POST',
       credentials: 'include',
@@ -469,6 +497,58 @@ export default function FilesPage() {
       throw new Error(String(payload?.error || 'Filesystem action failed'));
     }
     return payload;
+  };
+
+  const normalizeTargetEntries = (entries: FsEntry[]) => {
+    const seen = new Set<string>();
+    return entries.filter((entry) => {
+      if (seen.has(entry.path)) {
+        return false;
+      }
+      seen.add(entry.path);
+      return true;
+    });
+  };
+
+  const getSelectionEntries = () => {
+    const selected = selectedPaths
+      .map((entryPath) => browser.entries.find((entry) => entry.path === entryPath) || null)
+      .filter((entry): entry is FsEntry => Boolean(entry));
+
+    if (selected.length > 0) {
+      return normalizeTargetEntries(selected);
+    }
+
+    const active = browser.entries.find((entry) => entry.path === selectedPath);
+    return active ? [active] : [];
+  };
+
+  const toggleSelection = (entryPath: string, checked: boolean) => {
+    setSelectedPaths((current) => checked
+      ? current.includes(entryPath)
+        ? current
+        : [...current, entryPath]
+      : current.filter((value) => value !== entryPath));
+  };
+
+  const setSelectionOnly = (entryPath: string) => {
+    setSelectedPath(entryPath);
+    setSelectedPaths([entryPath]);
+  };
+
+  const toggleVisibleSelection = (entryPaths: string[], checked: boolean) => {
+    setSelectedPaths((current) => {
+      if (checked) {
+        return [...new Set([...current, ...entryPaths])];
+      }
+      const blocked = new Set(entryPaths);
+      return current.filter((value) => !blocked.has(value));
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedPath('');
+    setSelectedPaths([]);
   };
 
   const createFolder = async () => {
@@ -539,8 +619,7 @@ export default function FilesPage() {
     }
   };
 
-  const renameSelected = async () => {
-    const entry = browser.entries.find((item) => item.path === selectedPath);
+  const renameEntry = async (entry: FsEntry | null) => {
     if (!entry) {
       return;
     }
@@ -559,22 +638,37 @@ export default function FilesPage() {
     }
   };
 
-  const deleteSelected = async () => {
-    const entry = browser.entries.find((item) => item.path === selectedPath);
-    if (!entry) {
+  const renameSelected = async () => {
+    await renameEntry(getSelectionEntries().length === 1 ? getSelectionEntries()[0] : null);
+  };
+
+  const deleteEntries = async (entries: FsEntry[]) => {
+    if (entries.length === 0) {
       return;
     }
-    if (!window.confirm(`Delete ${entry.name}?`)) {
+    const label = entries.length === 1 ? entries[0].name : `${entries.length} entries`;
+    if (!window.confirm(`Delete ${label}?`)) {
       return;
     }
 
     try {
-      await runFsCommand('/fs/delete', { path: entry.path });
-      setSelectedPath('');
+      const payload = await runFsCommand('/fs/delete', entries.length === 1
+        ? { path: entries[0].path }
+        : { paths: entries.map((entry) => entry.path) });
+      if (Number(payload?.failureCount || 0) > 0) {
+        setBrowserError(`Recycled ${payload?.successCount || 0} item(s), ${payload?.failureCount || 0} failed.`);
+      } else {
+        setBrowserError('');
+      }
+      clearSelection();
       await loadDirectory(browser.path);
     } catch (error) {
       setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to delete entry'));
     }
+  };
+
+  const deleteSelected = async () => {
+    await deleteEntries(getSelectionEntries());
   };
 
   const openEntry = async (entry: FsEntry) => {
@@ -586,19 +680,35 @@ export default function FilesPage() {
     window.open(`${API}/fs/download?path=${encodeURIComponent(entry.path)}`, '_blank', 'noopener,noreferrer');
   };
 
-  const setClipboardFromEntry = (entry: FsEntry, mode: 'copy' | 'move') => {
-    if (!entry.editable) {
-      setBrowserError(`This ${entry.type} cannot be ${mode === 'move' ? 'moved' : 'copied'}.`);
+  const setClipboardFromEntries = (entries: FsEntry[], mode: 'copy' | 'move') => {
+    const normalizedEntries = normalizeTargetEntries(entries);
+    if (normalizedEntries.length === 0) {
+      return;
+    }
+
+    const blocked = normalizedEntries.find((entry) => !entry.editable);
+    if (blocked) {
+      setBrowserError(`This ${blocked.type} cannot be ${mode === 'move' ? 'moved' : 'copied'}.`);
       return;
     }
 
     setClipboard({
       mode,
-      name: entry.name,
-      path: entry.path,
-      type: entry.type,
+      items: normalizedEntries.map((entry) => ({
+        name: entry.name,
+        path: entry.path,
+        type: entry.type,
+      })),
     });
     setBrowserError('');
+  };
+
+  const setClipboardFromSelection = (mode: 'copy' | 'move') => {
+    const entries = getSelectionEntries();
+    if (entries.length === 0) {
+      return;
+    }
+    setClipboardFromEntries(entries, mode);
   };
 
   const pasteClipboard = async () => {
@@ -607,13 +717,24 @@ export default function FilesPage() {
     }
 
     try {
-      const payload = await runFsCommand('/fs/paste', {
-        sourcePath: clipboard.path,
-        destinationPath: browser.path,
-        mode: clipboard.mode,
-      });
+      const payload = await runFsCommand('/fs/paste', clipboard.items.length === 1
+        ? {
+            sourcePath: clipboard.items[0].path,
+            destinationPath: browser.path,
+            mode: clipboard.mode,
+          }
+        : {
+            sourcePaths: clipboard.items.map((entry) => entry.path),
+            destinationPath: browser.path,
+            mode: clipboard.mode,
+          });
       await loadDirectory(browser.path, { preserveSelection: true });
       setSelectedPath(String(payload?.path || ''));
+      if (Number(payload?.failureCount || 0) > 0) {
+        setBrowserError(`Pasted ${payload?.successCount || 0} item(s), ${payload?.failureCount || 0} failed.`);
+      } else {
+        setBrowserError('');
+      }
       if (clipboard.mode === 'move') {
         setClipboard(null);
       }
@@ -624,6 +745,20 @@ export default function FilesPage() {
 
   const handleUploadTrigger = () => {
     uploadInputRef.current?.click();
+  };
+
+  const openFsMenu = (entry: FsEntry) => {
+    if (isPhoneLayout) {
+      setSelectedPath(entry.path);
+      setMenuState({ path: entry.path, upward: false });
+      return;
+    }
+
+    const trigger = menuTriggerRefs.current[entry.path];
+    const rect = trigger?.getBoundingClientRect();
+    const upward = rect ? rect.bottom > window.innerHeight - 180 : false;
+    setSelectedPath(entry.path);
+    setMenuState((current) => current?.path === entry.path ? null : { path: entry.path, upward });
   };
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -675,24 +810,38 @@ export default function FilesPage() {
   const filteredEntries = deferredSearch
     ? browser.entries.filter((entry) => entry.name.toLowerCase().includes(deferredSearch))
     : browser.entries;
+  const selectedEntries = getSelectionEntries();
+  const selectedCount = selectedEntries.length;
+  const visibleEntryPaths = filteredEntries.map((entry) => entry.path);
+  const allVisibleSelected = visibleEntryPaths.length > 0 && visibleEntryPaths.every((entryPath) => selectedPaths.includes(entryPath));
+  const clipboardCount = clipboard?.items.length || 0;
+  const clipboardLabel = clipboardCount <= 1
+    ? clipboard?.items[0]?.name || ''
+    : `${clipboardCount} items`;
   const directoryCount = filteredEntries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink').length;
   const fileCount = filteredEntries.length - directoryCount;
   const canWriteCurrentFolder = browser.path === ''
     ? false
     : browser.share?.accessLevel === 'write' && browser.share?.isReadOnly !== true;
   const canCreateShare = browser.path === '' && shareAdminAvailable;
+  const selectionCanEdit = selectedEntries.length > 0 && selectedEntries.every((entry) => entry.editable);
+  const canRenameSelection = selectedEntries.length === 1 && selectedEntries[0].editable;
+  const canOpenSelection = selectedEntries.length === 1;
+  const parentPath = browser.breadcrumbs.length > 1 ? browser.breadcrumbs[browser.breadcrumbs.length - 2]?.path || '' : '';
   const quickLinks = browser.path === ''
     ? browser.entries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink')
     : browser.entries
         .filter((entry) => entry.type === 'directory' || entry.type === 'symlink')
         .slice(0, 10);
+  const currentFolderLabel = browser.breadcrumbs[browser.breadcrumbs.length - 1]?.label || 'Drives';
+  const rootPathLabel = browser.root || 'Resolving root…';
 
   return (
     <main id="app-main" className="tool-page tool-page--filesystem">
       <header className="tool-toolbar">
         <div className="tool-toolbar__title">
           <h1>Filesystem</h1>
-          <p>Custom explorer over `~/Drives`, with drive-state controls, direct uploads, and local file actions instead of the embedded FileBrowser UI.</p>
+          <p>Drives, shares, and local transfers.</p>
         </div>
         <div className="tool-toolbar__actions">
           {!driveAccessDenied ? (
@@ -775,7 +924,11 @@ export default function FilesPage() {
         ) : null}
 
         <section className="fs-shell">
-          <aside className="fs-sidebar">
+          {isNarrowLayout && locationsOpen ? (
+            <button className="fs-drawer-backdrop" type="button" aria-label="Close locations" onClick={() => setLocationsOpen(false)} />
+          ) : null}
+
+          <aside className={`fs-sidebar ${isNarrowLayout ? 'fs-sidebar--drawer' : ''} ${locationsOpen ? 'fs-sidebar--drawer-open' : ''}`}>
             <div className="fs-sidebar__section">
               <div className="fs-sidebar__header">
                 <strong>Locations</strong>
@@ -804,7 +957,13 @@ export default function FilesPage() {
               <div className="fs-sidebar__header">
                 <strong>Selection</strong>
               </div>
-              {selectedEntry ? (
+              {selectedCount > 1 ? (
+                <div className="fs-selection">
+                  <p>{selectedCount} entries selected</p>
+                  <span>Batch actions are available in the command bar.</span>
+                  <span>{selectedEntries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink').length} folders · {selectedEntries.filter((entry) => entry.type !== 'directory' && entry.type !== 'symlink').length} files</span>
+                </div>
+              ) : selectedEntry ? (
                 <div className="fs-selection">
                   <p>{selectedEntry.name}</p>
                   <span>{browser.path === '' ? (selectedEntry.shareSourceType || 'share') : selectedEntry.type}</span>
@@ -920,32 +1079,41 @@ export default function FilesPage() {
           </aside>
 
           <div className="fs-main">
-            <div className="fs-overview-strip">
-              <div className="fs-overview-pill">
-                <span>Current folder</span>
-                <strong>{browser.breadcrumbs[browser.breadcrumbs.length - 1]?.label || 'Drives'}</strong>
+            <div className="fs-topbar fs-topbar--path">
+              <div className="fs-pathbar-shell">
+                {isNarrowLayout ? (
+                  <button className="ui-button" type="button" onClick={() => setLocationsOpen(true)}>
+                    Locations
+                  </button>
+                ) : null}
+                <div className="fs-pathbar" aria-label="Filesystem path">
+                  {browser.breadcrumbs.map((crumb, index) => (
+                    <button key={`${crumb.label}-${crumb.path}`} className="fs-crumb fs-crumb--path" type="button" onClick={() => void loadDirectory(crumb.path)}>
+                      <span>{crumb.label}</span>
+                      {index < browser.breadcrumbs.length - 1 ? <span className="fs-crumb__divider">/</span> : null}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="fs-overview-pill">
-                <span>Folders</span>
-                <strong>{directoryCount}</strong>
-              </div>
-              <div className="fs-overview-pill">
-                <span>Files</span>
-                <strong>{fileCount}</strong>
-              </div>
-              <div className="fs-overview-pill">
-                <span>Selection</span>
-                <strong>{selectedEntry ? selectedEntry.name : 'None'}</strong>
+              <div className="fs-topbar__actions">
+                <button className="ui-button" type="button" onClick={() => void loadDirectory(parentPath)} disabled={browser.path === ''}>
+                  Up
+                </button>
+                <button className="ui-button" type="button" onClick={() => void loadDirectory(browser.path, { preserveSelection: true })} disabled={browserBusy}>
+                  {browserBusy ? 'Refreshing…' : 'Refresh'}
+                </button>
               </div>
             </div>
 
-            <div className="fs-toolbar">
-              <div className="fs-breadcrumbs" aria-label="Filesystem breadcrumbs">
-                {browser.breadcrumbs.map((crumb) => (
-                  <button key={`${crumb.label}-${crumb.path}`} className="fs-crumb" type="button" onClick={() => void loadDirectory(crumb.path)}>
-                    {crumb.label}
-                  </button>
-                ))}
+            <div className="fs-topbar fs-topbar--details">
+              <div className="fs-titlebar">
+                <h2>Visible entries</h2>
+                <div className="fs-titlebar__meta">
+                  <span>{currentFolderLabel}</span>
+                  <span>{directoryCount} folders</span>
+                  <span>{fileCount} files</span>
+                  <span>{selectedCount} selected</span>
+                </div>
               </div>
               <div className="fs-actions fs-actions--rail">
                 <input
@@ -961,32 +1129,35 @@ export default function FilesPage() {
                 <button className="ui-button" type="button" onClick={handleUploadTrigger} disabled={uploadBusy || !canWriteCurrentFolder}>
                   {uploadBusy ? 'Uploading…' : 'Upload File'}
                 </button>
-                <button className="ui-button" type="button" onClick={renameSelected} disabled={!selectedEntry || !selectedEntry.editable}>
+                <button className="ui-button" type="button" onClick={renameSelected} disabled={!canRenameSelection}>
                   Rename
                 </button>
-                <button className="ui-button" type="button" onClick={deleteSelected} disabled={!selectedEntry || !selectedEntry.editable}>
+                <button className="ui-button" type="button" onClick={deleteSelected} disabled={!selectionCanEdit}>
                   Delete
                 </button>
-                <button className="ui-button" type="button" onClick={() => selectedEntry && setClipboardFromEntry(selectedEntry, 'copy')} disabled={!selectedEntry || !selectedEntry.editable}>
+                <button className="ui-button" type="button" onClick={() => setClipboardFromSelection('copy')} disabled={!selectionCanEdit}>
                   Copy
                 </button>
-                <button className="ui-button" type="button" onClick={() => selectedEntry && setClipboardFromEntry(selectedEntry, 'move')} disabled={!selectedEntry || !selectedEntry.editable}>
+                <button className="ui-button" type="button" onClick={() => setClipboardFromSelection('move')} disabled={!selectionCanEdit}>
                   Cut
                 </button>
                 <button
                   className="ui-button"
                   type="button"
-                  onClick={() => selectedEntry && void openEntry(selectedEntry)}
-                  disabled={!selectedEntry}
+                  onClick={() => selectedEntries[0] && void openEntry(selectedEntries[0])}
+                  disabled={!canOpenSelection}
                 >
-                  {selectedEntry?.type === 'file' ? 'Download' : 'Open'}
+                  {selectedEntries[0]?.type === 'file' ? 'Download' : 'Open'}
+                </button>
+                <button className="ui-button" type="button" onClick={clearSelection} disabled={selectedCount === 0}>
+                  Clear
                 </button>
                 <input ref={uploadInputRef} type="file" hidden onChange={handleUpload} />
               </div>
             </div>
 
             <div className="fs-meta">
-              <span>{browser.root || 'Resolving root…'}</span>
+              <span>{rootPathLabel}</span>
               {browser.share ? <span>{browser.share.name} · {browser.share.accessLevel}{browser.share.isReadOnly ? ' · read-only share' : ''}</span> : <span>Shared folders</span>}
               <span>{filteredEntries.length} visible entr{filteredEntries.length === 1 ? 'y' : 'ies'}</span>
             </div>
@@ -994,11 +1165,11 @@ export default function FilesPage() {
             {browserError ? <p className="status-message status-message--error">{browserError}</p> : null}
 
             {clipboard ? (
-              <div className="fs-clipboard-bar">
+              <div className="fs-clipboard-card">
                 <div className="fs-clipboard-copy">
                   <span>{clipboard.mode === 'move' ? 'Cut' : 'Copy'} queued</span>
-                  <strong>{clipboard.name}</strong>
-                  <small>Paste into {browser.breadcrumbs[browser.breadcrumbs.length - 1]?.label || 'current folder'}</small>
+                  <strong>{clipboardLabel}</strong>
+                  <small>Paste into {currentFolderLabel}</small>
                 </div>
                 <div className="fs-browser-actions">
                   <button className="ui-button ui-button--primary" type="button" onClick={() => void pasteClipboard()} disabled={!canWriteCurrentFolder}>
@@ -1012,6 +1183,17 @@ export default function FilesPage() {
             ) : null}
 
             <div className="fs-browser-list">
+              <div className="fs-list-head">
+                <label className="fs-check fs-check--head">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={(event) => toggleVisibleSelection(visibleEntryPaths, event.target.checked)}
+                  />
+                  <span>{allVisibleSelected ? 'Unselect visible' : 'Select visible'}</span>
+                </label>
+                <span>{selectedCount > 0 ? `${selectedCount} selected` : 'No selection'}</span>
+              </div>
               {filteredEntries.length === 0 ? (
                 <div className="tool-empty fs-empty">
                   {browserBusy ? 'Loading folder…' : 'This folder is empty.'}
@@ -1019,7 +1201,7 @@ export default function FilesPage() {
               ) : (
                 filteredEntries.map((entry) => {
                   const isDirectory = entry.type === 'directory' || entry.type === 'symlink';
-                  const isSelected = selectedPath === entry.path;
+                  const isSelected = selectedPath === entry.path || selectedPaths.includes(entry.path);
 
                   return (
                     <article
@@ -1028,6 +1210,14 @@ export default function FilesPage() {
                       onClick={() => setSelectedPath(entry.path)}
                       onDoubleClick={() => void openEntry(entry)}
                     >
+                      <label className="fs-check" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedPaths.includes(entry.path)}
+                          onChange={(event) => toggleSelection(entry.path, event.target.checked)}
+                        />
+                      </label>
+
                       <button className="fs-browser-main" type="button" onClick={() => void openEntry(entry)}>
                         <span className={`fs-entry-icon fs-entry-icon--${isDirectory ? 'directory' : 'file'} fs-entry-icon--tile`} aria-hidden="true" />
                         <span className="fs-browser-copy">
@@ -1049,20 +1239,32 @@ export default function FilesPage() {
                           <button
                             className="ui-button fs-row-menu__trigger"
                             type="button"
-                            onClick={() => setMenuPath((current) => current === entry.path ? '' : entry.path)}
+                            ref={(node) => {
+                              menuTriggerRefs.current[entry.path] = node;
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openFsMenu(entry);
+                            }}
                           >
                             ⋯
                           </button>
-                          {menuPath === entry.path ? (
-                            <div className="fs-row-menu__panel">
-                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setSelectedPath(entry.path); setMenuPath(''); }}>
-                                Select
+                          {menuState?.path === entry.path && !isPhoneLayout ? (
+                            <div className={`fs-row-menu__panel ${menuState.upward ? 'fs-row-menu__panel--upward' : ''}`}>
+                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setSelectionOnly(entry.path); setMenuState(null); }}>
+                                Select only
                               </button>
-                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setClipboardFromEntry(entry, 'copy'); setMenuPath(''); }} disabled={!entry.editable}>
+                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setClipboardFromEntries([entry], 'copy'); setMenuState(null); }} disabled={!entry.editable}>
                                 Copy
                               </button>
-                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setClipboardFromEntry(entry, 'move'); setMenuPath(''); }} disabled={!entry.editable}>
+                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setClipboardFromEntries([entry], 'move'); setMenuState(null); }} disabled={!entry.editable}>
                                 Cut
+                              </button>
+                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setSelectedPath(entry.path); setSelectedPaths([entry.path]); setMenuState(null); void renameEntry(entry); }} disabled={!entry.editable}>
+                                Rename
+                              </button>
+                              <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setSelectedPath(entry.path); setSelectedPaths([entry.path]); setMenuState(null); void deleteEntries([entry]); }} disabled={!entry.editable}>
+                                Delete
                               </button>
                             </div>
                           ) : null}
@@ -1072,11 +1274,81 @@ export default function FilesPage() {
                   );
                 })
               )}
-              <input ref={uploadInputRef} type="file" hidden onChange={handleUpload} />
             </div>
           </div>
         </section>
       </section>
+
+      {menuState && isPhoneLayout ? (
+        <div className="fs-mobile-sheet" role="dialog" aria-modal="true">
+          <button className="fs-mobile-sheet__backdrop" type="button" aria-label="Close actions" onClick={() => setMenuState(null)} />
+          <div className="fs-mobile-sheet__panel">
+            <div className="fs-mobile-sheet__header">
+              <strong>{browser.entries.find((entry) => entry.path === menuState.path)?.name || 'Actions'}</strong>
+              <button className="ui-button" type="button" onClick={() => setMenuState(null)}>
+                Close
+              </button>
+            </div>
+            <div className="fs-mobile-sheet__actions">
+              <button className="ui-button" type="button" onClick={() => { setSelectionOnly(menuState.path); setMenuState(null); }}>
+                Select only
+              </button>
+              <button
+                className="ui-button"
+                type="button"
+                onClick={() => {
+                  const entry = browser.entries.find((item) => item.path === menuState.path);
+                  if (entry) {
+                    setClipboardFromEntries([entry], 'copy');
+                  }
+                  setMenuState(null);
+                }}
+              >
+                Copy
+              </button>
+              <button
+                className="ui-button"
+                type="button"
+                onClick={() => {
+                  const entry = browser.entries.find((item) => item.path === menuState.path);
+                  if (entry) {
+                    setClipboardFromEntries([entry], 'move');
+                  }
+                  setMenuState(null);
+                }}
+              >
+                Cut
+              </button>
+              <button
+                className="ui-button"
+                type="button"
+                onClick={() => {
+                  const entry = browser.entries.find((item) => item.path === menuState.path) || null;
+                  setSelectedPath(menuState.path);
+                  setSelectedPaths([menuState.path]);
+                  setMenuState(null);
+                  void renameEntry(entry);
+                }}
+              >
+                Rename
+              </button>
+              <button
+                className="ui-button"
+                type="button"
+                onClick={() => {
+                  const entry = browser.entries.find((item) => item.path === menuState.path) || null;
+                  setSelectedPath(menuState.path);
+                  setSelectedPaths([menuState.path]);
+                  setMenuState(null);
+                  void deleteEntries(entry ? [entry] : []);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
