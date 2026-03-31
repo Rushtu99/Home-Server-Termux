@@ -28,10 +28,10 @@ const THEME = {
   border: 'var(--border)',
 };
 
-type TabKey = 'home' | 'media' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
+type TabKey = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
 type Services = Record<string, boolean>;
-type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem';
-type ServiceSurface = 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
+type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads';
+type ServiceSurface = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
 
 type ServiceCatalogEntry = {
   available: boolean;
@@ -174,6 +174,7 @@ type DashboardPayload = {
   services: Services;
   serviceCatalog?: ServiceCatalogEntry[];
   serviceGroups?: Partial<Record<ServiceGroupKey, string[]>>;
+  mediaWorkflow?: MediaWorkflowPayload;
   serviceController?: {
     locked?: boolean;
     optionalServices?: string[];
@@ -202,6 +203,7 @@ type TelemetryPayload = {
     verboseLoggingEnabled?: boolean;
   };
   monitor: Monitor;
+  mediaWorkflow?: MediaWorkflowPayload;
   serviceCatalog?: ServiceCatalogEntry[];
   serviceController?: {
     locked?: boolean;
@@ -233,13 +235,60 @@ type UserDraft = {
 
 type LayoutMode = 'desktop' | 'tablet' | 'mobile';
 type ThemeMode = 'dark' | 'light' | 'contrast';
-type MediaCluster = {
-  description: string;
-  id: string;
-  optionalSupportKeys: string[];
-  primaryKeys: string[];
-  supportKeys: string[];
-  title: string;
+type MediaSectionKey = 'watch' | 'requests' | 'automation' | 'downloads' | 'subtitles' | 'live-tv' | 'support';
+type MediaWorkflowPayload = {
+  automation?: {
+    healthy?: number;
+    serviceKeys?: string[];
+    status?: string;
+    summary?: string;
+    total?: number;
+  };
+  downloads?: {
+    clientCount?: number;
+    defaultSavePath?: string | null;
+    downloadRoots?: string[];
+    primaryServiceKey?: string | null;
+    serviceKeys?: string[];
+    status?: string;
+    summary?: string;
+    workspaceTab?: TabKey;
+  };
+  liveTv?: {
+    channelCount?: number | null;
+    channelsMapped?: boolean | null;
+    guideConfigured?: boolean;
+    guideSource?: string | null;
+    playlistConfigured?: boolean;
+    playlistSource?: string | null;
+    status?: string;
+    summary?: string;
+    tunerType?: string;
+  };
+  requests?: {
+    blocker?: string | null;
+    serviceKeys?: string[];
+    status?: string;
+    summary?: string;
+  };
+  subtitles?: {
+    blocker?: string | null;
+    serviceKeys?: string[];
+    status?: string;
+    summary?: string;
+  };
+  support?: {
+    serviceKeys?: string[];
+    status?: string;
+    summary?: string;
+  };
+  watch?: {
+    libraryRootReady?: boolean;
+    libraryRoots?: string[];
+    serviceKeys?: string[];
+    status?: string;
+    summary?: string;
+  };
 };
 type BatteryManagerLike = {
   charging: boolean;
@@ -251,7 +300,7 @@ type BatteryManagerLike = {
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'home', label: 'Home' },
   { key: 'media', label: 'Media' },
-  { key: 'arr', label: 'ARR' },
+  { key: 'downloads', label: 'Downloads' },
   { key: 'terminal', label: 'Terminal' },
   { key: 'filesystem', label: 'Filesystem' },
   { key: 'ftp', label: 'FTP' },
@@ -268,6 +317,10 @@ const TAB_ICONS: Record<TabKey, { path: string; viewBox: string }> = {
   media: {
     viewBox: '0 0 20 20',
     path: 'M4.5 4.75A.75.75 0 0 1 5.25 4h9.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-9.5a.75.75 0 0 1-.75-.75V4.75Zm2 1.5v7.5l6.5-3.75-6.5-3.75Z',
+  },
+  downloads: {
+    viewBox: '0 0 20 20',
+    path: 'M10 2.75a.75.75 0 0 1 .75.75v7.94l2.22-2.22 1.06 1.06L10 14.31l-4.03-4.03 1.06-1.06 2.22 2.22V3.5A.75.75 0 0 1 10 2.75Zm-5 12.5A.75.75 0 0 1 5.75 14.5h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 5 15.25Z',
   },
   arr: {
     viewBox: '0 0 20 20',
@@ -293,8 +346,9 @@ const TAB_ICONS: Record<TabKey, { path: string; viewBox: string }> = {
 
 const SERVICE_GROUP_LABELS: Record<ServiceGroupKey, string> = {
   access: 'Access',
-  arr: 'ARR',
+  arr: 'Automation',
   data: 'Data',
+  downloads: 'Downloads',
   filesystem: 'Files',
   media: 'Media',
   platform: 'Platform',
@@ -317,7 +371,7 @@ const COMMAND_DOCS = [
     id: 'docs-media',
     label: 'Open media stack status',
     subtitle: 'Docs',
-    value: 'https://github.com/Rushtu99/Home-Server-Termux/blob/main/docs/media-stack-status.md',
+    value: 'https://github.com/Rushtu99/Home-Server-Termux/blob/main/README.md#media-and-streaming-stack',
   },
 ];
 
@@ -350,24 +404,34 @@ const getServiceProfile = (entry: ServiceCatalogEntry): ServiceProfile => SERVIC
   quickLabels: ['Status', 'History', 'Route'],
 };
 
-const MEDIA_CLUSTERS: MediaCluster[] = [
-  {
-    id: 'jellyfin',
-    title: 'Jellyfin',
-    description: 'Primary streaming surface for the local movie and series library.',
-    primaryKeys: ['jellyfin'],
-    supportKeys: [],
-    optionalSupportKeys: ['jellyseerr'],
-  },
-  {
-    id: 'iptv',
-    title: 'IPTV',
-    description: 'Guide, cache, and metadata support for live-channel workflows and future IPTV integrations.',
-    primaryKeys: [],
-    supportKeys: ['redis', 'postgres'],
-    optionalSupportKeys: [],
-  },
+const DOWNLOAD_WORKSPACE_BY_SERVICE: Partial<Record<string, TabKey>> = {
+  qbittorrent: 'downloads',
+};
+
+const MEDIA_SECTION_BY_SERVICE: Partial<Record<string, MediaSectionKey>> = {
+  jellyfin: 'watch',
+  jellyseerr: 'requests',
+  prowlarr: 'automation',
+  sonarr: 'automation',
+  radarr: 'automation',
+  bazarr: 'subtitles',
+  redis: 'support',
+  postgres: 'support',
+};
+
+const MEDIA_WORKFLOW_ORDER: Array<{ id: MediaSectionKey; label: string; description: string }> = [
+  { id: 'watch', label: 'Watch', description: 'Jellyfin library and playback' },
+  { id: 'requests', label: 'Requests', description: 'Request intake for new movies and series' },
+  { id: 'automation', label: 'Automation', description: 'Indexer and grab automation for movies and shows' },
+  { id: 'downloads', label: 'Downloads', description: 'Queue and transfer clients live in Downloads' },
+  { id: 'subtitles', label: 'Subtitles', description: 'Post-import subtitle management' },
+  { id: 'live-tv', label: 'Live TV', description: 'Jellyfin M3U and XMLTV setup flow' },
 ];
+
+const MEDIA_AUTOMATION_SERVICE_ORDER = ['prowlarr', 'sonarr', 'radarr'];
+const MEDIA_SUBTITLE_SERVICE_KEYS = ['bazarr'];
+const MEDIA_REQUEST_SERVICE_KEYS = ['jellyseerr'];
+const MEDIA_SUPPORT_SERVICE_KEYS = ['redis', 'postgres'];
 
 const loadAlertTone = (value: number, warnAt: number, dangerAt: number) => {
   if (!Number.isFinite(value)) {
@@ -576,12 +640,15 @@ export default function Dashboard() {
   const [connectionsExpanded, setConnectionsExpanded] = useState(false);
   const [connectionBusyId, setConnectionBusyId] = useState<string | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectedUser | null>(null);
+  const [mediaWorkflow, setMediaWorkflow] = useState<MediaWorkflowPayload | null>(null);
+  const [pendingMediaSection, setPendingMediaSection] = useState<MediaSectionKey | null>(null);
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
   const ftpMenuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const mediaSectionRefs = useRef<Partial<Record<MediaSectionKey, HTMLElement | null>>>({});
   const fetchInFlightRef = useRef(false);
   const telemetryInFlightRef = useRef(false);
   const mountedRef = useRef(true);
@@ -651,6 +718,7 @@ export default function Dashboard() {
     setDriveError('');
     setShowDriveLog(false);
     setDashboardShares([]);
+    setMediaWorkflow(null);
     setCommandPaletteOpen(false);
     setCommandQuery('');
     setSearchHasFocus(false);
@@ -697,7 +765,10 @@ export default function Dashboard() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const requestedTab = params.get('tab');
-    if (requestedTab && TAB_KEYS.has(requestedTab as TabKey)) {
+    if (requestedTab === 'arr') {
+      setActiveTab('media');
+      setPendingMediaSection('automation');
+    } else if (requestedTab && TAB_KEYS.has(requestedTab as TabKey)) {
       setActiveTab(requestedTab as TabKey);
     }
     tabSyncReadyRef.current = true;
@@ -815,6 +886,20 @@ export default function Dashboard() {
     }
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'media' || !pendingMediaSection) {
+      return;
+    }
+
+    const target = mediaSectionRefs.current[pendingMediaSection];
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setPendingMediaSection(null);
+  }, [activeTab, pendingMediaSection]);
 
   useEffect(() => {
     if (!isAuthed || sessionUser?.role !== 'admin') {
@@ -1042,6 +1127,9 @@ export default function Dashboard() {
     if (payload.serviceGroups && typeof payload.serviceGroups === 'object') {
       setServiceGroups(payload.serviceGroups);
     }
+    if (payload.mediaWorkflow && typeof payload.mediaWorkflow === 'object') {
+      setMediaWorkflow(payload.mediaWorkflow);
+    }
     if (Array.isArray(payload.serviceController?.optionalServices)) {
       setOptionalServices(payload.serviceController.optionalServices);
     }
@@ -1097,6 +1185,9 @@ export default function Dashboard() {
       }
       setServiceCatalog(Array.isArray(payload?.serviceCatalog) ? payload.serviceCatalog : []);
       setServiceGroups(payload?.serviceGroups && typeof payload.serviceGroups === 'object' ? payload.serviceGroups : {});
+      if (payload?.mediaWorkflow && typeof payload.mediaWorkflow === 'object') {
+        setMediaWorkflow(payload.mediaWorkflow);
+      }
       setServiceControllerLocked(payload?.controller?.locked !== false);
       if (Array.isArray(payload?.controller?.optionalServices) && payload.controller.optionalServices.length > 0) {
         setOptionalServices(payload.controller.optionalServices);
@@ -1431,29 +1522,107 @@ export default function Dashboard() {
     return styles.serviceStatusWarn;
   };
 
-  const toggleOptionalSupportService = async (entry: ServiceCatalogEntry) => {
-    if (!entry.available) {
-      setControlStatus(`${entry.label} is unavailable on this host`);
-      return;
-    }
-
-    const action = entry.status === 'working' ? 'stop' : 'start';
-    await executeControl(entry.key, action);
-  };
-
   const renderServiceBadge = (label: string, tone: CSSProperties, key: string) => (
     <span key={key} style={{ ...styles.serviceMiniBadge, ...tone }}>{label}</span>
   );
 
+  const serviceStatusLabel = (status: string, options: { readyLabel?: string; unknownLabel?: string } = {}) => {
+    if (status === 'working') {
+      return options.readyLabel || 'Working';
+    }
+    if (status === 'stopped') {
+      return 'Stopped';
+    }
+    if (status === 'unavailable') {
+      return 'Unavailable';
+    }
+    if (status === 'setup') {
+      return 'Setup';
+    }
+    if (status === 'blocked') {
+      return 'Blocked';
+    }
+    return options.unknownLabel || 'Needs attention';
+  };
+
+  const workflowToneStyle = (status: string): CSSProperties => {
+    if (status === 'setup') {
+      return styles.serviceStatusIdle;
+    }
+    if (status === 'blocked') {
+      return styles.serviceStatusWarn;
+    }
+    return statusToneStyle(status);
+  };
+
+  const aggregateServiceStatus = (entries: ServiceCatalogEntry[]) => {
+    if (entries.length === 0) {
+      return 'unavailable';
+    }
+    if (entries.every((entry) => entry.status === 'working')) {
+      return 'working';
+    }
+    if (entries.some((entry) => entry.status === 'working')) {
+      return 'stalled';
+    }
+    if (entries.some((entry) => entry.status === 'stalled')) {
+      return 'stalled';
+    }
+    if (entries.some((entry) => entry.status === 'stopped')) {
+      return 'stopped';
+    }
+    return 'unavailable';
+  };
+
+  const closeSearch = () => {
+    setCommandPaletteOpen(false);
+    setSearchHasFocus(false);
+  };
+
+  const openTab = (tab: TabKey) => {
+    setActiveTab(tab === 'arr' ? 'media' : tab);
+    closeSearch();
+  };
+
+  const openMediaSection = (section: MediaSectionKey = 'watch') => {
+    setPendingMediaSection(section);
+    openTab('media');
+  };
+
+  const openServiceWorkspace = (entry: ServiceCatalogEntry) => {
+    const downloadWorkspace = DOWNLOAD_WORKSPACE_BY_SERVICE[entry.key] || (entry.surface === 'downloads' ? 'downloads' : null);
+    if (downloadWorkspace) {
+      openTab(downloadWorkspace);
+      return;
+    }
+
+    const mediaSection = MEDIA_SECTION_BY_SERVICE[entry.key];
+    if (mediaSection) {
+      openMediaSection(mediaSection);
+      return;
+    }
+
+    if (entry.surface === 'arr') {
+      openMediaSection('automation');
+      return;
+    }
+
+    if (entry.surface === 'filesystem') {
+      openTab('filesystem');
+      return;
+    }
+
+    if (entry.surface === 'media') {
+      openMediaSection('watch');
+      return;
+    }
+
+    openTab(entry.surface === 'home' ? 'home' : entry.surface);
+  };
+
   const renderServiceCard = (entry: ServiceCatalogEntry) => {
     const linkHref = buildServiceHref(entry.route);
-    const statusLabel = entry.status === 'working'
-      ? 'Working'
-      : entry.status === 'stopped'
-        ? 'Stopped'
-        : entry.status === 'unavailable'
-          ? 'Unavailable'
-      : 'Needs attention';
+    const statusLabel = serviceStatusLabel(entry.status);
     const canOperate = sessionUser?.role === 'admin' && entry.available;
     const isRunning = entry.status === 'working';
     const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
@@ -1519,104 +1688,7 @@ export default function Dashboard() {
     );
   };
 
-  const renderMediaCluster = (cluster: typeof mediaClusters[number]) => {
-    const openRoute = cluster.route ? buildServiceHref(cluster.route) : '';
-    const kindLabel = cluster.primaryEntries.length > 0
-      ? 'Main service'
-      : cluster.supportEntries.length > 0
-        ? 'Support stack'
-        : 'Service group';
-    const statusLabel = cluster.status === 'working'
-      ? cluster.primaryEntries.length > 0
-        ? 'Working'
-        : 'Ready'
-      : cluster.status === 'stopped'
-        ? 'Stopped'
-        : cluster.status === 'unavailable'
-          ? 'Unavailable'
-          : 'Needs attention';
-
-    return (
-      <article key={cluster.id} className="hmstx-hover-lift" style={styles.mediaClusterCard}>
-        <div style={{ ...styles.serviceCardShell, ...(isCompact ? styles.serviceCardShellCompact : {}) }}>
-          <div style={{ ...styles.serviceCardCopy, ...(isCompact ? styles.serviceCardCopyCompact : {}) }}>
-            <div style={{ ...styles.serviceCardHead, ...(isCompact ? styles.serviceCardHeadCompact : {}) }}>
-              <div style={styles.serviceCardTitleBlock}>
-                <h3 style={styles.serviceCardTitle}>{cluster.title}</h3>
-                <p style={styles.serviceCardDescription}>{cluster.description}</p>
-              </div>
-              <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
-                {renderServiceBadge(kindLabel, styles.serviceMiniBadgeMuted, `${cluster.id}:kind`)}
-                {renderServiceBadge(statusLabel, statusToneStyle(cluster.status), `${cluster.id}:status`)}
-              </div>
-            </div>
-            {cluster.supportEntries.length > 0 ? (
-              <div style={styles.supportList}>
-                <span style={styles.supportLabel}>Support</span>
-                <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
-                  {cluster.supportEntries.map((entry) =>
-                    renderServiceBadge(entry.label, statusToneStyle(entry.status), `${cluster.id}:${entry.key}`)
-                  )}
-                </div>
-              </div>
-            ) : null}
-            {cluster.optionalSupportEntries.length > 0 ? (
-              <div style={{ ...styles.supportToggleList, ...(isPhone ? styles.supportToggleListCompact : {}) }}>
-                {cluster.optionalSupportEntries.map((entry) => (
-                  <label key={`${cluster.id}:${entry.key}`} style={styles.supportCheckbox}>
-                    <input
-                      type="checkbox"
-                      checked={entry.status === 'working'}
-                      disabled={sessionUser?.role !== 'admin' || Boolean(controlBusy[`${entry.key}:${entry.status === 'working' ? 'stop' : 'start'}`])}
-                      onChange={() => void toggleOptionalSupportService(entry)}
-                    />
-                    <span>{entry.label}</span>
-                  </label>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
-            {openRoute ? (
-              <a href={openRoute} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
-                Open
-              </a>
-            ) : null}
-            {cluster.primaryEntries.map((entry) => {
-              const isRunning = entry.status === 'working';
-              const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
-              const restartBusy = Boolean(controlBusy[`${entry.key}:restart`]);
-              const stopBusy = Boolean(controlBusy[`${entry.key}:stop`]);
-              const canOperate = sessionUser?.role === 'admin' && entry.available;
-
-              return (
-                <div key={`${cluster.id}:${entry.key}:actions`} style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
-                  {canOperate && !isRunning ? (
-                    <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={startBusy} onClick={() => void executeControl(entry.key, 'start')}>
-                      {startBusy ? 'Starting…' : 'Start'}
-                    </button>
-                  ) : null}
-                  {canOperate ? (
-                    <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={restartBusy} onClick={() => void executeControl(entry.key, 'restart')}>
-                      {restartBusy ? 'Restarting…' : 'Restart'}
-                    </button>
-                  ) : null}
-                  {canOperate && isRunning ? (
-                    <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={stopBusy} onClick={() => void executeControl(entry.key, 'stop')}>
-                      {stopBusy ? 'Stopping…' : 'Stop'}
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </article>
-    );
-  };
-
   const serviceCatalogByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
-  const serviceSurfaceEntries = (surface: ServiceSurface) => serviceCatalog.filter((entry) => entry.surface === surface);
   const homeGroups = (['platform', 'data', 'access'] as const)
     .map((group) => ({
       group,
@@ -1627,9 +1699,6 @@ export default function Dashboard() {
     }))
     .filter((entry) => entry.items.length > 0);
   const homeListedCount = homeGroups.reduce((sum, entry) => sum + entry.items.length, 0);
-  const mediaServices = serviceSurfaceEntries('media');
-  const arrServices = serviceSurfaceEntries('arr');
-  const arrHealthyCount = arrServices.filter((entry) => entry.status === 'working').length;
   const optionalServiceEntries = optionalServices
     .map((name) => serviceCatalogByKey.get(name))
     .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
@@ -1642,6 +1711,12 @@ export default function Dashboard() {
   const mountedFtpEntries = ftpFavourites.filter((favourite) => favourite.mount?.mounted && favourite.mount?.mountPoint);
   const mountedFtpMountPoints = new Set(mountedFtpEntries.map((favourite) => favourite.mount.mountPoint));
   const visibleStorageMounts = storage.filter((mount) => !mount.mount.startsWith('/mnt/cloud/') && !mountedFtpMountPoints.has(mount.mount));
+  const mediaLibraryMounts = visibleStorageMounts.filter((mount) =>
+    mount.category === 'media'
+    || mount.category === 'shared'
+    || mount.category === 'external'
+    || mount.mount.toLowerCase().includes('/media')
+  );
   const totalStorage = visibleStorageMounts.reduce((sum, mount) => sum + mount.size, 0);
   const usedStorage = visibleStorageMounts.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
@@ -1669,7 +1744,63 @@ export default function Dashboard() {
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
   const mountedFtpFavouriteCount = mountedFtpEntries.length;
   const terminalService = serviceCatalogByKey.get('ttyd') || null;
+  const jellyfinService = serviceCatalogByKey.get('jellyfin') || null;
   const qbittorrentService = serviceCatalogByKey.get('qbittorrent') || null;
+  const jellyfinHref = buildServiceHref(jellyfinService?.route);
+  const downloadServices = serviceCatalog.filter((entry) => entry.surface === 'downloads');
+  const requestServices = MEDIA_REQUEST_SERVICE_KEYS
+    .map((key) => serviceCatalogByKey.get(key))
+    .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+  const requestPrimary = requestServices[0] || null;
+  const requestHref = buildServiceHref(requestPrimary?.route);
+  const automationServices = MEDIA_AUTOMATION_SERVICE_ORDER
+    .map((key) => serviceCatalogByKey.get(key))
+    .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+  const subtitleServices = MEDIA_SUBTITLE_SERVICE_KEYS
+    .map((key) => serviceCatalogByKey.get(key))
+    .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+  const subtitlePrimary = subtitleServices[0] || null;
+  const mediaSupportServices = MEDIA_SUPPORT_SERVICE_KEYS
+    .map((key) => serviceCatalogByKey.get(key))
+    .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+  const arrHealthyCount = mediaWorkflow?.automation?.healthy ?? automationServices.filter((entry) => entry.status === 'working').length;
+  const requestStatus = mediaWorkflow?.requests?.status ?? (!requestPrimary
+    ? 'blocked'
+    : requestPrimary.status === 'working'
+      ? 'working'
+      : requestPrimary.available
+        ? requestPrimary.status
+        : 'blocked');
+  const automationStatus = mediaWorkflow?.automation?.status ?? aggregateServiceStatus(automationServices);
+  const subtitleStatus = mediaWorkflow?.subtitles?.status ?? (subtitlePrimary
+    ? subtitlePrimary.available
+      ? subtitlePrimary.status
+      : 'blocked'
+    : 'blocked');
+  const downloadsStatus = mediaWorkflow?.downloads?.status ?? (downloadServices.length > 0
+    ? aggregateServiceStatus(downloadServices)
+    : 'blocked');
+  const downloadWorkspaceTab = mediaWorkflow?.downloads?.workspaceTab
+    || (downloadServices[0] ? (DOWNLOAD_WORKSPACE_BY_SERVICE[downloadServices[0].key] || 'downloads') : 'downloads');
+  const primaryDownloadService = (mediaWorkflow?.downloads?.primaryServiceKey
+    ? serviceCatalogByKey.get(mediaWorkflow.downloads.primaryServiceKey)
+    : null) || qbittorrentService || downloadServices[0] || null;
+  const primaryDownloadHref = buildServiceHref(primaryDownloadService?.route);
+  const downloadSavePath = mediaWorkflow?.downloads?.defaultSavePath
+    || mediaWorkflow?.downloads?.downloadRoots?.[1]
+    || mediaWorkflow?.downloads?.downloadRoots?.[0]
+    || null;
+  const liveTvStatus = mediaWorkflow?.liveTv?.status ?? (jellyfinService?.status === 'working'
+    ? 'setup'
+    : jellyfinService?.status || 'unavailable');
+  const watchSummary = mediaWorkflow?.watch?.summary || (mediaLibraryMounts.length > 0 ? `${mediaLibraryMounts.length} library mount${mediaLibraryMounts.length === 1 ? '' : 's'} online` : 'Library storage not detected');
+  const requestSummary = mediaWorkflow?.requests?.summary || requestPrimary?.blocker || 'Users request content before automation starts';
+  const automationSummary = mediaWorkflow?.automation?.summary || `${automationServices.filter((entry) => entry.status === 'working').length}/${automationServices.length} services working`;
+  const downloadsSummary = mediaWorkflow?.downloads?.summary || (downloadServices.length > 0 ? 'Open transfer queue in Downloads' : 'No download client configured');
+  const subtitleSummary = mediaWorkflow?.subtitles?.summary || subtitlePrimary?.blocker || 'Post-import subtitle sync and upgrade policy';
+  const liveTvSummary = mediaWorkflow?.liveTv?.summary || 'Configure Jellyfin with an M3U tuner, XMLTV guide, and mapped channels';
+  const liveTvChannelCount = mediaWorkflow?.liveTv?.channelCount ?? null;
+  const liveTvSourcesReady = Boolean(mediaWorkflow?.liveTv?.playlistConfigured && mediaWorkflow?.liveTv?.guideConfigured);
   const telemetryStale = lastTelemetryAt > 0 && Date.now() - lastTelemetryAt > (lowPowerMode ? 60000 : 20000);
   const batteryPct = monitor?.device?.batteryPct ?? null;
   const batteryLow = batteryPct != null && batteryPct <= 20 && !monitor?.device?.charging;
@@ -1689,34 +1820,121 @@ export default function Dashboard() {
     const matchesQuery = !deferredLogSearch.trim() || haystack.includes(deferredLogSearch.trim().toLowerCase());
     return matchesLevel && matchesQuery;
   });
+  const mediaWorkflowSteps = MEDIA_WORKFLOW_ORDER.map((step) => {
+    if (step.id === 'watch') {
+      return {
+        ...step,
+        meta: watchSummary,
+        onClick: () => openMediaSection('watch'),
+        status: mediaWorkflow?.watch?.status || jellyfinService?.status || 'unavailable',
+        statusLabel: jellyfinService ? serviceStatusLabel(jellyfinService.status) : 'Missing',
+      };
+    }
+    if (step.id === 'requests') {
+      return {
+        ...step,
+        meta: requestSummary,
+        onClick: () => openMediaSection('requests'),
+        status: requestStatus,
+        statusLabel: !requestPrimary ? 'Blocked' : serviceStatusLabel(requestStatus, { readyLabel: 'Ready' }),
+      };
+    }
+    if (step.id === 'automation') {
+      return {
+        ...step,
+        meta: automationSummary,
+        onClick: () => openMediaSection('automation'),
+        status: automationStatus,
+        statusLabel: automationStatus === 'stalled' ? 'Active' : serviceStatusLabel(automationStatus),
+      };
+    }
+    if (step.id === 'downloads') {
+      return {
+        ...step,
+        meta: downloadsSummary,
+        onClick: () => openTab(downloadWorkspaceTab),
+        status: downloadsStatus,
+        statusLabel: downloadsStatus === 'working' ? 'Ready' : serviceStatusLabel(downloadsStatus, { unknownLabel: 'Linked elsewhere' }),
+      };
+    }
+    if (step.id === 'subtitles') {
+      return {
+        ...step,
+        meta: subtitleSummary,
+        onClick: () => openMediaSection('subtitles'),
+        status: subtitleStatus,
+        statusLabel: !subtitlePrimary ? 'Blocked' : serviceStatusLabel(subtitleStatus, { readyLabel: 'Ready' }),
+      };
+    }
+    return {
+      ...step,
+      meta: liveTvSummary,
+      onClick: () => openMediaSection('live-tv'),
+      status: liveTvStatus,
+      statusLabel: serviceStatusLabel(liveTvStatus, { unknownLabel: 'Setup' }),
+    };
+  });
+  const mediaReadyCount = mediaWorkflowSteps.filter((step) => step.status === 'working').length;
+  const liveTvChecklist = [
+    {
+      id: 'playlist',
+      label: 'Playlist (M3U)',
+      detail: mediaWorkflow?.liveTv?.playlistSource ? `Configured from ${mediaWorkflow.liveTv.playlistSource}. This is the tuner input for channels.` : 'Point Jellyfin to the IPTV M3U or M3U8 source. This is the tuner input for channels.',
+      status: mediaWorkflow?.liveTv?.playlistConfigured ? 'working' : 'setup',
+      statusLabel: mediaWorkflow?.liveTv?.playlistConfigured ? 'Configured' : 'Configure',
+    },
+    {
+      id: 'guide',
+      label: 'Guide (XMLTV)',
+      detail: mediaWorkflow?.liveTv?.guideSource ? `Configured from ${mediaWorkflow.liveTv.guideSource}. This powers the guide and scheduling data.` : 'Add XMLTV guide data so the Live TV guide and recordings have schedule information.',
+      status: mediaWorkflow?.liveTv?.guideConfigured ? 'working' : 'setup',
+      statusLabel: mediaWorkflow?.liveTv?.guideConfigured ? 'Configured' : 'Configure',
+    },
+    {
+      id: 'mapping',
+      label: 'Channel Mapping',
+      detail: mediaWorkflow?.liveTv?.channelsMapped === true
+        ? `${liveTvChannelCount != null ? `${liveTvChannelCount} Live TV channel${liveTvChannelCount === 1 ? '' : 's'}` : 'Live TV channels'} detected in Jellyfin.`
+        : liveTvSourcesReady
+          ? 'Map Jellyfin channels to guide entries so guide listings line up with playback.'
+          : 'Add both M3U and XMLTV sources first, then confirm mapping inside Jellyfin.',
+      status: mediaWorkflow?.liveTv?.channelsMapped === true ? 'working' : liveTvSourcesReady ? 'setup' : 'stalled',
+      statusLabel: mediaWorkflow?.liveTv?.channelsMapped === true
+        ? `${liveTvChannelCount || ''}${liveTvChannelCount ? ' mapped' : 'Mapped'}`
+        : liveTvSourcesReady
+          ? 'Required'
+          : 'Waiting on sources',
+    },
+    {
+      id: 'watch',
+      label: 'Guide / Watch',
+      detail: 'Once the tuner and guide are configured, browsing and playback happen inside Jellyfin.',
+      status: jellyfinService?.status === 'working'
+        ? (liveTvSourcesReady && mediaWorkflow?.liveTv?.channelsMapped === true
+          ? 'working'
+          : liveTvSourcesReady
+            ? 'stalled'
+            : 'setup')
+        : 'stopped',
+      statusLabel: jellyfinService?.status === 'working'
+        ? (liveTvSourcesReady && mediaWorkflow?.liveTv?.channelsMapped === true ? 'Open in Jellyfin' : 'Finish setup')
+        : 'Jellyfin offline',
+    },
+  ];
   const paletteItems = [
     ...serviceCatalog.map((entry) => ({
       id: `service:${entry.key}`,
       kind: 'service' as const,
       label: entry.label,
       subtitle: SERVICE_GROUP_LABELS[entry.group],
-      run: () => {
-        if (entry.surface === 'media' || entry.surface === 'arr' || entry.surface === 'terminal' || entry.surface === 'ftp') {
-          setActiveTab(entry.surface);
-        } else if (entry.surface === 'filesystem') {
-          setActiveTab('filesystem');
-        } else {
-          setActiveTab('home');
-        }
-        setCommandPaletteOpen(false);
-        setSearchHasFocus(false);
-      },
+      run: () => openServiceWorkspace(entry),
     })),
     {
       id: 'action:settings',
       kind: 'action' as const,
       label: 'Open settings',
       subtitle: 'Action',
-      run: () => {
-        setActiveTab('settings');
-        setCommandPaletteOpen(false);
-        setSearchHasFocus(false);
-      },
+      run: () => openTab('settings'),
     },
     {
       id: 'action:telemetry',
@@ -1725,8 +1943,7 @@ export default function Dashboard() {
       subtitle: 'Action',
       run: () => {
         void fetchTelemetry();
-        setCommandPaletteOpen(false);
-        setSearchHasFocus(false);
+        closeSearch();
       },
     },
     {
@@ -1736,8 +1953,7 @@ export default function Dashboard() {
       subtitle: 'Action',
       run: () => {
         exportLogs();
-        setCommandPaletteOpen(false);
-        setSearchHasFocus(false);
+        closeSearch();
       },
     },
     ...COMMAND_DOCS.map((item) => ({
@@ -1749,8 +1965,7 @@ export default function Dashboard() {
         if (typeof window !== 'undefined') {
           window.open(item.value, '_blank', 'noreferrer');
         }
-        setCommandPaletteOpen(false);
-        setSearchHasFocus(false);
+        closeSearch();
       },
     })),
   ].filter((item) => {
@@ -1768,36 +1983,6 @@ export default function Dashboard() {
     return `${item.label} ${item.subtitle}`.toLowerCase().includes(cleanQuery);
   });
   const searchResultsOpen = commandPaletteOpen && (searchHasFocus || deferredCommandQuery.trim().length > 0);
-  const mediaClusters = MEDIA_CLUSTERS.map((cluster) => {
-    const primaryEntries = cluster.primaryKeys
-      .map((key) => serviceCatalogByKey.get(key))
-      .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
-    const supportEntries = cluster.supportKeys
-      .map((key) => serviceCatalogByKey.get(key))
-      .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
-    const optionalSupportEntries = cluster.optionalSupportKeys
-      .map((key) => serviceCatalogByKey.get(key))
-      .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
-    const allEntries = [...primaryEntries, ...supportEntries, ...optionalSupportEntries];
-    const routeSource = primaryEntries.find((entry) => entry.route) || optionalSupportEntries.find((entry) => entry.route) || supportEntries.find((entry) => entry.route) || null;
-    const status = allEntries.some((entry) => entry.status === 'working')
-      ? 'working'
-      : allEntries.some((entry) => entry.status === 'stalled')
-        ? 'stalled'
-        : allEntries.some((entry) => entry.status === 'stopped')
-          ? 'stopped'
-          : 'unavailable';
-
-    return {
-      ...cluster,
-      optionalSupportEntries,
-      primaryEntries,
-      route: routeSource?.route,
-      status,
-      supportEntries,
-    };
-  });
-  const mediaHealthyCount = mediaClusters.filter((cluster) => cluster.status === 'working').length;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1878,8 +2063,10 @@ export default function Dashboard() {
         return 'Home';
       case 'media':
         return 'Media';
+      case 'downloads':
+        return 'DL';
       case 'arr':
-        return 'ARR';
+        return 'Media';
       case 'terminal':
         return 'Term';
       case 'filesystem':
@@ -2683,7 +2870,7 @@ export default function Dashboard() {
                   <div style={{ ...styles.sectionHeader, ...styles.homeSectionHeader }}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 4 }}>All Services</h3>
-                      <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>Gateway, data, and access services are managed here. Media and ARR remain in their own tabs.</p>
+                      <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>Gateway, data, and access services are managed here. Media owns the streaming and automation workflow.</p>
                     </div>
                     <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{homeListedCount} listed</span>
                   </div>
@@ -2936,17 +3123,6 @@ export default function Dashboard() {
                 <article style={styles.card}>
                   <div style={styles.sectionHeader}>
                     <div>
-                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Downloads</h3>
-                      <p style={styles.smallLabel}>qBittorrent is grouped with files so downloads live alongside storage and transfer tasks.</p>
-                    </div>
-                    {qbittorrentService ? <span style={styles.headerPill}>{qbittorrentService.status}</span> : null}
-                  </div>
-                  {qbittorrentService ? renderServiceCard(qbittorrentService) : <p style={styles.smallLabel}>qBittorrent is not available on this host.</p>}
-                </article>
-
-                <article style={styles.card}>
-                  <div style={styles.sectionHeader}>
-                    <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Quick Links</h3>
                       <p style={styles.smallLabel}>Jump straight into the full workspace at the share root you want.</p>
                     </div>
@@ -2996,46 +3172,363 @@ export default function Dashboard() {
           </Panel>
         )}
 
-        {activeTab === 'media' && (
+        {activeTab === 'downloads' && (
           <Panel
-            title="Media"
-            subtitle="Streaming surfaces and support services for the media stack."
-            meta={[`${mediaHealthyCount}/${mediaClusters.length} healthy`, `${visibleStorageMounts.find((entry) => entry.category === 'shared' || entry.category === 'external') ? 'Media storage online' : 'Media storage unknown'}`]}
+            title="Downloads"
+            subtitle="qBittorrent and future download clients live here, while Jellyfin stays the viewing surface."
+            meta={[downloadServices.length > 0 ? `${downloadServices.filter((entry) => entry.status === 'working').length}/${downloadServices.length} working` : 'No clients', downloadsSummary]}
           >
             <div style={styles.surfaceStack}>
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Main Services</h3>
-                    <p style={styles.smallLabel}>Primary media surfaces with support services folded underneath instead of shown as separate cards.</p>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Download Services</h3>
+                    <p style={styles.smallLabel}>Media automation hands off to this workspace. Keep queue health, peers, categories, and retry work here, then jump back to Jellyfin once imports land.</p>
                   </div>
-                  <span style={styles.headerPill}>{mediaHealthyCount}/{mediaClusters.length} healthy</span>
+                  <div style={styles.actionWrap}>
+                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => openTab('media')}>
+                      Back To Media
+                    </button>
+                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => openTab('filesystem')}>
+                      Open Filesystem
+                    </button>
+                  </div>
                 </div>
-                <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['media:stack'] ? styles.collapsedSection : {}) }}>
-                  {mediaClusters.map((cluster) => renderMediaCluster(cluster))}
+                {primaryDownloadService ? (
+                  <div style={{ ...styles.mediaFeatureShell, marginBottom: 14, ...(isCompact ? styles.mediaFeatureShellCompact : {}) }}>
+                    <div style={styles.mediaFeatureCopy}>
+                      <div style={styles.mediaFeatureHead}>
+                        <div style={styles.mediaFeatureTitleBlock}>
+                          <h3 style={styles.mediaFeatureTitle}>{primaryDownloadService.label}</h3>
+                          <p style={styles.mediaFeatureBody}>{primaryDownloadService.description}</p>
+                        </div>
+                        <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                          {renderServiceBadge('Primary client', styles.serviceMiniBadgeMuted, 'downloads:primary')}
+                          {renderServiceBadge(serviceStatusLabel(primaryDownloadService.status, { readyLabel: 'Ready' }), statusToneStyle(primaryDownloadService.status), 'downloads:primary-status')}
+                        </div>
+                      </div>
+                      <p style={styles.serviceCardReason}>{primaryDownloadService.statusReason || 'Automation sends completed grabs here first, then Sonarr and Radarr import them back into the Jellyfin library.'}</p>
+                      <div style={styles.mediaInfoList}>
+                        <span style={styles.mediaInfoItem}>{downloadSavePath ? `Save path ${downloadSavePath}` : 'Save path not detected'}</span>
+                        <span style={styles.mediaInfoItem}>{mediaWorkflow?.downloads?.clientCount != null ? `${mediaWorkflow.downloads.clientCount} client${mediaWorkflow.downloads.clientCount === 1 ? '' : 's'} linked` : `${downloadServices.length} client${downloadServices.length === 1 ? '' : 's'} linked`}</span>
+                        <span style={styles.mediaInfoItem}>{jellyfinService ? `Watch completed imports in ${jellyfinService.label}` : 'Completed imports return to Jellyfin'}</span>
+                      </div>
+                    </div>
+                    <div style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
+                      {primaryDownloadHref ? (
+                        <a href={primaryDownloadHref} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                          Open {primaryDownloadService?.label || 'Client'}
+                        </a>
+                      ) : null}
+                      {jellyfinHref ? (
+                        <a href={jellyfinHref} target="_blank" rel="noreferrer" className="ui-button" style={styles.serviceActionBtn}>
+                          Open Jellyfin
+                        </a>
+                      ) : null}
+                      <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openMediaSection('automation')}>
+                        Automation
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div style={styles.mediaSectionIntro}>
+                  <span style={styles.mediaInfoItem}>{downloadsSummary}</span>
+                  {mediaWorkflow?.downloads?.downloadRoots?.map((root) => (
+                    <span key={root} style={styles.mediaInfoItem}>{root}</span>
+                  ))}
+                </div>
+                <div style={styles.serviceCardGrid}>
+                  {downloadServices.length > 0 ? downloadServices.map((entry) => renderServiceCard(entry)) : <p style={styles.smallLabel}>No dedicated download services are defined yet.</p>}
                 </div>
               </article>
             </div>
           </Panel>
         )}
 
-        {activeTab === 'arr' && (
+        {activeTab === 'media' && (
           <Panel
-            title="ARR"
-            subtitle="Indexer, discovery, and automation services for the media pipeline."
-            meta={[`${arrHealthyCount}/${arrServices.length} healthy`, `${arrServices.filter((entry) => entry.placeholder).length} placeholders`]}
+            title="Media"
+            subtitle="Watch, request, automate, subtitle, and configure Live TV around Jellyfin."
+            meta={[`${mediaReadyCount}/${mediaWorkflowSteps.length} working`, mediaLibraryMounts.length > 0 ? `${mediaLibraryMounts.length} library mount${mediaLibraryMounts.length === 1 ? '' : 's'}` : 'Library storage unknown', 'Downloads in separate tab']}
           >
             <div style={styles.surfaceStack}>
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>ARR Services</h3>
-                    <p style={styles.smallLabel}>Compact control cards for discovery, indexer management, and automation services.</p>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
+                    <p style={styles.smallLabel}>Jellyfin stays front-and-center. Requests, automation, subtitles, and Live TV support the same viewing surface, while download clients stay in their own tabs.</p>
                   </div>
-                  <span style={styles.headerPill}>{arrHealthyCount}/{arrServices.length} healthy</span>
+                  <span style={styles.headerPill}>ARR merged here</span>
                 </div>
-                <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['arr:stack'] ? styles.collapsedSection : {}) }}>
-                  {arrServices.map((entry) => renderServiceCard(entry))}
+                <div style={{ ...styles.mediaWorkflowGrid, ...(isCompact ? styles.mediaWorkflowGridCompact : {}) }}>
+                  {mediaWorkflowSteps.map((step) => (
+                    <button
+                      key={step.id}
+                      className="ui-button hmstx-hover-lift"
+                      type="button"
+                      style={{ ...styles.mediaWorkflowStep, ...(step.status === 'working' ? styles.mediaWorkflowStepActive : {}) }}
+                      onClick={step.onClick}
+                    >
+                      <div style={styles.mediaWorkflowStepHead}>
+                        <span style={styles.mediaWorkflowStepLabel}>{step.label}</span>
+                        <span style={{ ...styles.serviceStatusBadge, ...workflowToneStyle(step.status) }}>{step.statusLabel}</span>
+                      </div>
+                      <p style={styles.mediaWorkflowStepBody}>{step.description}</p>
+                      <span style={styles.mediaWorkflowStepMeta}>{step.meta}</span>
+                    </button>
+                  ))}
+                </div>
+              </article>
+
+              <div style={{ ...styles.mediaWorkspaceGrid, ...(isCompact ? styles.mediaWorkspaceGridCompact : {}) }}>
+                <article
+                  ref={(node) => {
+                    mediaSectionRefs.current.watch = node;
+                  }}
+                  style={styles.card}
+                >
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Watch</h3>
+                      <p style={styles.smallLabel}>Jellyfin is the primary user-facing surface for movies, series, and Live TV playback.</p>
+                    </div>
+                    <span style={styles.headerPill}>{jellyfinService ? serviceStatusLabel(jellyfinService.status) : 'Missing'}</span>
+                  </div>
+                  {jellyfinService ? (
+                    <div style={{ ...styles.mediaFeatureShell, ...(isCompact ? styles.mediaFeatureShellCompact : {}) }}>
+                      <div style={styles.mediaFeatureCopy}>
+                        <div style={styles.mediaFeatureHead}>
+                          <div style={styles.mediaFeatureTitleBlock}>
+                            <h3 style={styles.mediaFeatureTitle}>{jellyfinService.label}</h3>
+                            <p style={styles.mediaFeatureBody}>{jellyfinService.description}</p>
+                          </div>
+                          <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                            {renderServiceBadge('Primary surface', styles.serviceMiniBadgeMuted, 'watch:primary')}
+                            {renderServiceBadge(serviceStatusLabel(jellyfinService.status), statusToneStyle(jellyfinService.status), 'watch:status')}
+                          </div>
+                        </div>
+                        <p style={styles.serviceCardReason}>{jellyfinService.statusReason || 'Requests, imports, subtitles, and Live TV all converge back into Jellyfin for actual viewing.'}</p>
+                        <div style={styles.mediaInfoList}>
+                          <span style={styles.mediaInfoItem}>{mediaLibraryMounts.length > 0 ? `${mediaLibraryMounts.length} library mount${mediaLibraryMounts.length === 1 ? '' : 's'} online` : 'Library storage not detected yet'}</span>
+                          <span style={styles.mediaInfoItem}>{requestPrimary ? `${requestPrimary.label} handles requests` : 'Request portal not configured'}</span>
+                          <span style={styles.mediaInfoItem}>{primaryDownloadService ? `${primaryDownloadService.label} queue stays in Downloads` : 'Download client not configured yet'}</span>
+                          <span style={styles.mediaInfoItem}>Live TV playback opens inside Jellyfin after M3U and XMLTV setup</span>
+                        </div>
+                      </div>
+                      <div style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
+                        {jellyfinHref ? (
+                          <a href={jellyfinHref} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                            Open Jellyfin
+                          </a>
+                        ) : null}
+                        <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openMediaSection('requests')}>
+                          Requests
+                        </button>
+                        <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openTab(downloadWorkspaceTab)}>
+                          Downloads
+                        </button>
+                        <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openMediaSection('live-tv')}>
+                          Live TV
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={styles.smallLabel}>Jellyfin is not available in the current service catalog.</p>
+                  )}
+                </article>
+
+                <div style={styles.mediaSideStack}>
+                  <article
+                    ref={(node) => {
+                      mediaSectionRefs.current.requests = node;
+                    }}
+                    style={styles.card}
+                  >
+                    <div style={styles.sectionHeader}>
+                      <div>
+                        <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Requests</h3>
+                        <p style={styles.smallLabel}>Request intake sits upstream of automation so family members do not need to touch Sonarr or Radarr directly.</p>
+                      </div>
+                      <span style={styles.headerPill}>{serviceStatusLabel(requestStatus, { readyLabel: 'Ready' })}</span>
+                    </div>
+                    {requestPrimary ? (
+                      <div style={styles.mediaMiniSection}>
+                        <div style={{ ...styles.serviceBadgeRow, marginBottom: 8 }}>
+                          {renderServiceBadge('Request portal', styles.serviceMiniBadgeMuted, 'requests:role')}
+                          {renderServiceBadge(serviceStatusLabel(requestStatus, { readyLabel: 'Ready' }), workflowToneStyle(requestStatus), 'requests:status')}
+                        </div>
+                        <p style={styles.serviceCardDescription}>{requestPrimary.description}</p>
+                        <p style={styles.serviceCardReason}>{requestPrimary.available ? 'Approved requests feed the automation layer with predefined profiles, folders, and quality defaults.' : requestPrimary.blocker || 'The request portal is not currently available on this host.'}</p>
+                        <div style={{ ...styles.serviceCardRail, ...styles.serviceCardRailCompact }}>
+                          {requestPrimary.available && requestHref ? (
+                            <a href={requestHref} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                              Open Requests
+                            </a>
+                          ) : null}
+                          <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openMediaSection('automation')}>
+                            View Automation
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p style={styles.smallLabel}>No request service is defined yet. Media requests should stay optional and sit in front of automation when added.</p>
+                    )}
+                  </article>
+
+                  <article
+                    ref={(node) => {
+                      mediaSectionRefs.current.downloads = node;
+                    }}
+                    style={styles.card}
+                  >
+                    <div style={styles.sectionHeader}>
+                      <div>
+                        <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Downloads</h3>
+                        <p style={styles.smallLabel}>Queue inspection, peers, and transfer troubleshooting stay outside Media so download workspaces can grow independently.</p>
+                      </div>
+                      <span style={styles.headerPill}>{downloadsStatus === 'working' ? 'Ready' : serviceStatusLabel(downloadsStatus)}</span>
+                    </div>
+                    <div style={styles.mediaMiniSection}>
+                      <div style={{ ...styles.serviceBadgeRow, marginBottom: 8 }}>
+                        {renderServiceBadge('Downloads tab', styles.serviceMiniBadgeMuted, 'downloads:location')}
+                        {primaryDownloadService ? renderServiceBadge(primaryDownloadService.label, statusToneStyle(primaryDownloadService.status), 'downloads:qbit') : renderServiceBadge('No client', styles.serviceStatusWarn, 'downloads:none')}
+                      </div>
+                      <p style={styles.serviceCardDescription}>{primaryDownloadService ? primaryDownloadService.description : 'No download service is configured yet.'}</p>
+                      <p style={styles.serviceCardReason}>{downloadSavePath ? `${primaryDownloadService?.label || 'Download client'} saves into ${downloadSavePath} before Sonarr and Radarr import completed media back into the library.` : 'Media only summarizes download health. Operational queue work stays in the dedicated Downloads tab.'}</p>
+                      <div style={{ ...styles.serviceCardRail, ...styles.serviceCardRailCompact }}>
+                        {primaryDownloadHref ? (
+                          <a href={primaryDownloadHref} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                            Open {primaryDownloadService?.label || 'Client'}
+                          </a>
+                        ) : null}
+                        <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openTab(downloadWorkspaceTab)}>
+                          Open Downloads
+                        </button>
+                        <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openMediaSection('automation')}>
+                          Upstream Automation
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article
+                    ref={(node) => {
+                      mediaSectionRefs.current.subtitles = node;
+                    }}
+                    style={styles.card}
+                  >
+                    <div style={styles.sectionHeader}>
+                      <div>
+                        <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Subtitles</h3>
+                        <p style={styles.smallLabel}>Subtitle work happens after import, so it stays adjacent to Media instead of buried inside raw service controls.</p>
+                      </div>
+                      <span style={styles.headerPill}>{subtitlePrimary ? serviceStatusLabel(subtitleStatus, { readyLabel: 'Ready' }) : 'Blocked'}</span>
+                    </div>
+                    {subtitlePrimary ? (
+                      <div style={styles.mediaMiniSection}>
+                        <div style={{ ...styles.serviceBadgeRow, marginBottom: 8 }}>
+                          {renderServiceBadge('Post-import', styles.serviceMiniBadgeMuted, 'subtitles:role')}
+                          {renderServiceBadge(serviceStatusLabel(subtitleStatus, { readyLabel: 'Ready' }), workflowToneStyle(subtitleStatus), 'subtitles:status')}
+                        </div>
+                        <p style={styles.serviceCardDescription}>{subtitlePrimary.description}</p>
+                        <p style={styles.serviceCardReason}>{subtitlePrimary.available ? 'Bazarr follows imported media from Sonarr and Radarr and applies subtitle language policy afterward.' : subtitlePrimary.blocker || 'Subtitle automation is not currently available on this host.'}</p>
+                        <div style={{ ...styles.serviceCardRail, ...styles.serviceCardRailCompact }}>
+                          <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => openMediaSection('automation')}>
+                            Automation Details
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p style={styles.smallLabel}>No subtitle service is defined yet.</p>
+                    )}
+                  </article>
+                </div>
+              </div>
+
+              <article
+                ref={(node) => {
+                  mediaSectionRefs.current['live-tv'] = node;
+                }}
+                style={styles.card}
+              >
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Live TV</h3>
+                    <p style={styles.smallLabel}>Center Live TV around Jellyfin’s official flow: add an M3U tuner, connect XMLTV guide data, map channels, then watch in Jellyfin.</p>
+                  </div>
+                  <span style={styles.headerPill}>{serviceStatusLabel(liveTvStatus, { unknownLabel: 'Setup' })}</span>
+                </div>
+                <div style={styles.mediaChecklist}>
+                  {liveTvChecklist.map((item) => (
+                    <div key={item.id} style={styles.mediaChecklistRow}>
+                      <div style={styles.mediaChecklistCopy}>
+                        <h4 style={styles.mediaChecklistTitle}>{item.label}</h4>
+                        <p style={styles.mediaChecklistBody}>{item.detail}</p>
+                      </div>
+                      <span style={{ ...styles.serviceStatusBadge, ...workflowToneStyle(item.status) }}>{item.statusLabel}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={styles.mediaSupportMeta}>
+                  <span style={styles.supportLabel}>Support stack</span>
+                  <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                    {mediaSupportServices.length > 0
+                      ? mediaSupportServices.map((entry) => renderServiceBadge(entry.label, statusToneStyle(entry.status), `live-tv:${entry.key}`))
+                      : <span style={styles.smallLabel}>No support services defined.</span>}
+                  </div>
+                </div>
+                <div style={{ ...styles.serviceCardRail, marginTop: 12, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
+                  {jellyfinHref ? (
+                    <a href={jellyfinHref} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                      Open Jellyfin
+                    </a>
+                  ) : null}
+                  <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => toggleSection('media:support')}>
+                    {collapsedSections['media:support'] ? 'Show support stack' : 'Hide support stack'}
+                  </button>
+                </div>
+              </article>
+
+              <article
+                ref={(node) => {
+                  mediaSectionRefs.current.automation = node;
+                }}
+                style={styles.card}
+              >
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Automation</h3>
+                    <p style={styles.smallLabel}>Prowlarr manages indexers, Sonarr and Radarr drive grab and import policy, and download execution stays in the Downloads tab.</p>
+                  </div>
+                  <span style={styles.headerPill}>{arrHealthyCount}/{automationServices.length} working</span>
+                </div>
+                <div style={styles.mediaSectionIntro}>
+                  <span style={styles.mediaInfoItem}>Prowlarr syncs indexers into Sonarr and Radarr.</span>
+                  <span style={styles.mediaInfoItem}>Sonarr and Radarr monitor downloads, import results, and move them into the Jellyfin library.</span>
+                  <span style={styles.mediaInfoItem}>qBittorrent and future download clients remain in other tabs by design.</span>
+                </div>
+                <div style={styles.serviceCardGrid}>
+                  {automationServices.map((entry) => renderServiceCard(entry))}
+                </div>
+              </article>
+
+              <article
+                ref={(node) => {
+                  mediaSectionRefs.current.support = node;
+                }}
+                style={styles.card}
+              >
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Advanced Support</h3>
+                    <p style={styles.smallLabel}>Redis and PostgreSQL support Live TV metadata and future operator tooling, but they should not dominate the main Media workflow.</p>
+                  </div>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleSection('media:support')}>
+                    {collapsedSections['media:support'] ? 'Show' : 'Hide'}
+                  </button>
+                </div>
+                <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['media:support'] ? styles.collapsedSection : {}) }}>
+                  {mediaSupportServices.length > 0 ? mediaSupportServices.map((entry) => renderServiceCard(entry)) : <p style={styles.smallLabel}>No support services are defined for Media.</p>}
                 </div>
               </article>
             </div>
@@ -4331,6 +4824,169 @@ const styles: Record<string, CSSProperties> = {
   surfaceStack: {
     display: 'grid',
     gap: 16,
+  },
+  mediaWorkflowGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: 10,
+  },
+  mediaWorkflowGridCompact: {
+    gridTemplateColumns: '1fr',
+  },
+  mediaWorkflowStep: {
+    display: 'grid',
+    gap: 8,
+    padding: '12px 14px',
+    textAlign: 'left',
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+  },
+  mediaWorkflowStepActive: {
+    borderColor: 'rgba(111, 159, 112, 0.42)',
+    boxShadow: 'inset 0 0 0 1px rgba(111, 159, 112, 0.08)',
+    background: '#15191d',
+  },
+  mediaWorkflowStepHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  mediaWorkflowStepLabel: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: 700,
+  },
+  mediaWorkflowStepBody: {
+    margin: 0,
+    color: THEME.text,
+    fontSize: 13,
+    lineHeight: 1.45,
+  },
+  mediaWorkflowStepMeta: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontFamily: 'var(--font-geist-mono), monospace',
+  },
+  mediaWorkspaceGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)',
+    gap: 16,
+    alignItems: 'start',
+  },
+  mediaWorkspaceGridCompact: {
+    gridTemplateColumns: '1fr',
+  },
+  mediaFeatureShell: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: 14,
+    alignItems: 'start',
+  },
+  mediaFeatureShellCompact: {
+    gridTemplateColumns: '1fr',
+    gap: 12,
+  },
+  mediaFeatureCopy: {
+    minWidth: 0,
+    display: 'grid',
+    gap: 10,
+  },
+  mediaFeatureHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  mediaFeatureTitleBlock: {
+    minWidth: 0,
+    display: 'grid',
+    gap: 6,
+  },
+  mediaFeatureTitle: {
+    margin: 0,
+    fontSize: 18,
+    fontWeight: 700,
+    color: THEME.text,
+  },
+  mediaFeatureBody: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 13,
+    lineHeight: 1.55,
+  },
+  mediaInfoList: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  mediaInfoItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: 28,
+    padding: '4px 10px',
+    borderRadius: 999,
+    border: `1px solid ${THEME.border}`,
+    background: '#15181c',
+    color: THEME.text,
+    fontSize: 11,
+    lineHeight: 1.3,
+  },
+  mediaSideStack: {
+    minWidth: 0,
+    display: 'grid',
+    gap: 16,
+  },
+  mediaMiniSection: {
+    display: 'grid',
+    gap: 10,
+  },
+  mediaChecklist: {
+    display: 'grid',
+    gap: 10,
+  },
+  mediaChecklistRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    flexWrap: 'wrap',
+    padding: '12px 14px',
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+  },
+  mediaChecklistCopy: {
+    minWidth: 0,
+    flex: '1 1 280px',
+    display: 'grid',
+    gap: 4,
+  },
+  mediaChecklistTitle: {
+    margin: 0,
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: 600,
+  },
+  mediaChecklistBody: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
+  mediaSupportMeta: {
+    display: 'grid',
+    gap: 8,
+    marginTop: 14,
+  },
+  mediaSectionIntro: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 12,
   },
   serviceGroupStack: {
     display: 'grid',

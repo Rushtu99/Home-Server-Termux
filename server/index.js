@@ -57,6 +57,24 @@ const CHROOT_ROOTFS = process.env.CHROOT_ROOTFS || path.join('/data/data/com.ter
 const FILEBROWSER_ROOT = process.env.FILEBROWSER_ROOT || path.join(HOME_DIR, 'Drives');
 const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
 const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || FILEBROWSER_ROOT;
+const MEDIA_SHARE_NAME = process.env.MEDIA_SHARE_NAME || 'Media';
+const MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(FILEBROWSER_ROOT, MEDIA_SHARE_NAME);
+const MEDIA_MOVIES_DIR = process.env.MEDIA_MOVIES_DIR || path.join(MEDIA_ROOT, 'movies');
+const MEDIA_SERIES_DIR = process.env.MEDIA_SERIES_DIR || path.join(MEDIA_ROOT, 'series');
+const MEDIA_DOWNLOADS_DIR = process.env.MEDIA_DOWNLOADS_DIR || path.join(MEDIA_ROOT, 'downloads');
+const MEDIA_DOWNLOADS_MANUAL_DIR = process.env.MEDIA_DOWNLOADS_MANUAL_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'manual');
+const MEDIA_IPTV_CACHE_DIR = process.env.MEDIA_IPTV_CACHE_DIR || path.join(MEDIA_ROOT, 'iptv-cache');
+const MEDIA_IPTV_EPG_DIR = process.env.MEDIA_IPTV_EPG_DIR || path.join(MEDIA_ROOT, 'iptv-epg');
+const JELLYFIN_LIVE_TV_M3U_URL = process.env.JELLYFIN_LIVE_TV_M3U_URL || process.env.MEDIA_IPTV_PLAYLIST_URL || '';
+const JELLYFIN_LIVE_TV_M3U_PATH = process.env.JELLYFIN_LIVE_TV_M3U_PATH || process.env.MEDIA_IPTV_PLAYLIST_PATH || path.join(MEDIA_IPTV_CACHE_DIR, 'playlist.m3u');
+const JELLYFIN_LIVE_TV_XMLTV_URL = process.env.JELLYFIN_LIVE_TV_XMLTV_URL || process.env.MEDIA_IPTV_GUIDE_URL || '';
+const JELLYFIN_LIVE_TV_XMLTV_PATH = process.env.JELLYFIN_LIVE_TV_XMLTV_PATH || process.env.MEDIA_IPTV_GUIDE_PATH || path.join(MEDIA_IPTV_EPG_DIR, 'guide.xml');
+const JELLYFIN_HOME = process.env.JELLYFIN_HOME || path.join(MEDIA_SERVICES_HOME, 'jellyfin');
+const JELLYFIN_DATA_DIR = process.env.JELLYFIN_DATA_DIR || path.join(JELLYFIN_HOME, 'data');
+const JELLYFIN_DB_PATH = process.env.JELLYFIN_DB_PATH || path.join(JELLYFIN_DATA_DIR, 'data', 'jellyfin.db');
+const JELLYFIN_LIVETV_METADATA_DIR = process.env.JELLYFIN_LIVETV_METADATA_DIR || path.join(JELLYFIN_DATA_DIR, 'metadata', 'views', 'livetv');
+const QBITTORRENT_HOME = process.env.QBITTORRENT_HOME || path.join(MEDIA_SERVICES_HOME, 'qbittorrent');
+const QBITTORRENT_CONFIG_PATH = process.env.QBITTORRENT_CONFIG_PATH || path.join(QBITTORRENT_HOME, 'qBittorrent', 'config', 'qBittorrent.conf');
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
 const APP_DB_PATH = process.env.APP_DB_PATH || path.join(RUNTIME_DIR, 'app.db');
 const FTP_MOUNT_RUNTIME_DIR = process.env.FTP_MOUNT_RUNTIME_DIR || path.join(RUNTIME_DIR, 'ftp-mounts');
@@ -455,11 +473,11 @@ const SERVICE_CATALOG_META = {
   },
   qbittorrent: {
     controlMode: 'always_on',
-    description: 'Handles automated and manual torrent downloads alongside the file workspace.',
-    group: 'filesystem',
+    description: 'Handles automated and manual torrent downloads inside the dedicated downloads workspace.',
+    group: 'downloads',
     label: 'qBittorrent',
     route: '/qb/',
-    surface: 'filesystem',
+    surface: 'downloads',
   },
   sonarr: {
     controlMode: 'always_on',
@@ -520,6 +538,10 @@ let ftpProviderCache = {
   provider: null,
 };
 let networkSnapshotCache = null;
+const localProbeCache = {
+  jellyfinLiveTv: { expiresAt: 0, value: null },
+  qbittorrentConfig: { expiresAt: 0, value: null },
+};
 const timedCache = {
   monitor: { expiresAt: 0, value: null, promise: null },
   services: { expiresAt: 0, value: null, promise: null },
@@ -537,7 +559,7 @@ const OPTIONAL_SERVICE_NAMES = [
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
 const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
-const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'filesystem', 'access'];
+const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'downloads', 'filesystem', 'access'];
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SERVICE_HISTORY_LIMIT = 400;
@@ -697,6 +719,133 @@ const fileIsExecutable = (filePath) => {
     return false;
   }
 };
+
+const firstExistingFile = (directoryPath, extensions) => {
+  try {
+    const entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+    const match = entries.find((entry) =>
+      entry.isFile() && extensions.some((extension) => entry.name.toLowerCase().endsWith(extension))
+    );
+    return match ? path.join(directoryPath, match.name) : null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveMediaSource = (explicitUrl, explicitPath, directoryPath, extensions) => {
+  if (String(explicitUrl || '').trim()) {
+    return String(explicitUrl).trim();
+  }
+
+  if (String(explicitPath || '').trim() && fs.existsSync(explicitPath)) {
+    return explicitPath;
+  }
+
+  return firstExistingFile(directoryPath, extensions);
+};
+
+const withLocalProbeCache = (cacheKey, ttlMs, loader) => {
+  const cache = localProbeCache[cacheKey];
+  const now = Date.now();
+  if (cache.value && cache.expiresAt > now) {
+    return cache.value;
+  }
+
+  const value = loader();
+  cache.value = value;
+  cache.expiresAt = now + ttlMs;
+  return value;
+};
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const countVisibleDescendants = (directoryPath, maxDepth = 4) => {
+  if (maxDepth < 0) {
+    return 0;
+  }
+
+  try {
+    const entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+    return entries.reduce((count, entry) => {
+      if (entry.name.startsWith('.')) {
+        return count;
+      }
+
+      const entryPath = path.join(directoryPath, entry.name);
+      if (entry.isDirectory()) {
+        return count + 1 + countVisibleDescendants(entryPath, maxDepth - 1);
+      }
+
+      return count + 1;
+    }, 0);
+  } catch {
+    return 0;
+  }
+};
+
+const readIniValue = (content, key) => {
+  const match = content.match(new RegExp(`^${escapeRegExp(key)}=(.*)$`, 'm'));
+  return match ? match[1].trim() : null;
+};
+
+const probeQbittorrentConfig = () => withLocalProbeCache('qbittorrentConfig', 5000, () => {
+  const fallbackPath = fs.existsSync(MEDIA_DOWNLOADS_MANUAL_DIR) ? MEDIA_DOWNLOADS_MANUAL_DIR : MEDIA_DOWNLOADS_DIR;
+  if (!fs.existsSync(QBITTORRENT_CONFIG_PATH)) {
+    return { defaultSavePath: fallbackPath };
+  }
+
+  try {
+    const configText = fs.readFileSync(QBITTORRENT_CONFIG_PATH, 'utf8');
+    return {
+      defaultSavePath: readIniValue(configText, 'Session\\DefaultSavePath') || fallbackPath,
+    };
+  } catch {
+    return { defaultSavePath: fallbackPath };
+  }
+});
+
+const probeJellyfinLiveTvState = () => withLocalProbeCache('jellyfinLiveTv', 5000, () => {
+  let channelCount = 0;
+  let inspected = false;
+
+  if (fs.existsSync(JELLYFIN_DB_PATH)) {
+    try {
+      const raw = execFileSync('python3', [
+        '-c',
+        [
+          'import json, sqlite3, sys',
+          'conn = sqlite3.connect(sys.argv[1])',
+          'cur = conn.cursor()',
+          'cur.execute("""',
+          'SELECT COUNT(*)',
+          'FROM BaseItems',
+          "WHERE lower(COALESCE(Type, '')) LIKE '%channel%'",
+          "   OR lower(COALESCE(Type, '')) LIKE '%program%'",
+          "   OR (lower(COALESCE(Path, '')) LIKE '%views/livetv/%' AND lower(COALESCE(Type, '')) != 'mediabrowser.controller.entities.userview')",
+          '""")',
+          'count = cur.fetchone()[0] or 0',
+          "print(json.dumps({'channelCount': int(count)}))",
+        ].join('\n'),
+        JELLYFIN_DB_PATH,
+      ], {
+        encoding: 'utf8',
+        timeout: 1500,
+      });
+      const parsed = JSON.parse(raw);
+      channelCount = Number(parsed?.channelCount) || 0;
+      inspected = true;
+    } catch {
+      inspected = false;
+    }
+  }
+
+  if (!inspected) {
+    channelCount = countVisibleDescendants(JELLYFIN_LIVETV_METADATA_DIR, 4);
+    inspected = fs.existsSync(JELLYFIN_LIVETV_METADATA_DIR);
+  }
+
+  return { channelCount, inspected };
+});
 
 const detectFtpProvider = async (forceRefresh = false) => {
   const now = Date.now();
@@ -1038,6 +1187,138 @@ const buildServiceGroups = (catalog) =>
     }
     return acc;
   }, {});
+
+const aggregateCatalogStatus = (entries) => {
+  if (!entries.length) {
+    return 'unavailable';
+  }
+  if (entries.every((entry) => entry.status === 'working')) {
+    return 'working';
+  }
+  if (entries.some((entry) => entry.status === 'working' || entry.status === 'stalled')) {
+    return 'stalled';
+  }
+  if (entries.some((entry) => entry.status === 'stopped')) {
+    return 'stopped';
+  }
+  return 'unavailable';
+};
+
+const buildMediaWorkflowSnapshot = (catalog) => {
+  const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
+  const watchEntry = catalogByKey.get('jellyfin') || null;
+  const requestEntry = catalogByKey.get('jellyseerr') || null;
+  const automationEntries = ['prowlarr', 'sonarr', 'radarr']
+    .map((key) => catalogByKey.get(key))
+    .filter(Boolean);
+  const subtitleEntry = catalogByKey.get('bazarr') || null;
+  const supportEntries = ['redis', 'postgres']
+    .map((key) => catalogByKey.get(key))
+    .filter(Boolean);
+  const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
+  const primaryDownloadEntry = downloadEntries[0] || null;
+  const libraryRoots = [MEDIA_MOVIES_DIR, MEDIA_SERIES_DIR];
+  const downloadRoots = [MEDIA_DOWNLOADS_DIR, MEDIA_DOWNLOADS_MANUAL_DIR];
+  const qbittorrentConfig = probeQbittorrentConfig();
+  const liveTvProbe = probeJellyfinLiveTvState();
+  const libraryRootReady = libraryRoots.every((candidate) => fs.existsSync(candidate));
+  const playlistSource = resolveMediaSource(JELLYFIN_LIVE_TV_M3U_URL, JELLYFIN_LIVE_TV_M3U_PATH, MEDIA_IPTV_CACHE_DIR, ['.m3u', '.m3u8']);
+  const guideSource = resolveMediaSource(JELLYFIN_LIVE_TV_XMLTV_URL, JELLYFIN_LIVE_TV_XMLTV_PATH, MEDIA_IPTV_EPG_DIR, ['.xml', '.xmltv']);
+  const playlistConfigured = Boolean(playlistSource);
+  const guideConfigured = Boolean(guideSource);
+  const channelCount = liveTvProbe.channelCount || 0;
+  const channelsMapped = channelCount > 0
+    ? true
+    : playlistConfigured || guideConfigured
+      ? false
+      : null;
+  const requestsBlocked = !requestEntry || !requestEntry.available;
+  const downloadsStatus = downloadEntries.length > 0
+    ? aggregateCatalogStatus(downloadEntries)
+    : 'blocked';
+  const liveTvStatus = !watchEntry
+    ? 'unavailable'
+    : watchEntry.status !== 'working'
+      ? watchEntry.status
+      : playlistConfigured && guideConfigured && channelsMapped === true
+        ? 'working'
+        : playlistConfigured || guideConfigured
+          ? 'stalled'
+          : 'setup';
+
+  return {
+    watch: {
+      libraryRootReady,
+      libraryRoots,
+      serviceKeys: watchEntry ? [watchEntry.key] : [],
+      status: watchEntry?.status || 'unavailable',
+      summary: libraryRootReady
+        ? `Library roots ready at ${libraryRoots.join(' and ')}`
+        : `Library roots missing under ${MEDIA_ROOT}`,
+    },
+    requests: {
+      blocker: requestsBlocked ? requestEntry?.blocker || 'Request portal is not installed on this host yet.' : null,
+      serviceKeys: requestEntry ? [requestEntry.key] : [],
+      status: requestsBlocked ? 'blocked' : requestEntry.status,
+      summary: requestsBlocked
+        ? requestEntry?.blocker || 'Requests are unavailable until Jellyseerr is installed.'
+        : 'Requests flow into Sonarr and Radarr with saved defaults.',
+    },
+    automation: {
+      healthy: automationEntries.filter((entry) => entry.status === 'working').length,
+      serviceKeys: automationEntries.map((entry) => entry.key),
+      status: aggregateCatalogStatus(automationEntries),
+      summary: 'Prowlarr syncs indexers into Sonarr and Radarr, which then monitor imports from download clients.',
+      total: automationEntries.length,
+    },
+    downloads: {
+      clientCount: downloadEntries.length,
+      defaultSavePath: qbittorrentConfig.defaultSavePath,
+      downloadRoots,
+      primaryServiceKey: primaryDownloadEntry?.key || null,
+      serviceKeys: downloadEntries.map((entry) => entry.key),
+      status: downloadsStatus,
+      summary: downloadEntries.length > 0
+        ? `${primaryDownloadEntry?.label || 'Download clients'} run in the Downloads tab. Save path: ${qbittorrentConfig.defaultSavePath || downloadRoots.join(' and ')}`
+        : 'No download clients are configured yet.',
+      workspaceTab: 'downloads',
+    },
+    subtitles: {
+      blocker: !subtitleEntry || !subtitleEntry.available ? subtitleEntry?.blocker || 'Subtitle automation is not installed on this host.' : null,
+      serviceKeys: subtitleEntry ? [subtitleEntry.key] : [],
+      status: !subtitleEntry || !subtitleEntry.available ? 'blocked' : subtitleEntry.status,
+      summary: !subtitleEntry || !subtitleEntry.available
+        ? subtitleEntry?.blocker || 'Subtitle automation is unavailable.'
+        : 'Subtitle automation runs after Sonarr and Radarr import media into the library.',
+    },
+    liveTv: {
+      channelCount,
+      channelsMapped,
+      guideConfigured,
+      guideSource,
+      playlistConfigured,
+      playlistSource,
+      status: liveTvStatus,
+      summary: !watchEntry || watchEntry.status !== 'working'
+        ? 'Start Jellyfin before configuring Live TV.'
+        : playlistConfigured && guideConfigured && channelsMapped === true
+          ? `${channelCount} Live TV channel${channelCount === 1 ? '' : 's'} detected in Jellyfin. Guide and tuner sources are ready.`
+          : playlistConfigured && guideConfigured
+            ? 'Playlist and guide sources are present. Finish channel mapping inside Jellyfin.'
+          : playlistConfigured || guideConfigured
+            ? 'Live TV is partially configured. Add both M3U and XMLTV sources in Jellyfin.'
+            : 'No Live TV sources detected yet. Add an M3U tuner and XMLTV guide for Jellyfin.',
+      tunerType: 'm3u',
+    },
+    support: {
+      serviceKeys: supportEntries.map((entry) => entry.key),
+      status: aggregateCatalogStatus(supportEntries),
+      summary: supportEntries.length > 0
+        ? 'Redis and PostgreSQL support Live TV metadata and background media jobs.'
+        : 'No media support services are configured.',
+    },
+  };
+};
 
 const waitForServiceState = async (svc, shouldBeRunning, attempts = 10, delayMs = 300) => {
   for (let i = 0; i < attempts; i += 1) {
@@ -1824,6 +2105,7 @@ const getDashboardSnapshot = async (sessionId) => {
     services,
     serviceCatalog,
     serviceGroups: buildServiceGroups(serviceCatalog),
+    mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
     monitor,
     connections: getConnectionsSnapshot(),
     networkDevices: getNetworkDevicesSnapshot(),
@@ -1848,6 +2130,7 @@ const getTelemetrySnapshot = async (sessionId) => {
     monitor,
     serviceCatalog,
     serviceGroups: buildServiceGroups(serviceCatalog),
+    mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
     serviceController: {
       locked: !isServiceControllerUnlocked(sessionId),
       optionalServices: serviceCatalog
@@ -2809,6 +3092,7 @@ const servicesHandler = async (req, res) => {
     services: result,
     serviceCatalog,
     serviceGroups: buildServiceGroups(serviceCatalog),
+    mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
   });
 };
 

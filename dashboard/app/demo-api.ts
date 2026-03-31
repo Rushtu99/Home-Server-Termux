@@ -96,7 +96,7 @@ type DemoServiceCatalogEntry = {
   blocker?: string;
   controlMode: 'always_on' | 'optional';
   description: string;
-  group: 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem';
+  group: 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads';
   key: string;
   lastCheckedAt?: string | null;
   lastTransitionAt?: string | null;
@@ -106,7 +106,7 @@ type DemoServiceCatalogEntry = {
   route?: string;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable';
   statusReason?: string;
-  surface: 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
+  surface: 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
   uptimePct?: number | null;
 };
 
@@ -120,7 +120,7 @@ const SERVICE_META: DemoServiceCatalogEntry[] = [
   { available: true, controlMode: 'always_on', description: 'Single public gateway for the dashboard and companion services.', group: 'platform', key: 'nginx', label: 'nginx', placeholder: false, status: 'working', surface: 'home' },
   { available: true, controlMode: 'always_on', description: 'Browser terminal access inside the dashboard.', group: 'platform', key: 'ttyd', label: 'ttyd', placeholder: false, route: '/term/', status: 'working', surface: 'terminal' },
   { available: true, controlMode: 'always_on', description: 'Streams your movie and series library to local clients.', group: 'media', key: 'jellyfin', label: 'Jellyfin', placeholder: false, route: '/jellyfin/', status: 'working', surface: 'media' },
-  { available: true, controlMode: 'always_on', description: 'Handles automated and manual torrent downloads alongside the file workspace.', group: 'filesystem', key: 'qbittorrent', label: 'qBittorrent', placeholder: false, route: '/qb/', status: 'working', surface: 'filesystem' },
+  { available: true, controlMode: 'always_on', description: 'Handles automated and manual torrent downloads alongside the dedicated downloads workspace.', group: 'downloads', key: 'qbittorrent', label: 'qBittorrent', placeholder: false, route: '/qb/', status: 'working', surface: 'downloads' },
   { available: false, blocker: 'Currently blocked on Android-native Node/chroot packaging.', controlMode: 'always_on', description: 'Request portal for adding movies and shows into the automation flow.', group: 'media', key: 'jellyseerr', label: 'Jellyseerr', placeholder: true, route: '/requests/', status: 'unavailable', surface: 'media' },
   { available: true, controlMode: 'always_on', description: 'Automates series discovery, tracking, and download handoff.', group: 'arr', key: 'sonarr', label: 'Sonarr', placeholder: false, route: '/sonarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Automates movie discovery, tracking, and download handoff.', group: 'arr', key: 'radarr', label: 'Radarr', placeholder: false, route: '/radarr/', status: 'working', surface: 'arr' },
@@ -332,6 +332,10 @@ const seedState = (): DemoState => {
     makeNode('Media/series/Andor/Season 01/Andor.S01E01.mkv', 'file', 2_100_145_176),
     makeNode('Media/downloads', 'directory'),
     makeNode('Media/downloads/manual', 'directory'),
+    makeNode('Media/iptv-cache', 'directory'),
+    makeNode('Media/iptv-cache/playlist.m3u', 'file', 86_210),
+    makeNode('Media/iptv-epg', 'directory'),
+    makeNode('Media/iptv-epg/guide.xml', 'file', 312_480),
     makeNode('Projects', 'directory'),
     makeNode('Projects/Designs', 'directory'),
     makeNode('Projects/Designs/dashboard-wireframe.md', 'file', 4820),
@@ -584,8 +588,106 @@ const buildServiceGroups = (catalog: DemoServiceCatalogEntry[]) =>
     return acc;
   }, {});
 
+const aggregateCatalogStatus = (entries: DemoServiceCatalogEntry[]) => {
+  if (entries.length === 0) {
+    return 'unavailable';
+  }
+  if (entries.every((entry) => entry.status === 'working')) {
+    return 'working';
+  }
+  if (entries.some((entry) => entry.status === 'working' || entry.status === 'stalled')) {
+    return 'stalled';
+  }
+  if (entries.some((entry) => entry.status === 'stopped')) {
+    return 'stopped';
+  }
+  return 'unavailable';
+};
+
+const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]) => {
+  const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
+  const watchEntry = catalogByKey.get('jellyfin') || null;
+  const requestEntry = catalogByKey.get('jellyseerr') || null;
+  const automationEntries = ['prowlarr', 'sonarr', 'radarr']
+    .map((key) => catalogByKey.get(key))
+    .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
+  const subtitleEntry = catalogByKey.get('bazarr') || null;
+  const supportEntries = ['redis', 'postgres']
+    .map((key) => catalogByKey.get(key))
+    .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
+  const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
+  const primaryDownloadEntry = downloadEntries[0] || null;
+  const libraryRoots = ['~/Drives/Media/movies', '~/Drives/Media/series'];
+  const downloadRoots = ['~/Drives/Media/downloads', '~/Drives/Media/downloads/manual'];
+  const playlistSource = state.nodes.has('Media/iptv-cache/playlist.m3u') ? '~/Drives/Media/iptv-cache/playlist.m3u' : null;
+  const guideSource = state.nodes.has('Media/iptv-epg/guide.xml') ? '~/Drives/Media/iptv-epg/guide.xml' : null;
+  const channelCount = 42;
+
+  return {
+    watch: {
+      libraryRootReady: state.nodes.has('Media/movies') && state.nodes.has('Media/series'),
+      libraryRoots,
+      serviceKeys: watchEntry ? [watchEntry.key] : [],
+      status: watchEntry?.status || 'unavailable',
+      summary: 'Library roots are present and ready for Jellyfin playback.',
+    },
+    requests: {
+      blocker: !requestEntry || !requestEntry.available ? requestEntry?.blocker || 'Request portal is not installed in the demo host.' : null,
+      serviceKeys: requestEntry ? [requestEntry.key] : [],
+      status: !requestEntry || !requestEntry.available ? 'blocked' : requestEntry.status,
+      summary: !requestEntry || !requestEntry.available
+        ? requestEntry?.blocker || 'Requests are unavailable in this demo state.'
+        : 'Approved requests flow into Sonarr and Radarr with saved defaults.',
+    },
+    automation: {
+      healthy: automationEntries.filter((entry) => entry.status === 'working').length,
+      serviceKeys: automationEntries.map((entry) => entry.key),
+      status: aggregateCatalogStatus(automationEntries),
+      summary: 'Prowlarr syncs indexers into Sonarr and Radarr, which then import completed downloads.',
+      total: automationEntries.length,
+    },
+    downloads: {
+      clientCount: downloadEntries.length,
+      defaultSavePath: '~/Drives/Media/downloads/manual',
+      downloadRoots,
+      primaryServiceKey: primaryDownloadEntry?.key || null,
+      serviceKeys: downloadEntries.map((entry) => entry.key),
+      status: aggregateCatalogStatus(downloadEntries),
+      summary: `${primaryDownloadEntry?.label || 'Download clients'} run in the dedicated Downloads tab. Save path: ~/Drives/Media/downloads/manual`,
+      workspaceTab: 'downloads',
+    },
+    subtitles: {
+      blocker: !subtitleEntry || !subtitleEntry.available ? subtitleEntry?.blocker || 'Subtitle automation is not installed in this demo host.' : null,
+      serviceKeys: subtitleEntry ? [subtitleEntry.key] : [],
+      status: !subtitleEntry || !subtitleEntry.available ? 'blocked' : subtitleEntry.status,
+      summary: !subtitleEntry || !subtitleEntry.available
+        ? subtitleEntry?.blocker || 'Subtitle automation is unavailable.'
+        : 'Subtitle automation runs after library import.',
+    },
+    liveTv: {
+      channelCount,
+      channelsMapped: true,
+      guideConfigured: Boolean(guideSource),
+      guideSource,
+      playlistConfigured: Boolean(playlistSource),
+      playlistSource,
+      status: watchEntry?.status === 'working' && playlistSource && guideSource ? 'working' : 'setup',
+      summary: playlistSource && guideSource
+        ? `${channelCount} channels are already mapped in Jellyfin. Live TV is ready.`
+        : 'Add both M3U and XMLTV sources for Jellyfin Live TV.',
+      tunerType: 'm3u',
+    },
+    support: {
+      serviceKeys: supportEntries.map((entry) => entry.key),
+      status: aggregateCatalogStatus(supportEntries),
+      summary: 'Redis and PostgreSQL support the media workflow behind the scenes.',
+    },
+  };
+};
+
 const buildDashboardPayload = (state: DemoState) => {
   const serviceCatalog = buildServiceCatalog(state);
+  const mediaWorkflow = buildMediaWorkflow(state, serviceCatalog);
 
   return {
   connections: {
@@ -633,6 +735,7 @@ const buildDashboardPayload = (state: DemoState) => {
   },
   serviceCatalog,
   serviceGroups: buildServiceGroups(serviceCatalog),
+  mediaWorkflow,
   services: clone(state.services),
   storage: {
     mounts: clone(state.storage),
@@ -645,6 +748,7 @@ const buildTelemetryPayload = (state: DemoState) => {
   return {
     generatedAt: dashboard.generatedAt,
     logs: dashboard.logs,
+    mediaWorkflow: dashboard.mediaWorkflow,
     monitor: dashboard.monitor,
     serviceCatalog: dashboard.serviceCatalog,
     serviceController: dashboard.serviceController,
@@ -850,6 +954,7 @@ const buildServiceResponse = (state: DemoState) => {
       locked: state.controllerLocked,
       optionalServices,
     },
+    mediaWorkflow: buildMediaWorkflow(state, serviceCatalog),
     serviceCatalog,
     serviceGroups: buildServiceGroups(serviceCatalog),
     services: clone(state.services),
