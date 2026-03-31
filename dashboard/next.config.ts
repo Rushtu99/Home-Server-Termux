@@ -19,17 +19,18 @@ const nextConfig = {
   },
   output: isDemoBuild ? 'export' : undefined,
   trailingSlash: isDemoBuild,
-  async rewrites() {
-    if (isDemoBuild) {
-      return [];
-    }
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${LOCAL_API_ORIGIN}/api/:path*`,
-      },
-    ];
-  },
+  ...(!isDemoBuild
+    ? {
+        async rewrites() {
+          return [
+            {
+              source: '/api/:path*',
+              destination: `${LOCAL_API_ORIGIN}/api/:path*`,
+            },
+          ];
+        },
+      }
+    : {}),
 };
 
 export default nextConfig;

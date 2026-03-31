@@ -4,43 +4,12 @@ import Link from 'next/link';
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
 import { appFetch, createDemoDownloadUrl } from '../demo-api';
 import { isDemoMode } from '../demo-mode';
+import type { DrivePayload } from '../dashboard-utils';
+import { EMPTY_DRIVE_PAYLOAD as EMPTY_PAYLOAD, formatBytes, normalizeDrivePayload } from '../dashboard-utils';
+import { DialogSurface, MenuButton, ToolPage } from '../ui-primitives';
+import { usePolling } from '../usePolling';
 
 const API = '/api';
-
-type DriveEntry = {
-  device: string;
-  dirName: string;
-  error: string;
-  filesystem: string;
-  letter: string;
-  mountPoint: string;
-  name: string;
-  state: string;
-  uuid: string;
-};
-
-type DriveEvent = {
-  timestamp: string;
-  level: string;
-  event: string;
-  error?: string;
-  letter?: string;
-  mountPoint?: string;
-  name?: string;
-  filesystem?: string;
-};
-
-type DrivePayload = {
-  agentInstalled: boolean;
-  checkedAt: string | null;
-  events: DriveEvent[];
-  manifest: {
-    generatedAt: string | null;
-    intervalMs: number;
-    drives: DriveEntry[];
-  };
-  refreshIntervalMs: number;
-};
 
 type FsEntry = {
   accessLevel?: 'deny' | 'read' | 'write' | string;
@@ -125,18 +94,6 @@ type ShareFormState = {
   userPermissions: Record<string, 'inherit' | 'deny' | 'read' | 'write'>;
 };
 
-const EMPTY_PAYLOAD: DrivePayload = {
-  agentInstalled: false,
-  checkedAt: null,
-  events: [],
-  manifest: {
-    generatedAt: null,
-    intervalMs: 60000,
-    drives: [],
-  },
-  refreshIntervalMs: 60000,
-};
-
 const EMPTY_FS: FsPayload = {
   breadcrumbs: [{ label: 'Drives', path: '' }],
   entries: [],
@@ -158,35 +115,6 @@ const formatEntryTime = (value: string) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleString();
 };
-
-const formatBytes = (value: number) => {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '0 B';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let unit = 0;
-
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024;
-    unit += 1;
-  }
-
-  return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
-};
-
-const normalizeDrivePayload = (payload: Partial<DrivePayload> | null | undefined): DrivePayload => ({
-  agentInstalled: Boolean(payload?.agentInstalled),
-  checkedAt: typeof payload?.checkedAt === 'string' ? payload.checkedAt : null,
-  events: Array.isArray(payload?.events) ? payload.events : [],
-  manifest: {
-    generatedAt: typeof payload?.manifest?.generatedAt === 'string' ? payload.manifest.generatedAt : null,
-    intervalMs: Math.max(60000, Number(payload?.manifest?.intervalMs || payload?.refreshIntervalMs || 60000) || 60000),
-    drives: Array.isArray(payload?.manifest?.drives) ? payload.manifest.drives : [],
-  },
-  refreshIntervalMs: Math.max(60000, Number(payload?.refreshIntervalMs || payload?.manifest?.intervalMs || 60000) || 60000),
-});
 
 const normalizeFsPayload = (payload: Partial<FsPayload> | null | undefined): FsPayload => ({
   breadcrumbs: Array.isArray(payload?.breadcrumbs) && payload.breadcrumbs.length > 0
@@ -305,6 +233,18 @@ export default function FilesPage() {
     return normalizeDrivePayload(await res.json());
   };
 
+  const syncDriveState = async () => {
+    try {
+      const payload = await loadDriveState();
+      startTransition(() => {
+        setDriveState(payload);
+        setLoadError('');
+      });
+    } catch (error) {
+      setLoadError(String(error instanceof Error ? error.message : error || 'Unable to read drive state'));
+    }
+  };
+
   const loadShares = async () => {
     const res = await appFetch(`${API}/shares`, { credentials: 'include' });
     if (res.status === 403) {
@@ -378,36 +318,10 @@ export default function FilesPage() {
   };
 
   useEffect(() => {
-    let active = true;
+    void syncDriveState();
+  }, []);
 
-    const syncState = async () => {
-      try {
-        const payload = await loadDriveState();
-        if (!active) {
-          return;
-        }
-
-        startTransition(() => {
-          setDriveState(payload);
-          setLoadError('');
-        });
-      } catch (error) {
-        if (active) {
-          setLoadError(String(error instanceof Error ? error.message : error || 'Unable to read drive state'));
-        }
-      }
-    };
-
-    void syncState();
-    const timer = window.setInterval(() => {
-      void syncState();
-    }, driveState.refreshIntervalMs);
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [driveState.refreshIntervalMs]);
+  usePolling(true, driveState.refreshIntervalMs, syncDriveState);
 
   useEffect(() => {
     void loadDirectory('');
@@ -676,6 +590,8 @@ export default function FilesPage() {
   };
 
   const openEntry = async (entry: FsEntry) => {
+    setSelectedPath(entry.path);
+
     if (entry.type === 'directory' || entry.type === 'symlink') {
       await loadDirectory(entry.path);
       return;
@@ -847,13 +763,12 @@ export default function FilesPage() {
   const rootPathLabel = browser.root || 'Resolving root…';
 
   return (
-    <main id="app-main" className="tool-page tool-page--filesystem">
-      <header className="tool-toolbar">
-        <div className="tool-toolbar__title">
-          <h1>Filesystem</h1>
-          <p>Drives, shares, and local transfers.</p>
-        </div>
-        <div className="tool-toolbar__actions">
+    <ToolPage
+      title="Filesystem"
+      subtitle="Drives, shares, and local transfers."
+      className="tool-page--filesystem"
+      actions={(
+        <>
           <Link href="/?tab=home" className="ui-button">
             Home
           </Link>
@@ -865,8 +780,9 @@ export default function FilesPage() {
           <button className="ui-button" type="button" onClick={() => void loadDirectory(browser.path, { preserveSelection: true })} disabled={browserBusy}>
             {browserBusy ? 'Refreshing…' : 'Refresh Folder'}
           </button>
-        </div>
-      </header>
+        </>
+      )}
+    >
 
       <section className="tool-stack">
         <div className="tool-banner">
@@ -1220,8 +1136,6 @@ export default function FilesPage() {
                     <article
                       key={entry.path}
                       className={`fs-browser-item ${isSelected ? 'fs-browser-item--selected' : ''}`}
-                      onClick={() => setSelectedPath(entry.path)}
-                      onDoubleClick={() => void openEntry(entry)}
                     >
                       <label className="fs-check" onClick={(event) => event.stopPropagation()}>
                         <input
@@ -1249,9 +1163,12 @@ export default function FilesPage() {
                           {isDirectory ? 'Open' : 'Download'}
                         </button>
                         <div className="fs-row-menu">
-                          <button
+                          <MenuButton
+                            aria-controls={menuState?.path === entry.path ? `fs-row-menu-${entry.path}` : undefined}
                             className="ui-button fs-row-menu__trigger"
-                            type="button"
+                            disabled={browserBusy}
+                            label={`Open actions for ${entry.name}`}
+                            open={menuState?.path === entry.path}
                             ref={(node) => {
                               menuTriggerRefs.current[entry.path] = node;
                             }}
@@ -1259,11 +1176,9 @@ export default function FilesPage() {
                               event.stopPropagation();
                               openFsMenu(entry);
                             }}
-                          >
-                            ⋯
-                          </button>
+                          />
                           {menuState?.path === entry.path && !isPhoneLayout ? (
-                            <div className={`fs-row-menu__panel ${menuState.upward ? 'fs-row-menu__panel--upward' : ''}`}>
+                            <div id={`fs-row-menu-${entry.path}`} className={`fs-row-menu__panel ${menuState.upward ? 'fs-row-menu__panel--upward' : ''}`}>
                               <button className="ui-button fs-row-menu__item" type="button" onClick={() => { setSelectionOnly(entry.path); setMenuState(null); }}>
                                 Select only
                               </button>
@@ -1292,76 +1207,82 @@ export default function FilesPage() {
         </section>
       </section>
 
-      {menuState && isPhoneLayout ? (
-        <div className="fs-mobile-sheet" role="dialog" aria-modal="true">
-          <button className="fs-mobile-sheet__backdrop" type="button" aria-label="Close actions" onClick={() => setMenuState(null)} />
-          <div className="fs-mobile-sheet__panel">
-            <div className="fs-mobile-sheet__header">
-              <strong>{browser.entries.find((entry) => entry.path === menuState.path)?.name || 'Actions'}</strong>
-              <button className="ui-button" type="button" onClick={() => setMenuState(null)}>
-                Close
-              </button>
-            </div>
-            <div className="fs-mobile-sheet__actions">
-              <button className="ui-button" type="button" onClick={() => { setSelectionOnly(menuState.path); setMenuState(null); }}>
-                Select only
-              </button>
-              <button
-                className="ui-button"
-                type="button"
-                onClick={() => {
-                  const entry = browser.entries.find((item) => item.path === menuState.path);
-                  if (entry) {
-                    setClipboardFromEntries([entry], 'copy');
-                  }
-                  setMenuState(null);
-                }}
-              >
-                Copy
-              </button>
-              <button
-                className="ui-button"
-                type="button"
-                onClick={() => {
-                  const entry = browser.entries.find((item) => item.path === menuState.path);
-                  if (entry) {
-                    setClipboardFromEntries([entry], 'move');
-                  }
-                  setMenuState(null);
-                }}
-              >
-                Cut
-              </button>
-              <button
-                className="ui-button"
-                type="button"
-                onClick={() => {
-                  const entry = browser.entries.find((item) => item.path === menuState.path) || null;
-                  setSelectedPath(menuState.path);
-                  setSelectedPaths([menuState.path]);
-                  setMenuState(null);
-                  void renameEntry(entry);
-                }}
-              >
-                Rename
-              </button>
-              <button
-                className="ui-button"
-                type="button"
-                onClick={() => {
-                  const entry = browser.entries.find((item) => item.path === menuState.path) || null;
-                  setSelectedPath(menuState.path);
-                  setSelectedPaths([menuState.path]);
-                  setMenuState(null);
-                  void deleteEntries(entry ? [entry] : []);
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
+      <DialogSurface
+        open={Boolean(menuState && isPhoneLayout)}
+        onClose={() => setMenuState(null)}
+        overlayClassName="fs-mobile-sheet"
+        overlayStyle={{ background: 'rgba(0, 0, 0, 0.44)' }}
+        panelClassName="fs-mobile-sheet__panel"
+        labelledBy="fs-mobile-sheet-title"
+      >
+        <div className="fs-mobile-sheet__header">
+          <strong id="fs-mobile-sheet-title">{browser.entries.find((entry) => entry.path === menuState?.path)?.name || 'Actions'}</strong>
+          <button className="ui-button" type="button" onClick={() => setMenuState(null)}>
+            Close
+          </button>
         </div>
-      ) : null}
-    </main>
+        <div className="fs-mobile-sheet__actions">
+          <button className="ui-button" type="button" onClick={() => { if (menuState) { setSelectionOnly(menuState.path); } setMenuState(null); }}>
+            Select only
+          </button>
+          <button
+            className="ui-button"
+            type="button"
+            onClick={() => {
+              const entry = menuState ? browser.entries.find((item) => item.path === menuState.path) : null;
+              if (entry) {
+                setClipboardFromEntries([entry], 'copy');
+              }
+              setMenuState(null);
+            }}
+          >
+            Copy
+          </button>
+          <button
+            className="ui-button"
+            type="button"
+            onClick={() => {
+              const entry = menuState ? browser.entries.find((item) => item.path === menuState.path) : null;
+              if (entry) {
+                setClipboardFromEntries([entry], 'move');
+              }
+              setMenuState(null);
+            }}
+          >
+            Cut
+          </button>
+          <button
+            className="ui-button"
+            type="button"
+            onClick={() => {
+              const entry = menuState ? browser.entries.find((item) => item.path === menuState.path) || null : null;
+              if (menuState) {
+                setSelectedPath(menuState.path);
+                setSelectedPaths([menuState.path]);
+              }
+              setMenuState(null);
+              void renameEntry(entry);
+            }}
+          >
+            Rename
+          </button>
+          <button
+            className="ui-button"
+            type="button"
+            onClick={() => {
+              const entry = menuState ? browser.entries.find((item) => item.path === menuState.path) || null : null;
+              if (menuState) {
+                setSelectedPath(menuState.path);
+                setSelectedPaths([menuState.path]);
+              }
+              setMenuState(null);
+              void deleteEntries(entry ? [entry] : []);
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      </DialogSurface>
+    </ToolPage>
   );
 }

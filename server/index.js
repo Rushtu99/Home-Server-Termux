@@ -455,11 +455,11 @@ const SERVICE_CATALOG_META = {
   },
   qbittorrent: {
     controlMode: 'always_on',
-    description: 'Handles automated and manual torrent downloads for the media stack.',
-    group: 'media',
+    description: 'Handles automated and manual torrent downloads alongside the file workspace.',
+    group: 'filesystem',
     label: 'qBittorrent',
     route: '/qb/',
-    surface: 'media',
+    surface: 'filesystem',
   },
   sonarr: {
     controlMode: 'always_on',
@@ -537,7 +537,7 @@ const OPTIONAL_SERVICE_NAMES = [
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
 const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
-const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'access'];
+const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'filesystem', 'access'];
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SERVICE_HISTORY_LIMIT = 400;
@@ -3547,29 +3547,6 @@ const filesystemPasteHandler = async (req, res) => {
   }
 };
 
-// Health
-app.get('/status', requireAuth, statusHandler);
-app.get('/api/status', requireAuth, statusHandler);
-
-// Services status
-app.get('/services', requireAuth, requireAdmin, servicesHandler);
-app.get('/api/services', requireAuth, requireAdmin, servicesHandler);
-
-// Control services
-app.post('/control/unlock', requireAuth, requireAdmin, controlUnlockHandler);
-app.post('/api/control/unlock', requireAuth, requireAdmin, controlUnlockHandler);
-app.post('/control/lock', requireAuth, requireAdmin, controlLockHandler);
-app.post('/api/control/lock', requireAuth, requireAdmin, controlLockHandler);
-app.post('/control', requireAuth, requireAdmin, controlHandler);
-app.post('/api/control', requireAuth, requireAdmin, controlHandler);
-
-// Monitoring
-app.get('/monitor', requireAuth, requireAdmin, monitorHandler);
-app.get('/api/monitor', requireAuth, requireAdmin, monitorHandler);
-
-app.get('/dashboard', requireAuth, requireAdmin, dashboardHandler);
-app.get('/api/dashboard', requireAuth, requireAdmin, dashboardHandler);
-
 const ftpDefaultsHandler = (req, res) => {
   const ftpMounting = getCloudMountCapability();
   res.json({
@@ -3793,72 +3770,51 @@ const ftpMkdirHandler = async (req, res) => {
   }
 };
 
-app.get('/connections', requireAuth, requireAdmin, connectionsHandler);
-app.get('/api/connections', requireAuth, requireAdmin, connectionsHandler);
-app.post('/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
-app.post('/api/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
-app.get('/storage', requireAuth, requireAdmin, storageHandler);
-app.get('/api/storage', requireAuth, requireAdmin, storageHandler);
-app.get('/logs', requireAuth, requireAdmin, logsHandler);
-app.get('/api/logs', requireAuth, requireAdmin, logsHandler);
-app.get('/logging', requireAuth, requireAdmin, loggingGetHandler);
-app.get('/api/logging', requireAuth, requireAdmin, loggingGetHandler);
-app.post('/logging', requireAuth, requireAdmin, loggingPostHandler);
-app.post('/api/logging', requireAuth, requireAdmin, loggingPostHandler);
-app.get('/drives', requireAuth, requireAdmin, drivesHandler);
-app.get('/api/drives', requireAuth, requireAdmin, drivesHandler);
-app.post('/drives/check', requireAuth, requireAdmin, drivesCheckHandler);
-app.post('/api/drives/check', requireAuth, requireAdmin, drivesCheckHandler);
-app.get('/shares', requireAuth, requireAdmin, sharesHandler);
-app.get('/api/shares', requireAuth, requireAdmin, sharesHandler);
-app.post('/shares', requireAuth, requireAdmin, createShareHandler);
-app.post('/api/shares', requireAuth, requireAdmin, createShareHandler);
-app.put('/shares/:id', requireAuth, requireAdmin, updateShareHandler);
-app.put('/api/shares/:id', requireAuth, requireAdmin, updateShareHandler);
-app.get('/users', requireAuth, requireAdmin, usersHandler);
-app.get('/api/users', requireAuth, requireAdmin, usersHandler);
-app.post('/users', requireAuth, requireAdmin, createUserHandler);
-app.post('/api/users', requireAuth, requireAdmin, createUserHandler);
-app.put('/users/:id', requireAuth, requireAdmin, updateUserHandler);
-app.put('/api/users/:id', requireAuth, requireAdmin, updateUserHandler);
-app.get('/telemetry', requireAuth, requireAdmin, telemetryHandler);
-app.get('/api/telemetry', requireAuth, requireAdmin, telemetryHandler);
-app.get('/fs/list', requireAuth, filesystemListHandler);
-app.get('/api/fs/list', requireAuth, filesystemListHandler);
-app.post('/fs/mkdir', requireAuth, filesystemMkdirHandler);
-app.post('/api/fs/mkdir', requireAuth, filesystemMkdirHandler);
-app.post('/fs/rename', requireAuth, filesystemRenameHandler);
-app.post('/api/fs/rename', requireAuth, filesystemRenameHandler);
-app.post('/fs/delete', requireAuth, filesystemDeleteHandler);
-app.post('/api/fs/delete', requireAuth, filesystemDeleteHandler);
-app.get('/fs/download', requireAuth, filesystemDownloadHandler);
-app.get('/api/fs/download', requireAuth, filesystemDownloadHandler);
-app.post('/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);
-app.post('/api/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);
-app.post('/fs/paste', requireAuth, filesystemPasteHandler);
-app.post('/api/fs/paste', requireAuth, filesystemPasteHandler);
-app.get('/ftp/defaults', requireAuth, requireAdmin, ftpDefaultsHandler);
-app.get('/api/ftp/defaults', requireAuth, requireAdmin, ftpDefaultsHandler);
-app.get('/ftp/favourites', requireAuth, requireAdmin, ftpFavouritesHandler);
-app.get('/api/ftp/favourites', requireAuth, requireAdmin, ftpFavouritesHandler);
-app.post('/ftp/favourites', requireAuth, requireAdmin, createFtpFavouriteHandler);
-app.post('/api/ftp/favourites', requireAuth, requireAdmin, createFtpFavouriteHandler);
-app.put('/ftp/favourites/:id', requireAuth, requireAdmin, updateFtpFavouriteHandler);
-app.put('/api/ftp/favourites/:id', requireAuth, requireAdmin, updateFtpFavouriteHandler);
-app.delete('/ftp/favourites/:id', requireAuth, requireAdmin, deleteFtpFavouriteHandler);
-app.delete('/api/ftp/favourites/:id', requireAuth, requireAdmin, deleteFtpFavouriteHandler);
-app.post('/ftp/favourites/:id/mount', requireAuth, requireAdmin, mountFtpFavouriteHandler);
-app.post('/api/ftp/favourites/:id/mount', requireAuth, requireAdmin, mountFtpFavouriteHandler);
-app.post('/ftp/favourites/:id/unmount', requireAuth, requireAdmin, unmountFtpFavouriteHandler);
-app.post('/api/ftp/favourites/:id/unmount', requireAuth, requireAdmin, unmountFtpFavouriteHandler);
-app.post('/ftp/list', requireAuth, requireAdmin, ftpListHandler);
-app.post('/api/ftp/list', requireAuth, requireAdmin, ftpListHandler);
-app.post('/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
-app.post('/api/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
-app.post('/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
-app.post('/api/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
-app.post('/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
-app.post('/api/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
+const registerDualRoute = (method, routePath, ...handlers) => {
+  app[method](routePath, ...handlers);
+  app[method](`/api${routePath}`, ...handlers);
+};
+
+registerDualRoute('get', '/status', requireAuth, statusHandler);
+registerDualRoute('get', '/services', requireAuth, requireAdmin, servicesHandler);
+registerDualRoute('post', '/control/unlock', requireAuth, requireAdmin, controlUnlockHandler);
+registerDualRoute('post', '/control/lock', requireAuth, requireAdmin, controlLockHandler);
+registerDualRoute('post', '/control', requireAuth, requireAdmin, controlHandler);
+registerDualRoute('get', '/monitor', requireAuth, requireAdmin, monitorHandler);
+registerDualRoute('get', '/dashboard', requireAuth, requireAdmin, dashboardHandler);
+registerDualRoute('get', '/connections', requireAuth, requireAdmin, connectionsHandler);
+registerDualRoute('post', '/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
+registerDualRoute('get', '/storage', requireAuth, requireAdmin, storageHandler);
+registerDualRoute('get', '/logs', requireAuth, requireAdmin, logsHandler);
+registerDualRoute('get', '/logging', requireAuth, requireAdmin, loggingGetHandler);
+registerDualRoute('post', '/logging', requireAuth, requireAdmin, loggingPostHandler);
+registerDualRoute('get', '/drives', requireAuth, requireAdmin, drivesHandler);
+registerDualRoute('post', '/drives/check', requireAuth, requireAdmin, drivesCheckHandler);
+registerDualRoute('get', '/shares', requireAuth, requireAdmin, sharesHandler);
+registerDualRoute('post', '/shares', requireAuth, requireAdmin, createShareHandler);
+registerDualRoute('put', '/shares/:id', requireAuth, requireAdmin, updateShareHandler);
+registerDualRoute('get', '/users', requireAuth, requireAdmin, usersHandler);
+registerDualRoute('post', '/users', requireAuth, requireAdmin, createUserHandler);
+registerDualRoute('put', '/users/:id', requireAuth, requireAdmin, updateUserHandler);
+registerDualRoute('get', '/telemetry', requireAuth, requireAdmin, telemetryHandler);
+registerDualRoute('get', '/fs/list', requireAuth, filesystemListHandler);
+registerDualRoute('post', '/fs/mkdir', requireAuth, filesystemMkdirHandler);
+registerDualRoute('post', '/fs/rename', requireAuth, filesystemRenameHandler);
+registerDualRoute('post', '/fs/delete', requireAuth, filesystemDeleteHandler);
+registerDualRoute('get', '/fs/download', requireAuth, filesystemDownloadHandler);
+registerDualRoute('post', '/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);
+registerDualRoute('post', '/fs/paste', requireAuth, filesystemPasteHandler);
+registerDualRoute('get', '/ftp/defaults', requireAuth, requireAdmin, ftpDefaultsHandler);
+registerDualRoute('get', '/ftp/favourites', requireAuth, requireAdmin, ftpFavouritesHandler);
+registerDualRoute('post', '/ftp/favourites', requireAuth, requireAdmin, createFtpFavouriteHandler);
+registerDualRoute('put', '/ftp/favourites/:id', requireAuth, requireAdmin, updateFtpFavouriteHandler);
+registerDualRoute('delete', '/ftp/favourites/:id', requireAuth, requireAdmin, deleteFtpFavouriteHandler);
+registerDualRoute('post', '/ftp/favourites/:id/mount', requireAuth, requireAdmin, mountFtpFavouriteHandler);
+registerDualRoute('post', '/ftp/favourites/:id/unmount', requireAuth, requireAdmin, unmountFtpFavouriteHandler);
+registerDualRoute('post', '/ftp/list', requireAuth, requireAdmin, ftpListHandler);
+registerDualRoute('post', '/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
+registerDualRoute('post', '/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
+registerDualRoute('post', '/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
 
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {

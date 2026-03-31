@@ -2,6 +2,7 @@
 
 import { getDemoTerminalFrameUrl, getDemoTerminalLines } from '../demo-api';
 import { isDemoMode } from '../demo-mode';
+import { ToolPage } from '../ui-primitives';
 import { useGatewayBase } from '../useGatewayBase';
 
 export default function TerminalPage() {
@@ -10,20 +11,17 @@ export default function TerminalPage() {
   const frameSrc = demoMode ? getDemoTerminalFrameUrl() : gatewayBase ? `${gatewayBase}/term/` : '';
 
   return (
-    <main id="app-main" className="tool-page">
-      <header className="tool-toolbar">
-        <div className="tool-toolbar__title">
-          <h1>Terminal</h1>
-          <p>Interactive shell session from the Termux host.</p>
-        </div>
-        {frameSrc ? (
-          <a href={frameSrc} target="_blank" rel="noreferrer" className="ui-button">
-            Open In New Tab
-          </a>
-        ) : (
-          <span className="status-message">Resolving gateway…</span>
-        )}
-      </header>
+    <ToolPage
+      title="Terminal"
+      subtitle="Interactive shell session from the Termux host."
+      actions={frameSrc ? (
+        <a href={frameSrc} target="_blank" rel="noreferrer" className="ui-button">
+          Open In New Tab
+        </a>
+      ) : (
+        <span className="status-message">Resolving gateway…</span>
+      )}
+    >
 
       <section className="tool-frame-shell">
         {demoMode ? (
@@ -38,6 +36,6 @@ export default function TerminalPage() {
           </div>
         )}
       </section>
-    </main>
+    </ToolPage>
   );
 }

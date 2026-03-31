@@ -96,7 +96,7 @@ type DemoServiceCatalogEntry = {
   blocker?: string;
   controlMode: 'always_on' | 'optional';
   description: string;
-  group: 'platform' | 'media' | 'arr' | 'data' | 'access';
+  group: 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem';
   key: string;
   lastCheckedAt?: string | null;
   lastTransitionAt?: string | null;
@@ -106,7 +106,7 @@ type DemoServiceCatalogEntry = {
   route?: string;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable';
   statusReason?: string;
-  surface: 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp';
+  surface: 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
   uptimePct?: number | null;
 };
 
@@ -120,7 +120,7 @@ const SERVICE_META: DemoServiceCatalogEntry[] = [
   { available: true, controlMode: 'always_on', description: 'Single public gateway for the dashboard and companion services.', group: 'platform', key: 'nginx', label: 'nginx', placeholder: false, status: 'working', surface: 'home' },
   { available: true, controlMode: 'always_on', description: 'Browser terminal access inside the dashboard.', group: 'platform', key: 'ttyd', label: 'ttyd', placeholder: false, route: '/term/', status: 'working', surface: 'terminal' },
   { available: true, controlMode: 'always_on', description: 'Streams your movie and series library to local clients.', group: 'media', key: 'jellyfin', label: 'Jellyfin', placeholder: false, route: '/jellyfin/', status: 'working', surface: 'media' },
-  { available: true, controlMode: 'always_on', description: 'Handles automated and manual torrent downloads for the media stack.', group: 'media', key: 'qbittorrent', label: 'qBittorrent', placeholder: false, route: '/qb/', status: 'working', surface: 'media' },
+  { available: true, controlMode: 'always_on', description: 'Handles automated and manual torrent downloads alongside the file workspace.', group: 'filesystem', key: 'qbittorrent', label: 'qBittorrent', placeholder: false, route: '/qb/', status: 'working', surface: 'filesystem' },
   { available: false, blocker: 'Currently blocked on Android-native Node/chroot packaging.', controlMode: 'always_on', description: 'Request portal for adding movies and shows into the automation flow.', group: 'media', key: 'jellyseerr', label: 'Jellyseerr', placeholder: true, route: '/requests/', status: 'unavailable', surface: 'media' },
   { available: true, controlMode: 'always_on', description: 'Automates series discovery, tracking, and download handoff.', group: 'arr', key: 'sonarr', label: 'Sonarr', placeholder: false, route: '/sonarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Automates movie discovery, tracking, and download handoff.', group: 'arr', key: 'radarr', label: 'Radarr', placeholder: false, route: '/radarr/', status: 'working', surface: 'arr' },

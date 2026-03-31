@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+START_ARGS=("$@")
+
 if [ "$(id -u)" -eq 0 ]; then
     printf '[%s] ERROR start.sh must be run from the Termux app user, not a root shell. Use su only for mount steps.\n' "$(date '+%Y-%m-%d %H:%M:%S')" >&2
     exit 1
@@ -94,6 +97,14 @@ PROWLARR_PID_PATH="${PROWLARR_PID_PATH:-$RUNTIME_DIR/prowlarr.pid}"
 BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
 JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+FRONTEND_BIND_HOST="${FRONTEND_BIND_HOST:-}"
+if [ -z "$FRONTEND_BIND_HOST" ]; then
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        FRONTEND_BIND_HOST="0.0.0.0"
+    else
+        FRONTEND_BIND_HOST="127.0.0.1"
+    fi
+fi
 MEDIA_SHARE_NAME="${MEDIA_SHARE_NAME:-Media}"
 MEDIA_ROOT="${MEDIA_ROOT:-$FILESYSTEM_ROOT/$MEDIA_SHARE_NAME}"
 MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-$MEDIA_ROOT/movies}"
@@ -125,6 +136,17 @@ log_error() {
     printf '[%s] ERROR %s\n' "$(timestamp)" "$1"
 }
 
+HOTKEY_PID=""
+RELOAD_REQUESTED=0
+
+stop_hotkey_listener() {
+    if [ -n "${HOTKEY_PID:-}" ] && kill -0 "$HOTKEY_PID" 2>/dev/null; then
+        kill "$HOTKEY_PID" 2>/dev/null || true
+        wait "$HOTKEY_PID" 2>/dev/null || true
+    fi
+    HOTKEY_PID=""
+}
+
 ensure_node_dependencies() {
     local app_dir="$1"
     local label="$2"
@@ -146,6 +168,21 @@ ensure_node_dependencies() {
     if [ "$app_dir/package.json" -nt "$app_dir/node_modules" ]; then
         log_info "Refreshing $label dependencies"
         (cd "$app_dir" && npm install --no-fund --no-audit)
+    fi
+}
+
+ensure_production_dashboard_build() {
+    local routes_manifest="$PROJECT/dashboard/.next/routes-manifest.json"
+
+    if [ ! -f "$PROJECT/dashboard/.next/BUILD_ID" ]; then
+        log_info "Building production dashboard for localhost"
+        (cd "$PROJECT/dashboard" && npm run build)
+        return 0
+    fi
+
+    if [ -f "$routes_manifest" ] && grep -q '"basePath": "/Home-Server-Termux"' "$routes_manifest"; then
+        log_info "Replacing demo export with production dashboard for localhost"
+        (cd "$PROJECT/dashboard" && npm run build)
     fi
 }
 
@@ -373,6 +410,85 @@ stop_repo_sshd() {
     fi
 }
 
+stop_managed_services() {
+    log_info "Cleaning old processes"
+    stop_pidfile_process "backend" "$BACKEND_PID_PATH"
+    stop_pidfile_process "frontend" "$FRONTEND_PID_PATH"
+    stop_pidfile_process "ttyd" "$TTYD_PID_PATH"
+    stop_pidfile_process "sshd" "$SSHD_PID_PATH"
+    stop_pidfile_process "copyparty" "$COPYPARTY_PID_PATH"
+    stop_pidfile_process "syncthing" "$SYNCTHING_PID_PATH"
+    stop_pidfile_process "samba" "$SAMBA_PID_PATH"
+    stop_pidfile_process "redis" "$REDIS_PID_PATH"
+    stop_pidfile_process "postgres" "$POSTGRES_PID_PATH"
+    stop_pidfile_process "jellyfin" "$JELLYFIN_PID_PATH"
+    stop_pidfile_process "qbittorrent" "$QBITTORRENT_PID_PATH"
+    stop_pidfile_process "sonarr" "$SONARR_PID_PATH"
+    stop_pidfile_process "radarr" "$RADARR_PID_PATH"
+    stop_pidfile_process "prowlarr" "$PROWLARR_PID_PATH"
+    stop_pidfile_process "bazarr" "$BAZARR_PID_PATH"
+    stop_pidfile_process "jellyseerr" "$JELLYSEERR_PID_PATH"
+    stop_repo_nginx
+}
+
+stop_legacy_services() {
+    stop_matching_process "backend" "$PROJECT/server/index.js"
+    stop_matching_process "backend" "node $PROJECT/server/index.js"
+    stop_matching_process "frontend" "next start -H 0.0.0.0"
+    stop_matching_process "frontend" "next start -H 127.0.0.1"
+    stop_matching_process "frontend" "next dev --webpack --hostname 0.0.0.0"
+    stop_matching_process "frontend" "next dev --webpack --hostname 127.0.0.1"
+    stop_matching_process "frontend" "next-server"
+    stop_matching_process "ttyd" "ttyd -W -i $TTYD_BIND_HOST -p 7681 -w $PROJECT"
+    stop_matching_process "copyparty" "copyparty -i"
+    stop_matching_process "syncthing" "syncthing serve --no-browser"
+    stop_matching_process "samba" "smbd -i -s"
+    stop_matching_process "redis" "redis-server "
+    stop_matching_process "postgres" "postgres -D"
+    stop_matching_process "jellyfin" "jellyfin-server"
+    stop_matching_process "qbittorrent" "qbittorrent-nox"
+    stop_matching_process "sonarr" "Sonarr -nobrowser"
+    stop_matching_process "radarr" "Radarr -nobrowser"
+    stop_matching_process "prowlarr" "Prowlarr -nobrowser"
+    stop_matching_process "bazarr" "bazarr.py"
+    stop_matching_process "jellyseerr" "server/index.js"
+}
+
+reload_launcher() {
+    if [ "$RELOAD_REQUESTED" -eq 1 ]; then
+        return 0
+    fi
+
+    RELOAD_REQUESTED=1
+    printf '\n'
+    log_info "Reload requested from keyboard"
+    stop_hotkey_listener
+    stop_managed_services
+    stop_legacy_services
+    exec "$SCRIPT_PATH" "${START_ARGS[@]}"
+}
+
+start_hotkey_listener() {
+    local parent_pid="$BASHPID"
+
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        return 0
+    fi
+
+    log_info "Press R to reload services"
+    (
+        while IFS= read -r -s -n 1 key; do
+            case "$key" in
+                [Rr])
+                    kill -USR1 "$parent_pid" 2>/dev/null || true
+                    exit 0
+                    ;;
+            esac
+        done
+    ) &
+    HOTKEY_PID=$!
+}
+
 start_background_command() {
     local name="$1"
     local port="$2"
@@ -433,45 +549,8 @@ if command -v termux-wake-lock >/dev/null 2>&1; then
     termux-wake-lock
 fi
 
-log_info "Cleaning old processes"
-stop_pidfile_process "backend" "$BACKEND_PID_PATH"
-stop_pidfile_process "frontend" "$FRONTEND_PID_PATH"
-stop_pidfile_process "ttyd" "$TTYD_PID_PATH"
-stop_pidfile_process "sshd" "$SSHD_PID_PATH"
-stop_pidfile_process "copyparty" "$COPYPARTY_PID_PATH"
-stop_pidfile_process "syncthing" "$SYNCTHING_PID_PATH"
-stop_pidfile_process "samba" "$SAMBA_PID_PATH"
-stop_pidfile_process "redis" "$REDIS_PID_PATH"
-stop_pidfile_process "postgres" "$POSTGRES_PID_PATH"
-stop_pidfile_process "jellyfin" "$JELLYFIN_PID_PATH"
-stop_pidfile_process "qbittorrent" "$QBITTORRENT_PID_PATH"
-stop_pidfile_process "sonarr" "$SONARR_PID_PATH"
-stop_pidfile_process "radarr" "$RADARR_PID_PATH"
-stop_pidfile_process "prowlarr" "$PROWLARR_PID_PATH"
-stop_pidfile_process "bazarr" "$BAZARR_PID_PATH"
-stop_pidfile_process "jellyseerr" "$JELLYSEERR_PID_PATH"
-stop_repo_nginx
-
-stop_matching_process "backend" "$PROJECT/server/index.js"
-stop_matching_process "backend" "node $PROJECT/server/index.js"
-stop_matching_process "frontend" "next start -H 0.0.0.0"
-stop_matching_process "frontend" "next start -H 127.0.0.1"
-stop_matching_process "frontend" "next dev --webpack --hostname 0.0.0.0"
-stop_matching_process "frontend" "next dev --webpack --hostname 127.0.0.1"
-stop_matching_process "frontend" "next-server"
-stop_matching_process "ttyd" "ttyd -W -i $TTYD_BIND_HOST -p 7681 -w $PROJECT"
-stop_matching_process "copyparty" "copyparty -i"
-stop_matching_process "syncthing" "syncthing serve --no-browser"
-stop_matching_process "samba" "smbd -i -s"
-stop_matching_process "redis" "redis-server "
-stop_matching_process "postgres" "postgres -D"
-stop_matching_process "jellyfin" "jellyfin-server"
-stop_matching_process "qbittorrent" "qbittorrent-nox"
-stop_matching_process "sonarr" "Sonarr -nobrowser"
-stop_matching_process "radarr" "Radarr -nobrowser"
-stop_matching_process "prowlarr" "Prowlarr -nobrowser"
-stop_matching_process "bazarr" "bazarr.py"
-stop_matching_process "jellyseerr" "server/index.js"
+stop_managed_services
+stop_legacy_services
 
 ensure_node_dependencies "$PROJECT/server" "backend"
 ensure_node_dependencies "$PROJECT/dashboard" "dashboard"
@@ -518,22 +597,26 @@ else
 fi
 
 if [ -f "$PROJECT/dashboard/.next/BUILD_ID" ]; then
+    ensure_production_dashboard_build
     start_background_command \
         "Frontend" \
         "$FRONTEND_PORT" \
         "$FRONTEND_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS' PORT='$FRONTEND_PORT' ALLOWED_DEV_ORIGINS='$ALLOWED_DEV_ORIGINS'; exec npm start > '$LOG_DIR/frontend.log' 2>&1" \
+        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS' PORT='$FRONTEND_PORT' FRONTEND_BIND_HOST='$FRONTEND_BIND_HOST' ALLOWED_DEV_ORIGINS='$ALLOWED_DEV_ORIGINS'; exec npm start > '$LOG_DIR/frontend.log' 2>&1" \
         "127.0.0.1"
 else
     start_background_command \
         "Frontend" \
         "$FRONTEND_PORT" \
         "$FRONTEND_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS' PORT='$FRONTEND_PORT' ALLOWED_DEV_ORIGINS='$ALLOWED_DEV_ORIGINS'; exec npm run dev > '$LOG_DIR/frontend.log' 2>&1" \
+        "mkdir -p '$LOG_DIR'; cd '$PROJECT/dashboard' && export NODE_OPTIONS='$DASHBOARD_NODE_OPTIONS' PORT='$FRONTEND_PORT' FRONTEND_BIND_HOST='$FRONTEND_BIND_HOST' ALLOWED_DEV_ORIGINS='$ALLOWED_DEV_ORIGINS'; exec npm run dev > '$LOG_DIR/frontend.log' 2>&1" \
         "127.0.0.1"
 fi
 
 log_info "Home Server started"
+if [ "$FRONTEND_BIND_HOST" != "127.0.0.1" ]; then
+    printf '[%s] INFO  Frontend:  http://%s:%s\n' "$(timestamp)" "$HOST_IP" "$FRONTEND_PORT"
+fi
 printf '[%s] INFO  Dashboard: http://%s:8088\n' "$(timestamp)" "$HOST_IP"
 printf '[%s] INFO  Files:     http://%s:8088/files\n' "$(timestamp)" "$HOST_IP"
 printf '[%s] INFO  Terminal:  http://%s:8088/term\n' "$(timestamp)" "$HOST_IP"
@@ -542,5 +625,9 @@ printf '[%s] INFO  qBittorrent: http://%s:8088/qb/\n' "$(timestamp)" "$HOST_IP"
 if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
     printf '[%s] INFO  Requests:  http://%s:8088/requests/\n' "$(timestamp)" "$HOST_IP"
 fi
+
+trap 'reload_launcher' USR1
+trap 'stop_hotkey_listener' EXIT
+start_hotkey_listener
 
 wait

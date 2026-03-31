@@ -175,6 +175,12 @@ cp server/.env.example server/.env
 bash start.sh
 ```
 
+If you are developing over SSH and want the dashboard frontend reachable from the local network, set:
+
+```bash
+FRONTEND_BIND_HOST=0.0.0.0 bash start.sh
+```
+
 `start.sh` will:
 - load `server/.env`
 - prepare runtime directories

@@ -3,7 +3,11 @@
 import type { CSSProperties, FormEvent, InputHTMLAttributes, ReactNode } from 'react';
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
 import { appFetch, getDemoTerminalLines } from './demo-api';
+import type { DrivePayload } from './dashboard-utils';
+import { EMPTY_DRIVE_PAYLOAD, formatBytes as fmtBytes, formatDuration as fmtDuration, formatRate as fmtRate, normalizeDrivePayload } from './dashboard-utils';
 import { isDemoMode } from './demo-mode';
+import { DialogSurface, MenuButton } from './ui-primitives';
+import { usePolling } from './usePolling';
 import { useGatewayBase } from './useGatewayBase';
 
 const API = process.env.NEXT_PUBLIC_API || '/api';
@@ -11,6 +15,7 @@ const API = process.env.NEXT_PUBLIC_API || '/api';
 const THEME = {
   accent: 'var(--accent)',
   accentFill: 'var(--accent-soft)',
+  accentStrong: 'var(--accent-strong)',
   brightYellow: 'var(--warning)',
   crimsonRed: 'var(--danger)',
   darkPurple: 'var(--panel-raised)',
@@ -25,8 +30,8 @@ const THEME = {
 
 type TabKey = 'home' | 'media' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
 type Services = Record<string, boolean>;
-type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access';
-type ServiceSurface = 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp';
+type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem';
+type ServiceSurface = 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
 
 type ServiceCatalogEntry = {
   available: boolean;
@@ -106,41 +111,6 @@ type DebugLog = {
   level: 'info' | 'warn' | 'error' | string;
   message: string;
   meta?: unknown;
-};
-
-type DriveEntry = {
-  device: string;
-  dirName: string;
-  error: string;
-  filesystem: string;
-  letter: string;
-  mountPoint: string;
-  name: string;
-  state: string;
-  uuid: string;
-};
-
-type DriveEvent = {
-  timestamp: string;
-  level: string;
-  event: string;
-  error?: string;
-  letter?: string;
-  mountPoint?: string;
-  name?: string;
-  filesystem?: string;
-};
-
-type DrivePayload = {
-  agentInstalled: boolean;
-  checkedAt: string | null;
-  events: DriveEvent[];
-  manifest: {
-    generatedAt: string | null;
-    intervalMs: number;
-    drives: DriveEntry[];
-  };
-  refreshIntervalMs: number;
 };
 
 type FtpEntry = {
@@ -263,23 +233,19 @@ type UserDraft = {
 
 type LayoutMode = 'desktop' | 'tablet' | 'mobile';
 type ThemeMode = 'dark' | 'light' | 'contrast';
+type MediaCluster = {
+  description: string;
+  id: string;
+  optionalSupportKeys: string[];
+  primaryKeys: string[];
+  supportKeys: string[];
+  title: string;
+};
 type BatteryManagerLike = {
   charging: boolean;
   level: number;
   addEventListener: (event: 'chargingchange' | 'levelchange', listener: () => void) => void;
   removeEventListener: (event: 'chargingchange' | 'levelchange', listener: () => void) => void;
-};
-
-const EMPTY_DRIVE_PAYLOAD: DrivePayload = {
-  agentInstalled: false,
-  checkedAt: null,
-  events: [],
-  manifest: {
-    generatedAt: null,
-    intervalMs: 60000,
-    drives: [],
-  },
-  refreshIntervalMs: 60000,
 };
 
 const TABS: Array<{ key: TabKey; label: string }> = [
@@ -294,17 +260,44 @@ const TABS: Array<{ key: TabKey; label: string }> = [
 
 const TAB_KEYS = new Set<TabKey>(TABS.map(({ key }) => key));
 
+const TAB_ICONS: Record<TabKey, { path: string; viewBox: string }> = {
+  home: {
+    viewBox: '0 0 20 20',
+    path: 'M2.5 9.25 10 3l7.5 6.25V17a.75.75 0 0 1-.75.75H13v-5.25H7V17a.75.75 0 0 1-.75.75H3.25A.75.75 0 0 1 2.5 17V9.25Z',
+  },
+  media: {
+    viewBox: '0 0 20 20',
+    path: 'M4.5 4.75A.75.75 0 0 1 5.25 4h9.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-9.5a.75.75 0 0 1-.75-.75V4.75Zm2 1.5v7.5l6.5-3.75-6.5-3.75Z',
+  },
+  arr: {
+    viewBox: '0 0 20 20',
+    path: 'M3 5.25A.75.75 0 0 1 3.75 4.5h12.5a.75.75 0 0 1 0 1.5H3.75A.75.75 0 0 1 3 5.25Zm0 4.75A.75.75 0 0 1 3.75 9.25h7.25a.75.75 0 0 1 0 1.5H3.75A.75.75 0 0 1 3 10ZM3 14.75a.75.75 0 0 1 .75-.75h12.5a.75.75 0 0 1 0 1.5H3.75a.75.75 0 0 1-.75-.75ZM14.25 7l2.25 3-2.25 3v-2H10a.75.75 0 0 1 0-1.5h4.25V7Z',
+  },
+  terminal: {
+    viewBox: '0 0 20 20',
+    path: 'M3 4.75A.75.75 0 0 1 3.75 4h12.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75H3.75a.75.75 0 0 1-.75-.75V4.75Zm2.5 2.25 2.5 2.25-2.5 2.25 1 1.1 3.6-3.35-3.6-3.35-1 1.1Zm4.5 5.5h4v-1.5h-4v1.5Z',
+  },
+  filesystem: {
+    viewBox: '0 0 20 20',
+    path: 'M3.5 5.25A1.25 1.25 0 0 1 4.75 4h4.1c.33 0 .64.13.87.36l1.19 1.14H15.25a1.25 1.25 0 0 1 1.25 1.25v6.5a1.25 1.25 0 0 1-1.25 1.25H4.75A1.25 1.25 0 0 1 3.5 13.25v-8Zm1.5 0v8h10.75v-6.5H10.1L8.67 5.75H5Z',
+  },
+  ftp: {
+    viewBox: '0 0 20 20',
+    path: 'M4.25 15.5A4.25 4.25 0 0 1 5 7.06 5.75 5.75 0 0 1 15.66 8.5 3.5 3.5 0 0 1 15.25 15.5H4.25Zm5.25-6.5-2.5 2.5h1.65V14h1.7v-2.5H12l-2.5-2.5Z',
+  },
+  settings: {
+    viewBox: '0 0 20 20',
+    path: 'M8.25 2.75h3.5l.45 1.7c.38.13.74.31 1.08.53l1.67-.55 1.75 3.03-1.31 1.18c.04.19.06.39.06.59s-.02.4-.06.59l1.31 1.18-1.75 3.03-1.67-.55c-.34.22-.7.4-1.08.53l-.45 1.7h-3.5l-.45-1.7a5.7 5.7 0 0 1-1.08-.53l-1.67.55-1.75-3.03 1.31-1.18a4.2 4.2 0 0 1 0-1.18L3.3 7.46l1.75-3.03 1.67.55c.34-.22.7-.4 1.08-.53l.45-1.7Zm1.75 4A2.25 2.25 0 1 0 10 11.25 2.25 2.25 0 0 0 10 6.75Z',
+  },
+};
+
 const SERVICE_GROUP_LABELS: Record<ServiceGroupKey, string> = {
   access: 'Access',
   arr: 'ARR',
   data: 'Data',
+  filesystem: 'Files',
   media: 'Media',
   platform: 'Platform',
-};
-
-const WORKFLOW_STEPS: Record<'media' | 'arr', string[]> = {
-  media: ['Requests', 'Downloads', 'Library', 'Streaming'],
-  arr: ['Indexer', 'Discovery', 'Download', 'Subtitle'],
 };
 
 const THEME_STORAGE_KEY = 'hmstx-theme';
@@ -328,22 +321,66 @@ const COMMAND_DOCS = [
   },
 ];
 
-const fmtBytes = (value: number) => {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '0 B';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let idx = 0;
-  while (size >= 1024 && idx < units.length - 1) {
-    size /= 1024;
-    idx += 1;
-  }
-  return `${size.toFixed(idx < 2 ? 0 : 1)} ${units[idx]}`;
+type ServiceProfile = {
+  focusLabel: string;
+  quickLabels: string[];
 };
 
-const fmtRate = (value: number) => `${fmtBytes(value)}/s`;
+const SERVICE_PROFILES: Record<string, ServiceProfile> = {
+  nginx: { focusLabel: 'Gateway', quickLabels: ['Proxy', 'Ports', 'Headers'] },
+  ttyd: { focusLabel: 'Terminal', quickLabels: ['Shell', 'Sessions', 'Clipboard'] },
+  jellyfin: { focusLabel: 'Library', quickLabels: ['Playback', 'Clients', 'Activity'] },
+  qbittorrent: { focusLabel: 'Downloads', quickLabels: ['Torrents', 'Queue', 'Peers'] },
+  jellyseerr: { focusLabel: 'Requests', quickLabels: ['Library', 'Queue', 'Discovery'] },
+  sonarr: { focusLabel: 'Series', quickLabels: ['Calendar', 'Queue', 'Wanted'] },
+  radarr: { focusLabel: 'Movies', quickLabels: ['Calendar', 'Queue', 'Wanted'] },
+  prowlarr: { focusLabel: 'Indexers', quickLabels: ['Search', 'Apps', 'Sync'] },
+  bazarr: { focusLabel: 'Subtitles', quickLabels: ['Languages', 'Sync', 'History'] },
+  postgres: { focusLabel: 'Databases', quickLabels: ['Connections', 'Queries', 'WAL'] },
+  redis: { focusLabel: 'Cache', quickLabels: ['Keys', 'Memory', 'Workers'] },
+  ftp: { focusLabel: 'Remotes', quickLabels: ['Favourites', 'Browse', 'Mounts'] },
+  copyparty: { focusLabel: 'Drop zone', quickLabels: ['Uploads', 'Shares', 'Links'] },
+  syncthing: { focusLabel: 'Devices', quickLabels: ['Folders', 'Peers', 'Versions'] },
+  samba: { focusLabel: 'Shares', quickLabels: ['Clients', 'Exports', 'Auth'] },
+  sshd: { focusLabel: 'Sessions', quickLabels: ['Keys', 'Hosts', 'Users'] },
+};
+
+const getServiceProfile = (entry: ServiceCatalogEntry): ServiceProfile => SERVICE_PROFILES[entry.key] || {
+  focusLabel: 'Service',
+  quickLabels: ['Status', 'History', 'Route'],
+};
+
+const MEDIA_CLUSTERS: MediaCluster[] = [
+  {
+    id: 'jellyfin',
+    title: 'Jellyfin',
+    description: 'Primary streaming surface for the local movie and series library.',
+    primaryKeys: ['jellyfin'],
+    supportKeys: [],
+    optionalSupportKeys: ['jellyseerr'],
+  },
+  {
+    id: 'iptv',
+    title: 'IPTV',
+    description: 'Guide, cache, and metadata support for live-channel workflows and future IPTV integrations.',
+    primaryKeys: [],
+    supportKeys: ['redis', 'postgres'],
+    optionalSupportKeys: [],
+  },
+];
+
+const loadAlertTone = (value: number, warnAt: number, dangerAt: number) => {
+  if (!Number.isFinite(value)) {
+    return THEME.text;
+  }
+  if (value >= dangerAt) {
+    return THEME.crimsonRed;
+  }
+  if (value >= warnAt) {
+    return THEME.brightYellow;
+  }
+  return THEME.text;
+};
 
 const fmtTime = (iso: string) => {
   const d = new Date(iso);
@@ -372,16 +409,6 @@ const fmtDateTime = (iso?: string | null) => {
   });
 };
 
-const fmtDuration = (durationMs = 0) => {
-  const totalMinutes = Math.max(0, Math.floor(durationMs / 60000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours <= 0) {
-    return `${minutes}m`;
-  }
-  return `${hours}h ${minutes}m`;
-};
-
 const storageTone = (usePercent: number) => {
   if (usePercent >= 80) {
     return THEME.crimsonRed;
@@ -404,18 +431,6 @@ const readCollapsedSections = () => {
     return {};
   }
 };
-
-const normalizeDrivePayload = (payload: Partial<DrivePayload> | null | undefined): DrivePayload => ({
-  agentInstalled: Boolean(payload?.agentInstalled),
-  checkedAt: typeof payload?.checkedAt === 'string' ? payload.checkedAt : null,
-  events: Array.isArray(payload?.events) ? payload.events : [],
-  manifest: {
-    generatedAt: typeof payload?.manifest?.generatedAt === 'string' ? payload.manifest.generatedAt : null,
-    intervalMs: Math.max(60000, Number(payload?.manifest?.intervalMs || payload?.refreshIntervalMs || 60000) || 60000),
-    drives: Array.isArray(payload?.manifest?.drives) ? payload.manifest.drives : [],
-  },
-  refreshIntervalMs: Math.max(60000, Number(payload?.refreshIntervalMs || payload?.manifest?.intervalMs || 60000) || 60000),
-});
 
 const joinRemotePath = (basePath: string, child: string) => {
   const parts = `${basePath === '/' ? '' : basePath}/${child}`
@@ -555,14 +570,18 @@ export default function Dashboard() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [paletteIndex, setPaletteIndex] = useState(0);
+  const [searchHasFocus, setSearchHasFocus] = useState(false);
   const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all');
   const [logSearch, setLogSearch] = useState('');
+  const [connectionsExpanded, setConnectionsExpanded] = useState(false);
   const [connectionBusyId, setConnectionBusyId] = useState<string | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectedUser | null>(null);
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
   const ftpMenuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const fetchInFlightRef = useRef(false);
   const telemetryInFlightRef = useRef(false);
   const mountedRef = useRef(true);
@@ -632,6 +651,9 @@ export default function Dashboard() {
     setDriveError('');
     setShowDriveLog(false);
     setDashboardShares([]);
+    setCommandPaletteOpen(false);
+    setCommandQuery('');
+    setSearchHasFocus(false);
     setAuthError(message);
   };
 
@@ -779,43 +801,6 @@ export default function Dashboard() {
 
     return () => cleanup();
   }, []);
-
-  useEffect(() => {
-    if (!isAuthed || sessionUser?.role !== 'admin') {
-      return;
-    }
-
-    const refreshTelemetry = () => {
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
-
-      void fetchTelemetry();
-    };
-
-    void fetchDashboard();
-    refreshTelemetry();
-
-    const telemetryInterval = window.setInterval(
-      refreshTelemetry,
-      lowPowerMode ? 25000 : activeTab === 'home' ? 5000 : 9000
-    );
-    const dashboardInterval = window.setInterval(
-      () => {
-        if (document.visibilityState === 'visible') {
-          void fetchDashboard();
-        }
-      },
-      lowPowerMode ? 90000 : 30000
-    );
-    document.addEventListener('visibilitychange', refreshTelemetry);
-
-    return () => {
-      window.clearInterval(telemetryInterval);
-      window.clearInterval(dashboardInterval);
-      document.removeEventListener('visibilitychange', refreshTelemetry);
-    };
-  }, [activeTab, isAuthed, lowPowerMode, sessionUser?.role]);
 
   useEffect(() => {
     if (!tabSyncReadyRef.current) {
@@ -1010,14 +995,14 @@ export default function Dashboard() {
     if (lowPowerMode) {
       return;
     }
-    drawTrend(cpuCanvas.current, cpuHistory, THEME.accent, THEME.accentFill);
+    drawTrend(cpuCanvas.current, cpuHistory, THEME.accentStrong, 'rgba(145,166,127,0.18)');
   }, [cpuHistory, lowPowerMode]);
 
   useEffect(() => {
     if (lowPowerMode) {
       return;
     }
-    drawTrend(ramCanvas.current, ramHistory, THEME.brightYellow, 'rgba(255,228,77,0.14)');
+    drawTrend(ramCanvas.current, ramHistory, '#f0c96a', 'rgba(240,201,106,0.16)');
   }, [lowPowerMode, ramHistory]);
 
   useEffect(() => {
@@ -1199,6 +1184,50 @@ export default function Dashboard() {
     }
   };
 
+  useEffect(() => {
+    if (!isAuthed || sessionUser?.role !== 'admin') {
+      return;
+    }
+
+    void fetchDashboard();
+    void fetchTelemetry();
+  }, [isAuthed, sessionUser?.role]);
+
+  useEffect(() => {
+    if (!isAuthed || sessionUser?.role !== 'admin') {
+      return;
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchTelemetry();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [isAuthed, sessionUser?.role]);
+
+  usePolling(
+    isAuthed && sessionUser?.role === 'admin',
+    lowPowerMode ? 25000 : activeTab === 'home' ? 5000 : 9000,
+    () => {
+      if (document.visibilityState !== 'hidden') {
+        void fetchTelemetry();
+      }
+    }
+  );
+
+  usePolling(
+    isAuthed && sessionUser?.role === 'admin',
+    lowPowerMode ? 90000 : 30000,
+    () => {
+      if (document.visibilityState === 'visible') {
+        void fetchDashboard();
+      }
+    }
+  );
+
   const unlockServiceController = async () => {
     if (!serviceUnlockPassword.trim()) {
       setControlStatus('Enter the admin action password to unlock service controls');
@@ -1375,14 +1404,14 @@ export default function Dashboard() {
       }
 
       if (!res.ok) {
-        setUserStatus(String(payload?.error || 'Unable to disconnect session'));
+        setUserStatus(String(payload?.error || 'Unable to kick session'));
         return;
       }
 
       setConnections((current) => current.filter((entry) => entry.sessionId !== user.sessionId));
-      setUserStatus(`Disconnected ${payload?.username || user.username}`);
+      setUserStatus(`Kicked ${payload?.username || user.username}`);
     } catch {
-      setUserStatus('Unable to disconnect session');
+      setUserStatus('Unable to kick session');
     } finally {
       setConnectionBusyId(null);
       setDisconnectTarget(null);
@@ -1402,6 +1431,20 @@ export default function Dashboard() {
     return styles.serviceStatusWarn;
   };
 
+  const toggleOptionalSupportService = async (entry: ServiceCatalogEntry) => {
+    if (!entry.available) {
+      setControlStatus(`${entry.label} is unavailable on this host`);
+      return;
+    }
+
+    const action = entry.status === 'working' ? 'stop' : 'start';
+    await executeControl(entry.key, action);
+  };
+
+  const renderServiceBadge = (label: string, tone: CSSProperties, key: string) => (
+    <span key={key} style={{ ...styles.serviceMiniBadge, ...tone }}>{label}</span>
+  );
+
   const renderServiceCard = (entry: ServiceCatalogEntry) => {
     const linkHref = buildServiceHref(entry.route);
     const statusLabel = entry.status === 'working'
@@ -1410,64 +1453,167 @@ export default function Dashboard() {
         ? 'Stopped'
         : entry.status === 'unavailable'
           ? 'Unavailable'
-          : 'Needs attention';
+      : 'Needs attention';
     const canOperate = sessionUser?.role === 'admin' && entry.available;
     const isRunning = entry.status === 'working';
     const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
     const restartBusy = Boolean(controlBusy[`${entry.key}:restart`]);
+    const stopBusy = Boolean(controlBusy[`${entry.key}:stop`]);
     const statsLine = entry.uptimePct != null || entry.avgLatencyMs != null
       ? `${entry.uptimePct != null ? `${entry.uptimePct.toFixed(1)}% uptime` : 'No uptime history'} · ${entry.avgLatencyMs != null ? `${entry.avgLatencyMs}ms avg` : 'No latency'}`
       : 'Waiting for service history';
-    const tooltip = `${entry.label}\n${entry.statusReason || statusLabel}${entry.lastCheckedAt ? `\nLast checked: ${fmtDateTime(entry.lastCheckedAt)}` : ''}${entry.lastTransitionAt ? `\nLast transition: ${fmtDateTime(entry.lastTransitionAt)}` : ''}`;
+    const badgeItems = [
+      renderServiceBadge(SERVICE_GROUP_LABELS[entry.group], styles.serviceMiniBadgeMuted, `${entry.key}:group`),
+      renderServiceBadge(entry.controlMode === 'optional' ? 'Optional' : 'Core', styles.serviceMiniBadgeMuted, `${entry.key}:control`),
+      renderServiceBadge(statusLabel, statusToneStyle(entry.status), `${entry.key}:status`),
+    ];
+    const openService = () => {
+      if (linkHref && typeof window !== 'undefined') {
+        window.open(linkHref, '_blank', 'noreferrer');
+        return;
+      }
+      setControlStatus(`${entry.label} does not expose an external route`);
+    };
 
     return (
-      <article key={entry.key} style={styles.serviceCard} title={tooltip}>
-        <div style={styles.serviceCardHead}>
-          <div>
-            <h3 style={styles.serviceCardTitle}>{entry.label}</h3>
-            <p style={styles.serviceCardDescription}>{entry.description}</p>
+      <article key={entry.key} className="hmstx-hover-lift" style={styles.serviceCard}>
+        <div style={{ ...styles.serviceCardShell, ...(isCompact ? styles.serviceCardShellCompact : {}) }}>
+          <div style={{ ...styles.serviceCardCopy, ...(isCompact ? styles.serviceCardCopyCompact : {}) }}>
+            <div style={{ ...styles.serviceCardHead, ...(isCompact ? styles.serviceCardHeadCompact : {}) }}>
+              <div style={styles.serviceCardTitleBlock}>
+                <h3 style={styles.serviceCardTitle}>{entry.label}</h3>
+                <p style={styles.serviceCardDescription}>{entry.description}</p>
+              </div>
+              <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>{badgeItems}</div>
+            </div>
+            <p style={styles.serviceCardReason}>{entry.statusReason || statsLine}</p>
+            {entry.blocker ? <p style={{ ...styles.smallLabel, color: entry.status === 'unavailable' ? THEME.brightYellow : THEME.muted }}>{entry.blocker}</p> : null}
+            <span style={styles.serviceQuickLabel}>{statsLine}</span>
           </div>
-          <span style={{ ...styles.serviceStatusBadge, ...statusToneStyle(entry.status) }}>{statusLabel}</span>
-        </div>
-        <p style={styles.serviceCardMeta}>
-          {SERVICE_GROUP_LABELS[entry.group]} · {entry.controlMode === 'optional' ? 'Optional service' : 'Core service'}
-        </p>
-        <p style={styles.serviceCardStats}>{statsLine}</p>
-        {entry.statusReason ? <p style={styles.serviceCardReason}>{entry.statusReason}</p> : null}
-        {entry.blocker ? <p style={{ ...styles.smallLabel, color: entry.status === 'unavailable' ? THEME.brightYellow : THEME.muted }}>{entry.blocker}</p> : null}
-        <div style={styles.serviceCardActions}>
-          {linkHref ? (
-            <a href={linkHref} target="_blank" rel="noreferrer" className="ui-button" style={styles.linkBtn}>
-              Open
-            </a>
-          ) : null}
-          {canOperate && entry.controlMode === 'always_on' ? (
-            <>
-              {!isRunning ? (
-                <button className="ui-button" style={styles.actionBtn} type="button" disabled={startBusy} aria-label={`Start ${entry.label}`} onClick={() => void executeControl(entry.key, 'start')}>
-                  {startBusy ? 'Starting…' : 'Start'}
+          <div style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
+            {linkHref ? (
+              <a href={linkHref} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                Open
+              </a>
+            ) : null}
+            {canOperate ? (
+              <>
+                {!isRunning ? (
+                  <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={startBusy} aria-label={`Start ${entry.label}`} onClick={() => void executeControl(entry.key, 'start')}>
+                    {startBusy ? 'Starting…' : 'Start'}
+                  </button>
+                ) : null}
+                <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={restartBusy} aria-label={`Restart ${entry.label}`} onClick={() => void executeControl(entry.key, 'restart')}>
+                  {restartBusy ? 'Restarting…' : 'Restart'}
                 </button>
-              ) : null}
-              <button className="ui-button" style={styles.actionBtn} type="button" disabled={restartBusy} aria-label={`Restart ${entry.label}`} onClick={() => void executeControl(entry.key, 'restart')}>
-                {restartBusy ? 'Restarting…' : 'Restart'}
-              </button>
-            </>
-          ) : null}
+                {isRunning ? (
+                  <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={stopBusy} aria-label={`Stop ${entry.label}`} onClick={() => void executeControl(entry.key, 'stop')}>
+                    {stopBusy ? 'Stopping…' : 'Stop'}
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         </div>
       </article>
     );
   };
 
-  const renderWorkflowStrip = (surface: 'media' | 'arr') => (
-    <div style={styles.workflowStrip} aria-label={`${surface} workflow`}>
-      {WORKFLOW_STEPS[surface].map((step, index) => (
-        <div key={step} style={styles.workflowStep}>
-          <span style={styles.workflowIndex}>{index + 1}</span>
-          <span>{step}</span>
+  const renderMediaCluster = (cluster: typeof mediaClusters[number]) => {
+    const openRoute = cluster.route ? buildServiceHref(cluster.route) : '';
+    const kindLabel = cluster.primaryEntries.length > 0
+      ? 'Main service'
+      : cluster.supportEntries.length > 0
+        ? 'Support stack'
+        : 'Service group';
+    const statusLabel = cluster.status === 'working'
+      ? cluster.primaryEntries.length > 0
+        ? 'Working'
+        : 'Ready'
+      : cluster.status === 'stopped'
+        ? 'Stopped'
+        : cluster.status === 'unavailable'
+          ? 'Unavailable'
+          : 'Needs attention';
+
+    return (
+      <article key={cluster.id} className="hmstx-hover-lift" style={styles.mediaClusterCard}>
+        <div style={{ ...styles.serviceCardShell, ...(isCompact ? styles.serviceCardShellCompact : {}) }}>
+          <div style={{ ...styles.serviceCardCopy, ...(isCompact ? styles.serviceCardCopyCompact : {}) }}>
+            <div style={{ ...styles.serviceCardHead, ...(isCompact ? styles.serviceCardHeadCompact : {}) }}>
+              <div style={styles.serviceCardTitleBlock}>
+                <h3 style={styles.serviceCardTitle}>{cluster.title}</h3>
+                <p style={styles.serviceCardDescription}>{cluster.description}</p>
+              </div>
+              <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                {renderServiceBadge(kindLabel, styles.serviceMiniBadgeMuted, `${cluster.id}:kind`)}
+                {renderServiceBadge(statusLabel, statusToneStyle(cluster.status), `${cluster.id}:status`)}
+              </div>
+            </div>
+            {cluster.supportEntries.length > 0 ? (
+              <div style={styles.supportList}>
+                <span style={styles.supportLabel}>Support</span>
+                <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                  {cluster.supportEntries.map((entry) =>
+                    renderServiceBadge(entry.label, statusToneStyle(entry.status), `${cluster.id}:${entry.key}`)
+                  )}
+                </div>
+              </div>
+            ) : null}
+            {cluster.optionalSupportEntries.length > 0 ? (
+              <div style={{ ...styles.supportToggleList, ...(isPhone ? styles.supportToggleListCompact : {}) }}>
+                {cluster.optionalSupportEntries.map((entry) => (
+                  <label key={`${cluster.id}:${entry.key}`} style={styles.supportCheckbox}>
+                    <input
+                      type="checkbox"
+                      checked={entry.status === 'working'}
+                      disabled={sessionUser?.role !== 'admin' || Boolean(controlBusy[`${entry.key}:${entry.status === 'working' ? 'stop' : 'start'}`])}
+                      onChange={() => void toggleOptionalSupportService(entry)}
+                    />
+                    <span>{entry.label}</span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
+            {openRoute ? (
+              <a href={openRoute} target="_blank" rel="noreferrer" className="ui-button ui-button--primary" style={styles.serviceActionBtn}>
+                Open
+              </a>
+            ) : null}
+            {cluster.primaryEntries.map((entry) => {
+              const isRunning = entry.status === 'working';
+              const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
+              const restartBusy = Boolean(controlBusy[`${entry.key}:restart`]);
+              const stopBusy = Boolean(controlBusy[`${entry.key}:stop`]);
+              const canOperate = sessionUser?.role === 'admin' && entry.available;
+
+              return (
+                <div key={`${cluster.id}:${entry.key}:actions`} style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
+                  {canOperate && !isRunning ? (
+                    <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={startBusy} onClick={() => void executeControl(entry.key, 'start')}>
+                      {startBusy ? 'Starting…' : 'Start'}
+                    </button>
+                  ) : null}
+                  {canOperate ? (
+                    <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={restartBusy} onClick={() => void executeControl(entry.key, 'restart')}>
+                      {restartBusy ? 'Restarting…' : 'Restart'}
+                    </button>
+                  ) : null}
+                  {canOperate && isRunning ? (
+                    <button className="ui-button" style={styles.serviceActionBtn} type="button" disabled={stopBusy} onClick={() => void executeControl(entry.key, 'stop')}>
+                      {stopBusy ? 'Stopping…' : 'Stop'}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      ))}
-    </div>
-  );
+      </article>
+    );
+  };
 
   const serviceCatalogByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
   const serviceSurfaceEntries = (surface: ServiceSurface) => serviceCatalog.filter((entry) => entry.surface === surface);
@@ -1480,9 +1626,9 @@ export default function Dashboard() {
         .filter((entry) => entry.surface === 'home'),
     }))
     .filter((entry) => entry.items.length > 0);
+  const homeListedCount = homeGroups.reduce((sum, entry) => sum + entry.items.length, 0);
   const mediaServices = serviceSurfaceEntries('media');
   const arrServices = serviceSurfaceEntries('arr');
-  const mediaHealthyCount = mediaServices.filter((entry) => entry.status === 'working').length;
   const arrHealthyCount = arrServices.filter((entry) => entry.status === 'working').length;
   const optionalServiceEntries = optionalServices
     .map((name) => serviceCatalogByKey.get(name))
@@ -1493,8 +1639,11 @@ export default function Dashboard() {
   const usedMemPct = monitor ? Math.min((monitor.totalMem > 0 ? (monitor.usedMem / monitor.totalMem) * 100 : 0), 100) : 0;
   const runningServices = catalogRunningServices || Object.values(services).filter(Boolean).length;
   const totalServices = serviceCatalog.length || Object.keys(services).length || 4;
-  const totalStorage = storage.reduce((sum, mount) => sum + mount.size, 0);
-  const usedStorage = storage.reduce((sum, mount) => sum + mount.used, 0);
+  const mountedFtpEntries = ftpFavourites.filter((favourite) => favourite.mount?.mounted && favourite.mount?.mountPoint);
+  const mountedFtpMountPoints = new Set(mountedFtpEntries.map((favourite) => favourite.mount.mountPoint));
+  const visibleStorageMounts = storage.filter((mount) => !mount.mount.startsWith('/mnt/cloud/') && !mountedFtpMountPoints.has(mount.mount));
+  const totalStorage = visibleStorageMounts.reduce((sum, mount) => sum + mount.size, 0);
+  const usedStorage = visibleStorageMounts.reduce((sum, mount) => sum + mount.used, 0);
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
   const driveCount = driveState.manifest.drives.length;
   const filesystemStatus = !driveState.agentInstalled
@@ -1518,9 +1667,22 @@ export default function Dashboard() {
       ? THEME.crimsonRed
       : THEME.ok;
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
-  const mountedFtpFavourites = ftpFavourites.filter((favourite) => favourite.mount?.mounted).length;
+  const mountedFtpFavouriteCount = mountedFtpEntries.length;
   const terminalService = serviceCatalogByKey.get('ttyd') || null;
+  const qbittorrentService = serviceCatalogByKey.get('qbittorrent') || null;
   const telemetryStale = lastTelemetryAt > 0 && Date.now() - lastTelemetryAt > (lowPowerMode ? 60000 : 20000);
+  const batteryPct = monitor?.device?.batteryPct ?? null;
+  const batteryLow = batteryPct != null && batteryPct <= 20 && !monitor?.device?.charging;
+  const cpuLoadTone = loadAlertTone(monitor?.cpuLoad || 0, 65, 85);
+  const memoryTone = loadAlertTone(usedMemPct, 70, 85);
+  const eventLoopTone = loadAlertTone(monitor?.eventLoopP95Ms || 0, 70, 140);
+  const loadAverageTone = loadAlertTone(monitor?.loadAvg1m || 0, Math.max(1, (monitor?.cpuCores || 1) * 0.8), Math.max(1, monitor?.cpuCores || 1));
+  const wifiTone = monitor?.device?.wifiDbm != null && monitor.device.wifiDbm <= -80
+    ? THEME.crimsonRed
+    : monitor?.device?.wifiDbm != null && monitor.device.wifiDbm <= -70
+      ? THEME.brightYellow
+      : THEME.text;
+  const batteryTone = batteryLow ? THEME.crimsonRed : THEME.text;
   const filteredLogs = debugLogs.filter((entry) => {
     const matchesLevel = logFilter === 'all' || entry.level === logFilter;
     const haystack = `${entry.message} ${entry.meta ? JSON.stringify(entry.meta) : ''}`.toLowerCase();
@@ -1536,20 +1698,24 @@ export default function Dashboard() {
       run: () => {
         if (entry.surface === 'media' || entry.surface === 'arr' || entry.surface === 'terminal' || entry.surface === 'ftp') {
           setActiveTab(entry.surface);
+        } else if (entry.surface === 'filesystem') {
+          setActiveTab('filesystem');
         } else {
           setActiveTab('home');
         }
         setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
       },
     })),
     {
-      id: 'action:theme',
+      id: 'action:settings',
       kind: 'action' as const,
-      label: 'Toggle theme',
+      label: 'Open settings',
       subtitle: 'Action',
       run: () => {
-        toggleTheme();
+        setActiveTab('settings');
         setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
       },
     },
     {
@@ -1560,6 +1726,7 @@ export default function Dashboard() {
       run: () => {
         void fetchTelemetry();
         setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
       },
     },
     {
@@ -1570,6 +1737,7 @@ export default function Dashboard() {
       run: () => {
         exportLogs();
         setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
       },
     },
     ...COMMAND_DOCS.map((item) => ({
@@ -1582,6 +1750,7 @@ export default function Dashboard() {
           window.open(item.value, '_blank', 'noreferrer');
         }
         setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
       },
     })),
   ].filter((item) => {
@@ -1598,12 +1767,45 @@ export default function Dashboard() {
     const cleanQuery = query.replace(/^[>/]\s*/, '');
     return `${item.label} ${item.subtitle}`.toLowerCase().includes(cleanQuery);
   });
+  const searchResultsOpen = commandPaletteOpen && (searchHasFocus || deferredCommandQuery.trim().length > 0);
+  const mediaClusters = MEDIA_CLUSTERS.map((cluster) => {
+    const primaryEntries = cluster.primaryKeys
+      .map((key) => serviceCatalogByKey.get(key))
+      .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+    const supportEntries = cluster.supportKeys
+      .map((key) => serviceCatalogByKey.get(key))
+      .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+    const optionalSupportEntries = cluster.optionalSupportKeys
+      .map((key) => serviceCatalogByKey.get(key))
+      .filter((entry): entry is ServiceCatalogEntry => Boolean(entry));
+    const allEntries = [...primaryEntries, ...supportEntries, ...optionalSupportEntries];
+    const routeSource = primaryEntries.find((entry) => entry.route) || optionalSupportEntries.find((entry) => entry.route) || supportEntries.find((entry) => entry.route) || null;
+    const status = allEntries.some((entry) => entry.status === 'working')
+      ? 'working'
+      : allEntries.some((entry) => entry.status === 'stalled')
+        ? 'stalled'
+        : allEntries.some((entry) => entry.status === 'stopped')
+          ? 'stopped'
+          : 'unavailable';
+
+    return {
+      ...cluster,
+      optionalSupportEntries,
+      primaryEntries,
+      route: routeSource?.route,
+      status,
+      supportEntries,
+    };
+  });
+  const mediaHealthyCount = mediaClusters.filter((cluster) => cluster.status === 'working').length;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setCommandPaletteOpen(true);
+        setSearchHasFocus(true);
+        commandPaletteInputRef.current?.focus();
         return;
       }
 
@@ -1621,6 +1823,7 @@ export default function Dashboard() {
 
       if (event.key === 'Escape') {
         setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
         return;
       }
 
@@ -1646,6 +1849,18 @@ export default function Dashboard() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [activeTab, commandPaletteOpen, isPhone, paletteIndex, paletteItems]);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!searchContainerRef.current?.contains(event.target as Node)) {
+        setCommandPaletteOpen(false);
+        setSearchHasFocus(false);
+      }
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, []);
 
   useEffect(() => {
     if (paletteIndex >= paletteItems.length) {
@@ -1676,6 +1891,20 @@ export default function Dashboard() {
       default:
         return tab;
     }
+  };
+
+  const navButtonIcon = (tab: TabKey) => {
+    const icon = TAB_ICONS[tab];
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox={icon.viewBox}
+        focusable="false"
+        style={styles.navIcon}
+      >
+        <path d={icon.path} fill="currentColor" />
+      </svg>
+    );
   };
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
@@ -2230,7 +2459,7 @@ export default function Dashboard() {
     return (
       <main id="app-main" style={styles.loginShell}>
         <form style={styles.loginCard} onSubmit={login} noValidate>
-          <h1 style={{ marginTop: 0, marginBottom: 8 }}>Dashboard Login</h1>
+          <h1 style={{ marginTop: 0, marginBottom: 8 }}>HmSTx Login</h1>
           <p style={{ marginTop: 0, color: THEME.muted, fontSize: 13 }}>Sign in to access the server dashboard.</p>
           <TextField
             id="login-username"
@@ -2271,18 +2500,21 @@ export default function Dashboard() {
     <div style={{ ...styles.app, ...(isPhone ? styles.appPhone : {}), ...(isTablet ? styles.appTablet : {}) }}>
       {!isPhone && (
         <aside style={{ ...styles.sidebar, ...(isTablet ? styles.sidebarTablet : {}) }}>
-          <div style={styles.brand}>{isTablet ? 'HS' : 'Home Server'}</div>
+          <div style={styles.brand}>{isTablet ? 'Hx' : 'HmSTx'}</div>
           <nav aria-label="Dashboard Sections" style={{ ...styles.navGroup, ...(isTablet ? styles.navGroupTablet : {}) }}>
             {TABS.map((tab) => (
               <button
                 key={tab.key}
-                className="ui-button"
+                className="ui-button nav-ribbon-btn"
                 aria-pressed={activeTab === tab.key}
                 style={{ ...styles.navBtn, ...(activeTab === tab.key ? styles.navBtnActive : {}), ...(isTablet ? styles.navBtnTablet : {}) }}
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
               >
-                {navButtonLabel(tab.key)}
+                <span style={{ ...styles.navButtonContent, ...(isTablet ? styles.navButtonContentTablet : {}) }}>
+                  {navButtonIcon(tab.key)}
+                  <span style={styles.navButtonText}>{navButtonLabel(tab.key)}</span>
+                </span>
               </button>
             ))}
           </nav>
@@ -2299,26 +2531,41 @@ export default function Dashboard() {
 
       <main id="app-main" style={{ ...styles.main, ...(isTablet ? styles.mainTablet : {}), ...(isPhone ? styles.mainPhone : {}) }}>
         <div style={styles.utilityBar}>
-          <div style={styles.utilityMeta}>
-            <span style={styles.headerPill}>{themeMode}</span>
-            <span style={styles.headerPill}>{lowPowerMode ? 'Low-power on' : 'Live polling'}</span>
-            <span style={{ ...styles.headerPill, ...(telemetryStale ? styles.headerPillWarn : {}) }}>
-              {telemetryStale ? 'Telemetry stale' : 'Telemetry live'}
-            </span>
-          </div>
-          <div style={styles.utilityActions}>
-            <button className="ui-button" type="button" style={styles.actionBtn} onClick={toggleTheme} aria-label="Toggle theme">
-              Theme
-            </button>
-            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setLowPowerMode((current) => !current)} aria-label="Toggle low power mode">
-              {lowPowerMode ? 'Normal' : 'Low-Power'}
-            </button>
-            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setCommandPaletteOpen(true)} aria-label="Open command palette">
-              Search
-            </button>
-            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setShowOnboarding(true)} aria-label="Open onboarding help">
-              Help
-            </button>
+          <div ref={searchContainerRef} style={{ ...styles.searchShell, ...(isPhone ? styles.searchShellCompact : {}) }}>
+            <input
+              ref={commandPaletteInputRef}
+              className="ui-input"
+              type="search"
+              placeholder="Search services, actions, and docs"
+              value={commandQuery}
+              onFocus={() => {
+                setSearchHasFocus(true);
+                setCommandPaletteOpen(true);
+              }}
+              onChange={(event) => {
+                setCommandQuery(event.target.value);
+                setCommandPaletteOpen(true);
+              }}
+            />
+            {searchResultsOpen ? (
+              <div className="hmstx-popover" style={{ ...styles.searchResults, ...(isPhone ? styles.searchResultsCompact : {}) }}>
+                {paletteItems.length === 0 ? (
+                  <p style={styles.searchEmpty}>No matches.</p>
+                ) : paletteItems.slice(0, 8).map((item, index) => (
+                  <button
+                    key={item.id}
+                    className="ui-button"
+                    type="button"
+                    style={{ ...styles.searchResultItem, ...(isPhone ? styles.searchResultItemCompact : {}), ...(paletteIndex === index ? styles.searchResultItemActive : {}) }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={item.run}
+                  >
+                    <span style={styles.searchResultLabel}>{item.label}</span>
+                    <span style={{ ...styles.searchResultMeta, ...(isPhone ? styles.searchResultMetaCompact : {}) }}>{item.subtitle}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -2344,83 +2591,110 @@ export default function Dashboard() {
 
         {activeTab === 'home' && (
           <div>
-            <div style={styles.headerBar}>
+            <div style={{ ...styles.headerBar, ...styles.homeHeaderBar }}>
               <div>
-                <h1 style={styles.title}>Home</h1>
+                <h1 style={{ ...styles.title, ...styles.homeTitle }}>HmSTx</h1>
               </div>
-              <div style={styles.headerMeta}>
-                <span style={styles.headerPill}>{lastUpdated ? `Updated ${lastUpdated}` : 'Waiting for telemetry'}</span>
-                <span style={styles.headerPill}>{runningServices}/{totalServices} services</span>
-                <span style={styles.headerPill}>{connections.length} clients</span>
-                {monitor?.device?.batteryPct != null ? <span style={styles.headerPill}>Battery {monitor.device.batteryPct}%{monitor.device.charging ? ' charging' : ''}</span> : null}
+              <div style={{ ...styles.headerMeta, ...styles.homeHeaderMeta }}>
+                <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{lastUpdated ? `Updated ${lastUpdated}` : 'Waiting for telemetry'}</span>
+                <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{themeMode}</span>
+                <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{lowPowerMode ? 'Low-power' : 'Live polling'}</span>
+                <span style={{ ...styles.headerPill, ...styles.homeHeaderPill, ...(telemetryStale ? styles.headerPillWarn : {}) }}>
+                  {telemetryStale ? 'Telemetry stale' : 'Telemetry live'}
+                </span>
+                <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{runningServices}/{totalServices} services</span>
+                <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{connections.length} clients</span>
+                {monitor?.device?.batteryPct != null ? (
+                  <span
+                    style={{
+                      ...styles.headerPill,
+                      ...styles.homeHeaderPill,
+                      ...(batteryLow ? styles.headerPillDanger : monitor.device.charging ? styles.headerPillOk : {}),
+                      color: batteryTone,
+                    }}
+                  >
+                    Battery {monitor.device.batteryPct}%{monitor.device.charging ? ' charging' : ''}
+                  </span>
+                ) : null}
               </div>
             </div>
 
-            <section style={{ ...styles.homeLayout, ...(isCompact ? styles.homeLayoutCompact : {}) }}>
-              <div style={styles.homePrimary}>
-                <article style={styles.card}>
-                  <h3 style={styles.cardTitle}>System</h3>
-                  <div style={styles.keyValueGrid}>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>CPU load</span><strong>{monitor ? `${monitor.cpuLoad.toFixed(1)}%` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Memory</span><strong>{usedMemPct.toFixed(1)}%</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Uptime</span><strong>{monitor ? `${(monitor.uptime / 3600).toFixed(1)}h` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>CPU cores</span><strong>{monitor ? monitor.cpuCores : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Load average</span><strong>{monitor ? `${monitor.loadAvg1m.toFixed(2)} / ${monitor.loadAvg5m.toFixed(2)} / ${monitor.loadAvg15m.toFixed(2)}` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Event loop</span><strong>{monitor ? `${monitor.eventLoopP95Ms.toFixed(2)}ms p95` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Node RSS</span><strong>{monitor ? fmtBytes(monitor.processRss) : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Network</span><strong>{monitor ? `↓ ${fmtRate(monitor.network.rxRate)} · ↑ ${fmtRate(monitor.network.txRate)}` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Wi-Fi</span><strong>{monitor?.device?.wifiDbm != null ? `${monitor.device.wifiDbm} dBm` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Battery</span><strong>{monitor?.device?.batteryPct != null ? `${monitor.device.batteryPct}%${monitor.device.charging ? ' ⚡' : ''}` : '--'}</strong></div>
-                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Android</span><strong>{monitor?.device?.androidVersion || '--'}</strong></div>
+            <section style={{ ...styles.homeLayout, ...styles.homeLayoutDense, ...(isCompact ? styles.homeLayoutCompact : {}) }}>
+              <div style={{ ...styles.homePrimary, ...styles.homeColumnDense }}>
+                <article className="hmstx-reveal hmstx-reveal-1 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                  <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle }}>System</h3>
+                  <div style={{ ...styles.keyValueGrid, ...styles.homeKeyValueGrid }}>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>CPU load</span><strong style={{ color: cpuLoadTone }}>{monitor ? `${monitor.cpuLoad.toFixed(1)}%` : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Memory</span><strong style={{ color: memoryTone }}>{usedMemPct.toFixed(1)}%</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Uptime</span><strong>{monitor ? `${(monitor.uptime / 3600).toFixed(1)}h` : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>CPU cores</span><strong>{monitor ? monitor.cpuCores : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Load average</span><strong style={{ color: loadAverageTone }}>{monitor ? `${monitor.loadAvg1m.toFixed(2)} / ${monitor.loadAvg5m.toFixed(2)} / ${monitor.loadAvg15m.toFixed(2)}` : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Event loop</span><strong style={{ color: eventLoopTone }}>{monitor ? `${monitor.eventLoopP95Ms.toFixed(2)}ms p95` : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Node RSS</span><strong>{monitor ? fmtBytes(monitor.processRss) : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}>
+                      <span style={styles.keyLabel}>Network</span>
+                      <strong>
+                        {monitor ? (
+                          <>
+                            <span style={{ color: THEME.accentStrong }}>↓ {fmtRate(monitor.network.rxRate)}</span>
+                            <span style={styles.networkDivider}> · </span>
+                            <span style={{ color: THEME.brightYellow }}>↑ {fmtRate(monitor.network.txRate)}</span>
+                          </>
+                        ) : '--'}
+                      </strong>
+                    </div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Wi-Fi</span><strong style={{ color: wifiTone }}>{monitor?.device?.wifiDbm != null ? `${monitor.device.wifiDbm} dBm` : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Battery</span><strong style={{ color: batteryTone }}>{monitor?.device?.batteryPct != null ? `${monitor.device.batteryPct}%${monitor.device.charging ? ' ⚡' : ''}` : '--'}</strong></div>
+                    <div style={{ ...styles.keyValueRow, ...styles.homeKeyValueRow }}><span style={styles.keyLabel}>Android</span><strong style={styles.systemValueCompact}>{monitor?.device?.androidVersion || '--'}</strong></div>
                   </div>
 
-                  <div style={styles.trendStack}>
+                  <div style={{ ...styles.trendStack, ...styles.homeTrendStack }}>
                     <div>
-                      <p style={styles.smallLabel}>CPU trend</p>
+                      <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>CPU trend</p>
                       <canvas ref={cpuCanvas} width={460} height={144} style={styles.canvas} />
                     </div>
                     <div>
-                      <p style={styles.smallLabel}>RAM trend</p>
+                      <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>RAM trend</p>
                       <canvas ref={ramCanvas} width={460} height={144} style={styles.canvas} />
                     </div>
                   </div>
                 </article>
 
-                <article style={styles.card}>
-                  <h3 style={styles.cardTitle}>Storage</h3>
+                <article className="hmstx-reveal hmstx-reveal-2 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                  <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle }}>Storage</h3>
                   <Progress label="Storage used" value={usedStoragePct} />
                   <div style={styles.mountList}>
-                    {storage.slice(0, 6).map((mount) => (
-                      <div key={`${mount.filesystem}-${mount.mount}`} style={styles.mountRow}>
+                    {visibleStorageMounts.map((mount) => (
+                      <div key={`${mount.filesystem}-${mount.mount}`} className="hmstx-hover-lift" style={{ ...styles.mountRow, ...styles.homeMountRow }}>
                         <div style={styles.mountLeft}>
                           <strong>{mount.mount}</strong>
-                          <p style={styles.mountMeta}>{mount.filesystem} {mount.fsType ? `(${mount.fsType})` : ''} {mount.category ? `- ${mount.category}` : ''}</p>
+                          <p style={{ ...styles.mountMeta, ...styles.homeMountMeta }}>{mount.filesystem} {mount.fsType ? `(${mount.fsType})` : ''} {mount.category ? `- ${mount.category}` : ''}</p>
                         </div>
                         <div style={styles.mountRight}>
-                          <span style={{ color: storageTone(mount.usePercent) }}>{mount.usePercent}%</span>
-                          <span style={styles.mountMeta}>{fmtBytes(mount.used)} / {fmtBytes(mount.size)}</span>
+                          <span style={{ ...styles.storageMetric, ...(mount.usePercent >= 80 ? styles.storageMetricDanger : mount.usePercent >= 60 ? styles.storageMetricWarn : styles.storageMetricOk) }}>{mount.usePercent}%</span>
+                          <span style={{ ...styles.mountMeta, ...styles.homeMountMeta }}>{fmtBytes(mount.used)} / {fmtBytes(mount.size)}</span>
                         </div>
                       </div>
                     ))}
                   </div>
                 </article>
 
-                <article style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <article className="hmstx-reveal hmstx-reveal-3 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                  <div style={{ ...styles.sectionHeader, ...styles.homeSectionHeader }}>
                     <div>
-                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>All Services</h3>
-                      <p style={styles.smallLabel}>Grouped service health and maintenance access for the running stack.</p>
+                      <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 4 }}>All Services</h3>
+                      <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>Gateway, data, and access services are managed here. Media and ARR remain in their own tabs.</p>
                     </div>
-                    <span style={styles.headerPill}>{serviceCatalog.length} listed</span>
+                    <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{homeListedCount} listed</span>
                   </div>
-                  <div style={styles.serviceGroupStack}>
+                  <div style={{ ...styles.serviceGroupStack, ...styles.homeServiceGroupStack }}>
                     {homeGroups.map(({ group, items }) => (
                       <section key={group} style={styles.serviceGroupSection}>
                         <div style={styles.serviceGroupHeader}>
-                          <button className="ui-button" style={styles.groupToggle} type="button" onClick={() => toggleSection(`home:${group}`)}>
+                          <button className="ui-button" style={{ ...styles.groupToggle, ...styles.homeGroupToggle }} type="button" onClick={() => toggleSection(`home:${group}`)}>
                             {SERVICE_GROUP_LABELS[group]}
                           </button>
-                          <span style={styles.smallLabel}>{items.length} services</span>
+                          <span style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>{items.length} services</span>
                         </div>
                         <div style={{ ...styles.serviceCardGrid, ...(collapsedSections[`home:${group}`] ? styles.collapsedSection : {}) }}>
                           {items.map((entry) => renderServiceCard(entry))}
@@ -2431,11 +2705,11 @@ export default function Dashboard() {
                 </article>
               </div>
 
-              <div style={styles.homeSecondary}>
-                <article style={styles.card}>
-                  <div style={styles.logControlRow}>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Optional Services</h3>
-                    <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => void (serviceControllerLocked ? unlockServiceController() : lockServiceController())} disabled={serviceUnlockBusy}>
+              <div style={{ ...styles.homeSecondary, ...styles.homeColumnDense }}>
+                <article className="hmstx-reveal hmstx-reveal-4 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                  <div style={{ ...styles.logControlRow, ...styles.homeLogControlRow }}>
+                    <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 0 }}>Optional Services</h3>
+                    <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void (serviceControllerLocked ? unlockServiceController() : lockServiceController())} disabled={serviceUnlockBusy}>
                       {serviceControllerLocked ? 'Unlock' : 'Lock'}
                     </button>
                   </div>
@@ -2443,7 +2717,7 @@ export default function Dashboard() {
                     {serviceControllerLocked ? (
                       <div style={styles.serviceLockOverlay} aria-hidden={false}>
                         <div style={styles.serviceLockBadge}>Locked</div>
-                        <p style={{ ...styles.smallLabel, marginBottom: 10 }}>Enter the admin action password once to unlock optional services for this session.</p>
+                        <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel, marginBottom: 10 }}>Enter the admin action password once to unlock optional services for this session.</p>
                         <TextField
                           id="service-unlock-password"
                           label="Admin Action Password"
@@ -2453,32 +2727,32 @@ export default function Dashboard() {
                           value={serviceUnlockPassword}
                           onChange={setServiceUnlockPassword}
                         />
-                        <button className="ui-button ui-button--primary" style={styles.actionBtn} type="button" onClick={() => void unlockServiceController()} disabled={serviceUnlockBusy}>
+                        <button className="ui-button ui-button--primary" style={styles.serviceActionBtn} type="button" onClick={() => void unlockServiceController()} disabled={serviceUnlockBusy}>
                           {serviceUnlockBusy ? 'Unlocking…' : 'Unlock Controls'}
                         </button>
                       </div>
                     ) : null}
                     {controllableServices.length === 0 ? (
-                      <p style={styles.smallLabel}>No optional services are available on this host.</p>
+                      <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>No optional services are available on this host.</p>
                     ) : controllableServices.map((entry) => (
-                      <div key={entry.key} style={{ ...styles.serviceRow, opacity: serviceControllerLocked ? 0.35 : 1 }}>
+                      <div key={entry.key} style={{ ...styles.serviceRow, ...(isPhone ? styles.serviceRowCompact : {}), opacity: serviceControllerLocked ? 0.35 : 1 }}>
                         <div style={styles.serviceRowCopy}>
-                          <span style={styles.serviceName}>
-                            {entry.label}
-                            <span style={{ ...styles.dot, background: entry.status === 'working' ? THEME.ok : THEME.crimsonRed }} />
-                          </span>
-                          <span style={styles.serviceRowMeta}>{entry.description}</span>
+                          <span style={styles.serviceName}>{entry.label}</span>
+                          <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                            {renderServiceBadge('Optional', styles.serviceMiniBadgeMuted, `${entry.key}:optional`)}
+                            {renderServiceBadge(entry.status === 'working' ? 'Working' : entry.status === 'unavailable' ? 'Unavailable' : 'Stopped', statusToneStyle(entry.status), `${entry.key}:state`)}
+                          </div>
                         </div>
-                        <div style={styles.actionWrap}>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:start`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(entry.key, 'start')}>Start</button>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:stop`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(entry.key, 'stop')}>Stop</button>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:restart`]} style={styles.actionBtn} type="button" onClick={() => void executeControl(entry.key, 'restart')}>Restart</button>
+                        <div style={{ ...styles.actionWrap, ...(isPhone ? styles.actionWrapCompact : {}) }}>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:start`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'start')}>Start</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:restart`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'restart')}>Restart</button>
+                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:stop`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'stop')}>Stop</button>
                         </div>
                       </div>
                     ))}
                   </div>
                   <p
-                    style={{ ...styles.smallLabel, marginTop: 8, color: controlStatusColor }}
+                    style={{ ...styles.smallLabel, ...styles.homeSmallLabel, marginTop: 8, color: controlStatusColor }}
                     role="status"
                     aria-live="polite"
                   >
@@ -2486,46 +2760,51 @@ export default function Dashboard() {
                   </p>
                 </article>
 
-                <article style={styles.card}>
-                  <h3 style={styles.cardTitle}>Connected Users</h3>
+                <article className="hmstx-reveal hmstx-reveal-5 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                  <div style={{ ...styles.logControlRow, ...styles.homeLogControlRow }}>
+                    <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 0 }}>Connected Users</h3>
+                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setConnectionsExpanded((current) => !current)}>
+                      {connectionsExpanded ? 'Compact columns' : 'Expand columns'}
+                    </button>
+                  </div>
                   <div style={styles.tableWrapTight}>
-                    <table style={styles.table}>
+                    <table style={{ ...styles.table, ...styles.homeTable }}>
                       <thead>
                         <tr>
-                          <th style={styles.th}>Username</th>
-                          <th style={styles.th}>IP</th>
-                          <th style={styles.th}>Protocol</th>
-                          <th style={styles.th}>Duration</th>
-                          <th style={styles.th}>Last Seen</th>
-                          <th style={styles.th}>Action</th>
+                          <th style={{ ...styles.th, ...styles.homeTh }}>Username</th>
+                          <th style={{ ...styles.th, ...styles.homeTh }}>IP</th>
+                          {connectionsExpanded ? <th style={{ ...styles.th, ...styles.homeTh }}>Protocol</th> : null}
+                          <th style={{ ...styles.th, ...styles.homeTh }}>Duration</th>
+                          {connectionsExpanded ? <th style={{ ...styles.th, ...styles.homeTh }}>Last Seen</th> : null}
+                          <th style={{ ...styles.th, ...styles.homeTh }}>Action</th>
                         </tr>
                       </thead>
                       <tbody>
                         {connections.length === 0 && (
                           <tr>
-                            <td style={styles.td} colSpan={6}>No active users</td>
+                            <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }} colSpan={connectionsExpanded ? 6 : 4}>No active users</td>
                           </tr>
                         )}
                         {connections.map((user, idx) => (
                           <tr key={`${user.ip}-${user.port}-${idx}`}>
-                            <td style={styles.td}>{user.username}</td>
-                            <td style={styles.td}>{user.ip}</td>
-                            <td style={styles.td}>{user.protocol}</td>
-                            <td style={styles.td}>{fmtDuration(user.durationMs)}</td>
-                            <td style={styles.td}>{fmtTime(user.lastSeen)}</td>
-                            <td style={styles.td}>
+                            <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }}>{user.username}</td>
+                            <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }}>{user.ip}</td>
+                            {connectionsExpanded ? <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }}>{user.protocol}</td> : null}
+                            <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }}>{fmtDuration(user.durationMs)}</td>
+                            {connectionsExpanded ? <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }}>{fmtTime(user.lastSeen)}</td> : null}
+                            <td style={{ ...styles.td, ...styles.homeTd, ...styles.tableCellNoWrap }}>
                               {user.sessionId ? (
                                 <button
                                   className="ui-button"
-                                  style={styles.actionBtn}
+                                  style={styles.serviceActionBtn}
                                   type="button"
                                   disabled={connectionBusyId === user.sessionId}
                                   onClick={() => setDisconnectTarget(user)}
                                 >
-                                  {connectionBusyId === user.sessionId ? 'Disconnecting…' : 'Disconnect'}
+                                  {connectionBusyId === user.sessionId ? 'Kicking…' : 'Kick'}
                                 </button>
                               ) : (
-                                <span style={styles.smallLabel}>—</span>
+                                <span style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>—</span>
                               )}
                             </td>
                           </tr>
@@ -2535,19 +2814,19 @@ export default function Dashboard() {
                   </div>
                 </article>
 
-                <article style={styles.card}>
-                  <div style={styles.logControlRow}>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Debug Log</h3>
+                <article className="hmstx-reveal hmstx-reveal-6 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                  <div style={{ ...styles.logControlRow, ...styles.homeLogControlRow }}>
+                    <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 0 }}>Debug Log</h3>
                     <div style={styles.actionWrap}>
-                      <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
+                      <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
                         {verboseLogging ? 'Disable Verbose' : 'Enable Verbose'}
                       </button>
-                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={exportLogs}>
+                      <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={exportLogs}>
                         Download
                       </button>
                     </div>
                   </div>
-                  <div style={styles.logFilters}>
+                  <div style={{ ...styles.logFilters, ...styles.homeLogFilters }}>
                     <input
                       className="ui-input"
                       type="search"
@@ -2567,10 +2846,10 @@ export default function Dashboard() {
                       </button>
                     ))}
                   </div>
-                  <div style={styles.logBoxCompact}>
-                    {filteredLogs.length === 0 && <p style={styles.smallLabel}>No debug events yet.</p>}
+                  <div style={{ ...styles.logBoxCompact, ...styles.homeLogBox }}>
+                    {filteredLogs.length === 0 && <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>No debug events yet.</p>}
                     {filteredLogs.slice(0, 60).map((log, idx) => (
-                      <p key={`${log.timestamp}-${idx}`} style={styles.logLine}>
+                      <p key={`${log.timestamp}-${idx}`} style={{ ...styles.logLine, ...styles.homeLogLine }}>
                         <span style={styles.logTime}>{fmtTime(log.timestamp)}</span>
                         <span style={{ ...styles.logLevel, color: log.level === 'error' ? THEME.crimsonRed : log.level === 'warn' ? THEME.brightYellow : THEME.accent }}>
                           {log.level.toUpperCase()}
@@ -2582,7 +2861,7 @@ export default function Dashboard() {
                       </p>
                     ))}
                   </div>
-                  <pre style={styles.markdownBoxCompact}>{logsMarkdown || '```log\n(no logs yet)\n```'}</pre>
+                  <pre style={{ ...styles.markdownBoxCompact, ...styles.homeMarkdownBox }}>{logsMarkdown || '```log\n(no logs yet)\n```'}</pre>
                 </article>
               </div>
             </section>
@@ -2657,6 +2936,17 @@ export default function Dashboard() {
                 <article style={styles.card}>
                   <div style={styles.sectionHeader}>
                     <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Downloads</h3>
+                      <p style={styles.smallLabel}>qBittorrent is grouped with files so downloads live alongside storage and transfer tasks.</p>
+                    </div>
+                    {qbittorrentService ? <span style={styles.headerPill}>{qbittorrentService.status}</span> : null}
+                  </div>
+                  {qbittorrentService ? renderServiceCard(qbittorrentService) : <p style={styles.smallLabel}>qBittorrent is not available on this host.</p>}
+                </article>
+
+                <article style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Quick Links</h3>
                       <p style={styles.smallLabel}>Jump straight into the full workspace at the share root you want.</p>
                     </div>
@@ -2709,33 +2999,20 @@ export default function Dashboard() {
         {activeTab === 'media' && (
           <Panel
             title="Media"
-            subtitle="Streaming, downloads, requests, and media-side infrastructure."
-            meta={[`${mediaHealthyCount}/${mediaServices.length} healthy`, `${storage.find((entry) => entry.category === 'media') ? 'Media storage online' : 'Media storage unknown'}`]}
+            subtitle="Streaming surfaces and support services for the media stack."
+            meta={[`${mediaHealthyCount}/${mediaClusters.length} healthy`, `${visibleStorageMounts.find((entry) => entry.category === 'shared' || entry.category === 'external') ? 'Media storage online' : 'Media storage unknown'}`]}
           >
             <div style={styles.surfaceStack}>
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
-                    <p style={styles.smallLabel}>Requests move through downloads into the library and then into playback clients.</p>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Main Services</h3>
+                    <p style={styles.smallLabel}>Primary media surfaces with support services folded underneath instead of shown as separate cards.</p>
                   </div>
-                  <span style={styles.headerPill}>{mediaHealthyCount}/{mediaServices.length} healthy</span>
-                </div>
-                {renderWorkflowStrip('media')}
-              </article>
-
-              <article style={styles.card}>
-                <div style={styles.sectionHeader}>
-                  <div>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Media Services</h3>
-                    <p style={styles.smallLabel}>Streaming, downloads, and requests stay grouped here so the stack reads like one workflow.</p>
-                  </div>
-                  <button className="ui-button" style={styles.groupToggle} type="button" onClick={() => toggleSection('media:stack')}>
-                    {collapsedSections['media:stack'] ? 'Expand' : 'Collapse'}
-                  </button>
+                  <span style={styles.headerPill}>{mediaHealthyCount}/{mediaClusters.length} healthy</span>
                 </div>
                 <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['media:stack'] ? styles.collapsedSection : {}) }}>
-                  {mediaServices.map((entry) => renderServiceCard(entry))}
+                  {mediaClusters.map((cluster) => renderMediaCluster(cluster))}
                 </div>
               </article>
             </div>
@@ -2752,23 +3029,10 @@ export default function Dashboard() {
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
-                    <p style={styles.smallLabel}>Indexer management, discovery, and download handoff stay visible in one strip.</p>
+                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>ARR Services</h3>
+                    <p style={styles.smallLabel}>Compact control cards for discovery, indexer management, and automation services.</p>
                   </div>
                   <span style={styles.headerPill}>{arrHealthyCount}/{arrServices.length} healthy</span>
-                </div>
-                {renderWorkflowStrip('arr')}
-              </article>
-
-              <article style={styles.card}>
-                <div style={styles.sectionHeader}>
-                  <div>
-                    <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>ARR Services</h3>
-                    <p style={styles.smallLabel}>These services are expected to stay up. Restart them here without putting them in the generic controller.</p>
-                  </div>
-                  <button className="ui-button" style={styles.groupToggle} type="button" onClick={() => toggleSection('arr:stack')}>
-                    {collapsedSections['arr:stack'] ? 'Expand' : 'Collapse'}
-                  </button>
                 </div>
                 <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['arr:stack'] ? styles.collapsedSection : {}) }}>
                   {arrServices.map((entry) => renderServiceCard(entry))}
@@ -2782,7 +3046,7 @@ export default function Dashboard() {
           <Panel
             title="FTP"
             subtitle="Save remotes, browse them directly, and mount them into ~/Drives when this host allows it."
-            meta={[`${ftpFavourites.length} favourites`, `${mountedFtpFavourites} mounted`]}
+            meta={[`${ftpFavourites.length} favourites`, `${mountedFtpFavouriteCount} mounted`]}
           >
             <div style={{ ...styles.ftpWorkspace, ...(isCompact ? styles.ftpWorkspaceCompact : {}) }}>
               <div style={styles.ftpSidebar}>
@@ -3044,17 +3308,16 @@ export default function Dashboard() {
                                 <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void downloadFtpEntry(entry)}>Pull</button>
                               )}
                               <div className="fs-row-menu">
-                                <button
+                                <MenuButton
                                   className="ui-button fs-row-menu__trigger"
                                   disabled={ftpBusy}
+                                  label={`Open FTP actions for ${entry.name}`}
+                                  open={ftpEntryMenuState?.key === menuKey}
                                   ref={(node) => {
                                     ftpMenuButtonRefs.current[menuKey] = node;
                                   }}
-                                  type="button"
                                   onClick={() => openFtpEntryMenu(menuKey)}
-                                >
-                                  ⋯
-                                </button>
+                                />
                                 {ftpEntryMenuState?.key === menuKey && (
                                   <div className={`fs-row-menu__panel ${ftpEntryMenuState.upward ? 'fs-row-menu__panel--upward' : ''}`}>
                                     {isDirectory ? (
@@ -3089,13 +3352,21 @@ export default function Dashboard() {
           >
             <div style={styles.surfaceStack}>
               <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Session</h3>
-                <p style={styles.smallLabel}>Session access is cookie-based and invalidates on logout or timeout.</p>
+                <h3 style={styles.cardTitle}>Appearance & Power</h3>
+                <p style={styles.smallLabel}>Theme, polling mode, and onboarding help are managed here instead of the global header.</p>
                 <div style={styles.actionWrap}>
                   <button className="ui-button" style={styles.actionBtn} type="button" onClick={toggleTheme}>Cycle Theme</button>
                   <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setLowPowerMode((current) => !current)}>
                     {lowPowerMode ? 'Disable Low-Power' : 'Enable Low-Power'}
                   </button>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setShowOnboarding(true)}>Help</button>
+                </div>
+              </div>
+
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Session</h3>
+                <p style={styles.smallLabel}>Session access is cookie-based and invalidates on logout or timeout.</p>
+                <div style={styles.actionWrap}>
                   <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
                 </div>
               </div>
@@ -3238,101 +3509,71 @@ export default function Dashboard() {
               key={tab.key}
               className="ui-button"
               aria-pressed={activeTab === tab.key}
+              aria-label={tab.label}
               style={{ ...styles.bottomNavBtn, ...(activeTab === tab.key ? styles.bottomNavBtnActive : {}) }}
               type="button"
               onClick={() => setActiveTab(tab.key)}
             >
-              {tab.label}
+              <span style={styles.bottomNavBtnContent}>
+                {navButtonIcon(tab.key)}
+                <span style={styles.bottomNavBtnText}>{tab.label}</span>
+              </span>
             </button>
           ))}
         </nav>
       )}
 
-      {commandPaletteOpen && (
-        <div style={styles.modalOverlay} onClick={() => setCommandPaletteOpen(false)}>
-          <div style={{ ...styles.modalCard, maxWidth: 640 }} onClick={(event) => event.stopPropagation()}>
-            <div style={styles.sectionHeader}>
-              <div>
-                <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Command Palette</h3>
-                <p style={styles.smallLabel}>Search services, actions, and docs. Use <code>Ctrl/Cmd+K</code>, <code>&gt;</code>, or <code>/</code>.</p>
-              </div>
-              <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setCommandPaletteOpen(false)}>
-                Close
-              </button>
-            </div>
-            <input
-              autoFocus
-              className="ui-input"
-              type="search"
-              placeholder="Search services, actions, and docs"
-              value={commandQuery}
-              onChange={(event) => setCommandQuery(event.target.value)}
-            />
-            <div style={styles.paletteList}>
-              {paletteItems.length === 0 ? (
-                <p style={styles.smallLabel}>No matches.</p>
-              ) : paletteItems.map((item, index) => (
-                <button
-                  key={item.id}
-                  className="ui-button"
-                  type="button"
-                  style={{ ...styles.paletteItem, ...(paletteIndex === index ? styles.paletteItemActive : {}) }}
-                  onClick={item.run}
-                >
-                  <span>{item.label}</span>
-                  <span style={styles.smallLabel}>{item.subtitle}</span>
-                </button>
-              ))}
-            </div>
+      <DialogSurface
+        open={showOnboarding}
+        onClose={dismissOnboarding}
+        overlayStyle={styles.modalOverlay}
+        panelStyle={styles.modalCard}
+        labelledBy="onboarding-title"
+        describedBy="onboarding-help"
+      >
+        <h3 id="onboarding-title" style={styles.cardTitle}>Welcome to HmSTx</h3>
+        <div id="onboarding-help" style={styles.surfaceStack}>
+          <div style={styles.quickLink}>
+            <strong>Monitor the host</strong>
+            <span>Track CPU, memory, storage, and Android-side device health from one screen.</span>
+          </div>
+          <div style={styles.quickLink}>
+            <strong>Operate optional services</strong>
+            <span>Unlock the controller once per session, then start, stop, or restart optional services safely.</span>
+          </div>
+          <div style={styles.quickLink}>
+            <strong>Search quickly</strong>
+            <span>Use Ctrl/Cmd+K to jump to services, run actions, and open docs without hunting through tabs.</span>
           </div>
         </div>
-      )}
+        <div style={{ ...styles.actionWrap, marginTop: 16 }}>
+          <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={dismissOnboarding}>
+            Get Started
+          </button>
+        </div>
+      </DialogSurface>
 
-      {showOnboarding && (
-        <div style={styles.modalOverlay} onClick={dismissOnboarding}>
-          <div style={styles.modalCard} onClick={(event) => event.stopPropagation()}>
-            <h3 style={styles.cardTitle}>Welcome to HmSTx</h3>
-            <div style={styles.surfaceStack}>
-              <div style={styles.quickLink}>
-                <strong>Monitor the host</strong>
-                <span>Track CPU, memory, storage, and Android-side device health from one screen.</span>
-              </div>
-              <div style={styles.quickLink}>
-                <strong>Operate optional services</strong>
-                <span>Unlock the controller once per session, then start, stop, or restart optional services safely.</span>
-              </div>
-              <div style={styles.quickLink}>
-                <strong>Search quickly</strong>
-                <span>Use Ctrl/Cmd+K to jump to services, run actions, and open docs without hunting through tabs.</span>
-              </div>
-            </div>
-            <div style={{ ...styles.actionWrap, marginTop: 16 }}>
-              <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={dismissOnboarding}>
-                Get Started
-              </button>
-            </div>
-          </div>
+      <DialogSurface
+        open={Boolean(disconnectTarget)}
+        onClose={() => setDisconnectTarget(null)}
+        overlayStyle={styles.modalOverlay}
+        panelStyle={styles.modalCard}
+        labelledBy="disconnect-title"
+        describedBy="disconnect-help"
+      >
+        <h3 id="disconnect-title" style={styles.cardTitle}>Kick session</h3>
+        <p id="disconnect-help" style={styles.smallLabel}>
+          Kick {disconnectTarget?.username} at {disconnectTarget?.ip} from the dashboard session list?
+        </p>
+        <div style={styles.actionWrap}>
+          <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setDisconnectTarget(null)}>
+            Cancel
+          </button>
+          <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={() => disconnectTarget && void disconnectConnection(disconnectTarget)}>
+            Confirm
+          </button>
         </div>
-      )}
-
-      {disconnectTarget && (
-        <div style={styles.modalOverlay} onClick={() => setDisconnectTarget(null)}>
-          <div style={styles.modalCard} onClick={(event) => event.stopPropagation()}>
-            <h3 style={styles.cardTitle}>Disconnect session</h3>
-            <p style={styles.smallLabel}>
-              Disconnect {disconnectTarget.username} at {disconnectTarget.ip} from the dashboard session list?
-            </p>
-            <div style={styles.actionWrap}>
-              <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setDisconnectTarget(null)}>
-                Cancel
-              </button>
-              <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={() => void disconnectConnection(disconnectTarget)}>
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      </DialogSurface>
     </div>
   );
 }
@@ -3706,16 +3947,108 @@ const styles: Record<string, CSSProperties> = {
     borderColor: THEME.border,
   },
   logoutBtn: { marginTop: 14 },
+  navButtonContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  },
+  navButtonContentTablet: {
+    flexDirection: 'column',
+    gap: 6,
+  },
+  navButtonText: {
+    minWidth: 0,
+  },
+  navIcon: {
+    width: 18,
+    height: 18,
+    flexShrink: 0,
+    color: 'currentColor',
+  },
   main: { flex: 1, minHeight: 0, padding: 24, overflowY: 'auto' },
   mainTablet: { padding: 18 },
   mainPhone: { padding: 16, overflowY: 'visible' },
   utilityBar: {
     display: 'flex',
-    justifyContent: 'space-between',
+    width: '100%',
     alignItems: 'center',
     gap: 12,
     flexWrap: 'wrap',
     marginBottom: 12,
+  },
+  searchShell: {
+    position: 'relative',
+    flex: '1 1 auto',
+    minWidth: 0,
+    width: '100%',
+  },
+  searchShellCompact: {
+    width: '100%',
+  },
+  searchResults: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    left: 0,
+    right: 0,
+    zIndex: 30,
+    display: 'grid',
+    gap: 6,
+    padding: 10,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    background: '#101314',
+    boxShadow: '0 10px 28px rgba(0,0,0,0.28)',
+    maxHeight: 340,
+    overflowY: 'auto',
+  },
+  searchResultsCompact: {
+    gap: 8,
+    padding: 8,
+    borderRadius: 12,
+  },
+  searchResultItem: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    padding: '9px 10px',
+    borderRadius: 6,
+    background: '#161a1f',
+    fontFamily: 'var(--font-geist-mono), monospace',
+    fontSize: 12,
+  },
+  searchResultItemCompact: {
+    gridTemplateColumns: 'minmax(0, 1fr)',
+    justifyItems: 'start',
+    gap: 4,
+    padding: '10px 12px',
+  },
+  searchResultItemActive: {
+    background: '#1f252c',
+    borderColor: THEME.accent,
+  },
+  searchResultLabel: {
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    textAlign: 'left',
+  },
+  searchResultMeta: {
+    color: THEME.muted,
+    fontSize: 11,
+    whiteSpace: 'nowrap',
+    textAlign: 'right',
+  },
+  searchResultMetaCompact: {
+    whiteSpace: 'normal',
+    textAlign: 'left',
+  },
+  searchEmpty: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 12,
+    fontFamily: 'var(--font-geist-mono), monospace',
   },
   utilityMeta: {
     display: 'flex',
@@ -3728,6 +4061,7 @@ const styles: Record<string, CSSProperties> = {
     flexWrap: 'wrap',
   },
   title: { margin: '0 0 4px', fontSize: 24, fontWeight: 700, color: THEME.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  homeTitle: { marginBottom: 2, fontSize: 22 },
   panelSubtitle: { margin: '0 0 16px', color: THEME.muted, fontSize: 12, maxWidth: 680, overflowWrap: 'anywhere' },
   pageHeader: {
     display: 'flex',
@@ -3761,11 +4095,18 @@ const styles: Record<string, CSSProperties> = {
     flexWrap: 'wrap',
     marginBottom: 16,
   },
+  homeHeaderBar: {
+    gap: 12,
+    marginBottom: 14,
+  },
   headerMeta: {
     display: 'flex',
     gap: 8,
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
+  },
+  homeHeaderMeta: {
+    gap: 6,
   },
   headerPill: {
     border: `1px solid ${THEME.border}`,
@@ -3775,9 +4116,27 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     padding: '6px 10px',
   },
+  homeHeaderPill: {
+    fontSize: 11,
+    padding: '5px 9px',
+  },
+  headerPillOk: {
+    color: '#cfe8cf',
+    borderColor: 'rgba(111, 159, 112, 0.4)',
+    background: 'rgba(111, 159, 112, 0.16)',
+    boxShadow: 'inset 0 0 0 1px rgba(111, 159, 112, 0.08)',
+  },
   headerPillWarn: {
-    color: THEME.brightYellow,
-    borderColor: 'rgba(184, 139, 69, 0.32)',
+    color: '#f0cf8c',
+    borderColor: 'rgba(184, 139, 69, 0.42)',
+    background: 'rgba(184, 139, 69, 0.18)',
+    boxShadow: 'inset 0 0 0 1px rgba(184, 139, 69, 0.1)',
+  },
+  headerPillDanger: {
+    color: '#f2bbbb',
+    borderColor: 'rgba(196, 91, 91, 0.42)',
+    background: 'rgba(196, 91, 91, 0.16)',
+    boxShadow: 'inset 0 0 0 1px rgba(196, 91, 91, 0.08)',
   },
   bannerWarn: {
     display: 'flex',
@@ -3786,9 +4145,10 @@ const styles: Record<string, CSSProperties> = {
     gap: 12,
     marginBottom: 12,
     padding: '10px 12px',
-    border: `1px solid rgba(184, 139, 69, 0.32)`,
+    border: `1px solid rgba(184, 139, 69, 0.42)`,
     borderRadius: 10,
-    background: 'rgba(184, 139, 69, 0.12)',
+    background: 'rgba(184, 139, 69, 0.16)',
+    boxShadow: 'inset 0 0 0 1px rgba(184, 139, 69, 0.08)',
     color: THEME.text,
   },
   bannerAlert: {
@@ -3798,9 +4158,10 @@ const styles: Record<string, CSSProperties> = {
     gap: 12,
     marginBottom: 12,
     padding: '10px 12px',
-    border: `1px solid rgba(196, 91, 91, 0.32)`,
+    border: `1px solid rgba(196, 91, 91, 0.42)`,
     borderRadius: 10,
-    background: 'rgba(196, 91, 91, 0.12)',
+    background: 'rgba(196, 91, 91, 0.16)',
+    boxShadow: 'inset 0 0 0 1px rgba(196, 91, 91, 0.08)',
     color: THEME.text,
   },
   homeLayout: {
@@ -3808,6 +4169,9 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'stretch',
     gap: 16,
     minHeight: 'calc(100dvh - 168px)',
+  },
+  homeLayoutDense: {
+    gap: 14,
   },
   homeLayoutCompact: {
     flexDirection: 'column',
@@ -3827,14 +4191,22 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     gap: 16,
   },
+  homeColumnDense: {
+    gap: 14,
+  },
   card: {
     background: THEME.panel,
     border: `1px solid ${THEME.border}`,
     borderRadius: 10,
     padding: 16,
   },
+  homeCard: {
+    padding: 14,
+  },
   cardTitle: { margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: THEME.text },
+  homeCardTitle: { marginBottom: 10, fontSize: 14 },
   smallLabel: { margin: '0 0 8px', color: THEME.muted, fontSize: 12, overflowWrap: 'anywhere' },
+  homeSmallLabel: { marginBottom: 6, fontSize: 11, lineHeight: 1.4 },
   codeLine: {
     margin: '0 0 8px',
     color: THEME.muted,
@@ -3847,24 +4219,42 @@ const styles: Record<string, CSSProperties> = {
     gap: 8,
     marginBottom: 16,
   },
+  homeKeyValueGrid: {
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: 6,
+    marginBottom: 14,
+  },
   keyValueRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 10,
-    padding: '10px 12px',
+    padding: '8px 10px',
     background: THEME.panelRaised,
     border: `1px solid ${THEME.border}`,
     borderRadius: 8,
   },
+  homeKeyValueRow: {
+    gap: 8,
+    padding: '7px 9px',
+  },
   keyLabel: {
     color: THEME.muted,
-    fontSize: 13,
+    fontSize: 12,
+  },
+  systemValueCompact: {
+    fontSize: 12,
+  },
+  networkDivider: {
+    color: THEME.muted,
   },
   trendStack: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
     gap: 12,
+  },
+  homeTrendStack: {
+    gap: 10,
   },
   canvas: {
     width: '100%',
@@ -3875,7 +4265,7 @@ const styles: Record<string, CSSProperties> = {
   },
   progressLabel: { display: 'flex', justifyContent: 'space-between', color: THEME.muted, fontSize: 12, marginBottom: 6 },
   progressTrack: { height: 8, borderRadius: 999, background: '#242930', overflow: 'hidden' },
-  progressFill: { height: '100%', background: THEME.accent },
+  progressFill: { height: '100%', background: THEME.accent, transition: 'width 220ms ease, background-color 180ms ease' },
   serviceRow: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -3884,6 +4274,10 @@ const styles: Record<string, CSSProperties> = {
     paddingBottom: 10,
     borderBottom: `1px solid ${THEME.border}`,
     gap: 8,
+  },
+  serviceRowCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
   },
   serviceRowCopy: {
     display: 'grid',
@@ -3926,6 +4320,10 @@ const styles: Record<string, CSSProperties> = {
   },
   dot: { width: 8, height: 8, borderRadius: '50%', display: 'inline-block' },
   actionWrap: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  actionWrapCompact: {
+    width: '100%',
+    justifyContent: 'flex-start',
+  },
   actionBtn: {
     padding: '7px 10px',
     fontSize: 12,
@@ -3937,6 +4335,9 @@ const styles: Record<string, CSSProperties> = {
   serviceGroupStack: {
     display: 'grid',
     gap: 14,
+  },
+  homeServiceGroupStack: {
+    gap: 12,
   },
   serviceGroupSection: {
     display: 'grid',
@@ -3959,50 +4360,83 @@ const styles: Record<string, CSSProperties> = {
     padding: '8px 10px',
     fontSize: 12,
   },
+  homeGroupToggle: {
+    padding: '7px 9px',
+    fontSize: 11,
+  },
   serviceCardGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gridTemplateColumns: 'minmax(0, 1fr)',
     gap: 12,
   },
   collapsedSection: {
     display: 'none',
   },
   serviceCard: {
+    width: '100%',
     display: 'grid',
-    gap: 10,
-    padding: 14,
+    gap: 0,
     background: THEME.panelRaised,
     border: `1px solid ${THEME.border}`,
-    borderRadius: 8,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  mediaClusterCard: {
+    width: '100%',
+    display: 'grid',
+    gap: 0,
+    background: THEME.panelRaised,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  serviceCardShell: {
+    display: 'flex',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 14,
+    flexWrap: 'wrap',
+  },
+  serviceCardShellCompact: {
+    gap: 10,
+    padding: 12,
+  },
+  serviceCardCopy: {
+    flex: '1 1 420px',
+    minWidth: 0,
+    display: 'grid',
+    gap: 8,
+  },
+  serviceCardCopyCompact: {
+    flex: '1 1 100%',
   },
   serviceCardHead: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 10,
+    flexWrap: 'wrap',
+  },
+  serviceCardHeadCompact: {
+    gap: 8,
+  },
+  serviceCardTitleBlock: {
+    minWidth: 0,
+    display: 'grid',
+    gap: 6,
   },
   serviceCardTitle: {
-    margin: '0 0 4px',
-    fontSize: 14,
+    margin: 0,
+    fontSize: 16,
     fontWeight: 600,
     color: THEME.text,
   },
   serviceCardDescription: {
     margin: 0,
     color: THEME.muted,
-    fontSize: 12,
+    fontSize: 13,
     lineHeight: 1.5,
-  },
-  serviceCardMeta: {
-    margin: 0,
-    color: THEME.muted,
-    fontSize: 12,
-  },
-  serviceCardStats: {
-    margin: 0,
-    color: THEME.text,
-    fontSize: 12,
-    fontFamily: 'var(--font-geist-mono), monospace',
   },
   serviceCardReason: {
     margin: 0,
@@ -4010,10 +4444,84 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     lineHeight: 1.45,
   },
-  serviceCardActions: {
+  serviceCardRail: {
+    flex: '0 0 auto',
+    minWidth: 0,
     display: 'flex',
-    gap: 8,
+    gap: 6,
+    alignItems: 'flex-start',
+    justifyContent: 'flex-end',
     flexWrap: 'wrap',
+  },
+  serviceCardRailCompact: {
+    width: '100%',
+    justifyContent: 'flex-start',
+  },
+  serviceQuickLabel: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 11,
+    fontFamily: 'var(--font-geist-mono), monospace',
+  },
+  serviceBadgeRow: {
+    display: 'flex',
+    gap: 6,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  serviceBadgeRowCompact: {
+    gap: 5,
+  },
+  serviceMiniBadge: {
+    borderRadius: 999,
+    padding: '3px 8px',
+    fontSize: 11,
+    lineHeight: 1.1,
+    border: `1px solid ${THEME.border}`,
+    whiteSpace: 'nowrap',
+  },
+  serviceMiniBadgeMuted: {
+    color: THEME.muted,
+    background: '#15181c',
+  },
+  serviceActionBtn: {
+    minHeight: 36,
+    minWidth: 72,
+    padding: '7px 12px',
+    fontSize: 11,
+    fontWeight: 600,
+    lineHeight: 1,
+    borderRadius: 999,
+    textDecoration: 'none',
+  },
+  supportList: {
+    display: 'grid',
+    gap: 6,
+  },
+  supportLabel: {
+    color: THEME.muted,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+  },
+  supportToggleList: {
+    display: 'flex',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  supportToggleListCompact: {
+    display: 'grid',
+    gap: 8,
+  },
+  supportCheckbox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '6px 10px',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 999,
+    background: '#15181c',
+    fontSize: 12,
   },
   serviceStatusBadge: {
     borderRadius: 8,
@@ -4024,52 +4532,55 @@ const styles: Record<string, CSSProperties> = {
     border: `1px solid ${THEME.border}`,
   },
   serviceStatusOk: {
-    color: THEME.ok,
-    background: 'rgba(111, 159, 112, 0.12)',
-    borderColor: 'rgba(111, 159, 112, 0.32)',
+    color: '#cfe8cf',
+    background: 'rgba(111, 159, 112, 0.16)',
+    borderColor: 'rgba(111, 159, 112, 0.42)',
+    boxShadow: 'inset 0 0 0 1px rgba(111, 159, 112, 0.08)',
   },
   serviceStatusIdle: {
     color: THEME.muted,
     background: '#15181c',
+    borderColor: 'rgba(96, 103, 112, 0.22)',
   },
   serviceStatusWarn: {
-    color: THEME.brightYellow,
-    background: 'rgba(184, 139, 69, 0.12)',
-    borderColor: 'rgba(184, 139, 69, 0.32)',
+    color: '#f0cf8c',
+    background: 'rgba(184, 139, 69, 0.18)',
+    borderColor: 'rgba(184, 139, 69, 0.44)',
+    boxShadow: 'inset 0 0 0 1px rgba(184, 139, 69, 0.08)',
   },
   serviceStatusUnavailable: {
-    color: THEME.crimsonRed,
-    background: 'rgba(196, 91, 91, 0.12)',
-    borderColor: 'rgba(196, 91, 91, 0.32)',
+    color: '#f2bbbb',
+    background: 'rgba(196, 91, 91, 0.18)',
+    borderColor: 'rgba(196, 91, 91, 0.44)',
+    boxShadow: 'inset 0 0 0 1px rgba(196, 91, 91, 0.08)',
   },
-  workflowStrip: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-    gap: 8,
-  },
-  workflowStep: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '10px 12px',
-    border: `1px solid ${THEME.border}`,
-    borderRadius: 8,
-    background: THEME.panelRaised,
-    fontSize: 13,
-  },
-  workflowIndex: {
-    width: 20,
-    height: 20,
-    borderRadius: 999,
+  storageMetric: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#15181c',
-    color: THEME.text,
-    fontSize: 11,
-    fontWeight: 700,
+    minWidth: 48,
+    padding: '2px 8px',
+    borderRadius: 999,
     border: `1px solid ${THEME.border}`,
-    flexShrink: 0,
+    background: '#15181c',
+    fontSize: 12,
+    fontWeight: 600,
+    lineHeight: 1.2,
+  },
+  storageMetricOk: {
+    color: '#cfe8cf',
+    borderColor: 'rgba(111, 159, 112, 0.38)',
+    background: 'rgba(111, 159, 112, 0.14)',
+  },
+  storageMetricWarn: {
+    color: '#f0cf8c',
+    borderColor: 'rgba(184, 139, 69, 0.42)',
+    background: 'rgba(184, 139, 69, 0.16)',
+  },
+  storageMetricDanger: {
+    color: '#f2bbbb',
+    borderColor: 'rgba(196, 91, 91, 0.42)',
+    background: 'rgba(196, 91, 91, 0.16)',
   },
   mountList: { display: 'grid', gap: 8 },
   mountLeft: { minWidth: 0, flex: '1 1 220px' },
@@ -4080,26 +4591,40 @@ const styles: Record<string, CSSProperties> = {
     background: THEME.panelRaised,
     border: `1px solid ${THEME.border}`,
     borderRadius: 8,
-    padding: '10px 12px',
+    padding: '8px 10px',
     gap: 10,
+  },
+  homeMountRow: {
+    padding: '7px 9px',
+    gap: 8,
   },
   mountRight: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 },
   mountMeta: { margin: 0, fontSize: 12, color: THEME.muted, overflowWrap: 'anywhere' },
+  homeMountMeta: { fontSize: 11 },
   logControlRow: { marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  homeLogControlRow: { marginBottom: 8, gap: 8 },
   logFilters: {
     display: 'flex',
     gap: 8,
     flexWrap: 'wrap',
     marginBottom: 10,
   },
+  homeLogFilters: {
+    gap: 6,
+    marginBottom: 8,
+  },
   logBoxCompact: {
-    maxHeight: 220,
+    maxHeight: 320,
     overflow: 'auto',
     border: `1px solid ${THEME.border}`,
     borderRadius: 8,
-    padding: '10px 12px',
+    padding: '8px 10px',
     background: '#121519',
     fontFamily: 'monospace',
+  },
+  homeLogBox: {
+    maxHeight: 300,
+    padding: '7px 9px',
   },
   markdownBoxCompact: {
     margin: '10px 0 0',
@@ -4115,12 +4640,20 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     fontFamily: 'monospace',
   },
-  logLine: { margin: '0 0 6px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' },
+  homeMarkdownBox: {
+    marginTop: 8,
+    maxHeight: 160,
+    padding: '8px 10px',
+    fontSize: 11,
+  },
+  logLine: { margin: '0 0 3px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' },
+  homeLogLine: { marginBottom: 2, fontSize: 11, gap: 6 },
   logTime: { color: THEME.muted, minWidth: 72 },
   logLevel: { fontWeight: 700, minWidth: 42 },
   tableWrap: { width: '100%', overflowX: 'auto' },
   tableWrapTight: { width: '100%', overflowX: 'auto' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  homeTable: { fontSize: 12 },
   th: {
     color: THEME.muted,
     fontWeight: 500,
@@ -4129,6 +4662,10 @@ const styles: Record<string, CSSProperties> = {
     borderBottom: `1px solid ${THEME.border}`,
     whiteSpace: 'nowrap',
   },
+  homeTh: {
+    padding: '0 8px 8px',
+    fontSize: 12,
+  },
   td: {
     background: 'transparent',
     borderBottom: `1px solid ${THEME.border}`,
@@ -4136,6 +4673,14 @@ const styles: Record<string, CSSProperties> = {
     color: THEME.text,
     verticalAlign: 'top',
     overflowWrap: 'anywhere',
+  },
+  homeTd: {
+    padding: '8px',
+    fontSize: 12,
+  },
+  tableCellNoWrap: {
+    whiteSpace: 'nowrap',
+    overflowWrap: 'normal',
   },
   frame: {
     width: '100%',
@@ -4182,6 +4727,10 @@ const styles: Record<string, CSSProperties> = {
     gap: 10,
     flexWrap: 'wrap',
     marginBottom: 12,
+  },
+  homeSectionHeader: {
+    gap: 8,
+    marginBottom: 10,
   },
   ftpWorkspace: {
     display: 'grid',
@@ -4313,15 +4862,27 @@ const styles: Record<string, CSSProperties> = {
     display: 'grid',
     gridTemplateColumns: `repeat(${TABS.length}, minmax(0, 1fr))`,
     gap: 8,
-    padding: '10px 12px 12px',
+    padding: '10px 10px calc(14px + env(safe-area-inset-bottom, 0px))',
     borderTop: `1px solid ${THEME.border}`,
     background: '#15181c',
   },
   bottomNavBtn: {
-    padding: '10px 8px',
+    minHeight: 58,
+    padding: '8px 6px',
     justifyContent: 'center',
     fontSize: 12,
-    whiteSpace: 'nowrap',
+  },
+  bottomNavBtnContent: {
+    display: 'grid',
+    gap: 4,
+    placeItems: 'center',
+    lineHeight: 1,
+    width: '100%',
+  },
+  bottomNavBtnText: {
+    fontSize: 10,
+    lineHeight: 1.15,
+    textAlign: 'center',
   },
   bottomNavBtnActive: {
     background: THEME.panelRaised,
