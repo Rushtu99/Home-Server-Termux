@@ -564,6 +564,11 @@ const describeFtpMount = (mount?: FtpMountState | null) => {
   return 'unmounted';
 };
 
+const DEMO_BUILD_TIME = process.env.NEXT_PUBLIC_BUILD_TIME || '';
+const DEMO_LAST_COMMIT_DATE = process.env.NEXT_PUBLIC_LAST_COMMIT_DATE || '';
+const DEMO_LAST_COMMIT_ID = process.env.NEXT_PUBLIC_LAST_COMMIT_ID || '';
+const DEMO_LAST_COMMIT_FULL = process.env.NEXT_PUBLIC_LAST_COMMIT_FULL || '';
+
 export default function Dashboard() {
   const demoMode = isDemoMode();
   const [activeTab, setActiveTab] = useState<TabKey>('home');
@@ -660,6 +665,15 @@ export default function Dashboard() {
   const isTablet = layoutMode === 'tablet';
   const deferredCommandQuery = useDeferredValue(commandQuery);
   const deferredLogSearch = useDeferredValue(logSearch);
+  const demoMetaItems = demoMode
+    ? [
+        'Demo preview',
+        DEMO_LAST_COMMIT_ID ? `Commit ${DEMO_LAST_COMMIT_ID}` : 'Commit unknown',
+        DEMO_LAST_COMMIT_DATE ? `Committed ${fmtDateTime(DEMO_LAST_COMMIT_DATE)}` : 'Commit time unknown',
+        DEMO_BUILD_TIME ? `Built ${fmtDateTime(DEMO_BUILD_TIME)}` : 'Build time unknown',
+        lastUpdated ? `Telemetry ${lastUpdated}` : 'Telemetry pending',
+      ]
+    : [];
 
   const clearSession = (message = '') => {
     if (typeof window !== 'undefined') {
@@ -2756,6 +2770,22 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {demoMode ? (
+          <div style={{ ...styles.demoInfoBar, ...(isPhone ? styles.demoInfoBarCompact : {}) }} role="status" aria-live="polite">
+            <div style={styles.demoInfoIntro}>
+              <strong style={styles.demoInfoTitle}>Demo Build</strong>
+              <span style={styles.demoInfoText}>Use this bar to verify whether Pages is serving the latest UI.</span>
+            </div>
+            <div style={styles.demoInfoMeta}>
+              {demoMetaItems.map((item) => (
+                <span key={item} style={styles.demoInfoPill} title={item === `Commit ${DEMO_LAST_COMMIT_ID}` && DEMO_LAST_COMMIT_FULL ? DEMO_LAST_COMMIT_FULL : item}>
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {showDemoBanner ? (
           <div style={styles.bannerWarn} role="status" aria-live="polite">
             <div>
@@ -4630,6 +4660,55 @@ const styles: Record<string, CSSProperties> = {
     borderColor: 'rgba(196, 91, 91, 0.42)',
     background: 'rgba(196, 91, 91, 0.16)',
     boxShadow: 'inset 0 0 0 1px rgba(196, 91, 91, 0.08)',
+  },
+  demoInfoBar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+    padding: '10px 12px',
+    border: `1px solid rgba(111, 159, 112, 0.32)`,
+    borderRadius: 10,
+    background: 'linear-gradient(90deg, rgba(111, 159, 112, 0.12), rgba(17, 19, 21, 0.92))',
+    boxShadow: 'inset 0 0 0 1px rgba(111, 159, 112, 0.06)',
+    color: THEME.text,
+  },
+  demoInfoBarCompact: {
+    alignItems: 'flex-start',
+  },
+  demoInfoIntro: {
+    minWidth: 0,
+    display: 'grid',
+    gap: 2,
+  },
+  demoInfoTitle: {
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+    color: '#d5e8d6',
+  },
+  demoInfoText: {
+    fontSize: 12,
+    color: THEME.muted,
+  },
+  demoInfoMeta: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
+  demoInfoPill: {
+    border: `1px solid rgba(111, 159, 112, 0.26)`,
+    borderRadius: 999,
+    background: 'rgba(17, 19, 21, 0.74)',
+    color: THEME.text,
+    fontSize: 11,
+    padding: '5px 9px',
+    fontFamily: 'var(--font-geist-mono), monospace',
+    lineHeight: 1.35,
   },
   bannerWarn: {
     display: 'flex',
