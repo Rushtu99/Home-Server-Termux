@@ -3,6 +3,7 @@
 import { getBasePath, isDemoMode, withBasePath } from './demo-mode';
 
 type DemoLog = {
+  id?: string;
   level: 'info' | 'warn' | 'error';
   message: string;
   meta?: unknown;
@@ -91,16 +92,22 @@ type DemoRemoteNode = {
 
 type DemoServiceCatalogEntry = {
   available: boolean;
+  avgLatencyMs?: number | null;
   blocker?: string;
   controlMode: 'always_on' | 'optional';
   description: string;
   group: 'platform' | 'media' | 'arr' | 'data' | 'access';
   key: string;
+  lastCheckedAt?: string | null;
+  lastTransitionAt?: string | null;
   label: string;
+  latencyMs?: number | null;
   placeholder: boolean;
   route?: string;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable';
+  statusReason?: string;
   surface: 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp';
+  uptimePct?: number | null;
 };
 
 const nowIso = () => new Date().toISOString();
@@ -215,6 +222,7 @@ const makeRemoteNode = (path: string, type: 'directory' | 'file', size = 0): Dem
 
 const pushLog = (state: DemoState, level: DemoLog['level'], message: string, meta?: unknown) => {
   state.logs.unshift({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     level,
     message,
     meta,
@@ -243,10 +251,12 @@ const buildMarkdownLog = (logs: DemoLog[]) => {
 
 type DemoState = {
   connections: Array<{
+    durationMs?: number;
     ip: string;
     lastSeen: string;
     port: string;
     protocol: string;
+    sessionId?: string;
     status: string;
     username: string;
   }>;
@@ -432,8 +442,8 @@ const seedState = (): DemoState => {
 
   return {
     connections: [
-      { ip: '192.168.1.16', lastSeen: currentTime, port: '0', protocol: 'web', status: 'active', username: 'admin' },
-      { ip: '192.168.1.31', lastSeen: currentTime, port: '0', protocol: 'jellyfin', status: 'playing', username: 'living-room-tv' },
+      { durationMs: 32 * 60 * 1000, ip: '192.168.1.16', lastSeen: currentTime, port: '0', protocol: 'web', sessionId: 'demo-session-admin', status: 'active', username: 'admin' },
+      { durationMs: 2 * 60 * 60 * 1000, ip: '192.168.1.31', lastSeen: currentTime, port: '0', protocol: 'jellyfin', status: 'playing', username: 'living-room-tv' },
     ],
     controllerLocked: true,
     driveEvents: [
@@ -495,18 +505,75 @@ const seedState = (): DemoState => {
 const demoState = seedState();
 
 const optionalServices = ['ftp', 'copyparty', 'syncthing', 'samba', 'sshd'];
+const demoServiceLatency: Record<string, number> = {
+  copyparty: 0,
+  ftp: 132,
+  jellyfin: 168,
+  nginx: 42,
+  postgres: 18,
+  prowlarr: 112,
+  qbittorrent: 86,
+  radarr: 118,
+  redis: 8,
+  samba: 0,
+  sonarr: 126,
+  sshd: 0,
+  syncthing: 94,
+  ttyd: 61,
+};
+
+const statusReasonForDemoService = (entry: DemoServiceCatalogEntry) => {
+  if (!entry.available) {
+    return entry.blocker || 'Not installed on this host.';
+  }
+
+  if (entry.status === 'working') {
+    return entry.latencyMs && entry.latencyMs > 800 ? 'Healthy, but response time is elevated.' : 'Healthy.';
+  }
+
+  if (entry.controlMode === 'optional') {
+    return 'Stopped by operator.';
+  }
+
+  return 'Expected to be running, but the health check failed.';
+};
+
 const buildServiceCatalog = (state: DemoState): DemoServiceCatalogEntry[] =>
   SERVICE_META.map((entry) => {
     if (!entry.available) {
-      return clone(entry);
+      const unavailableEntry = {
+        ...clone(entry),
+        avgLatencyMs: null,
+        lastCheckedAt: nowIso(),
+        lastTransitionAt: nowIso(),
+        latencyMs: null,
+        uptimePct: null,
+      };
+      return {
+        ...unavailableEntry,
+        statusReason: statusReasonForDemoService(unavailableEntry),
+      };
     }
 
     const running = Boolean(state.services[entry.key]);
+    const status = entry.controlMode === 'optional'
+      ? (running ? 'working' : 'stopped')
+      : (running ? 'working' : 'stalled');
+    const latencyMs = running ? demoServiceLatency[entry.key] || 44 : null;
+
     return {
       ...entry,
-      status: entry.controlMode === 'optional'
-        ? (running ? 'working' : 'stopped')
-        : (running ? 'working' : 'stalled'),
+      avgLatencyMs: latencyMs,
+      lastCheckedAt: nowIso(),
+      lastTransitionAt: nowIso(),
+      latencyMs,
+      status,
+      statusReason: statusReasonForDemoService({
+        ...entry,
+        latencyMs,
+        status,
+      }),
+      uptimePct: running ? 99.4 : 96.1,
     };
   });
 
@@ -526,6 +593,7 @@ const buildDashboardPayload = (state: DemoState) => {
   },
   generatedAt: nowIso(),
   logs: {
+    entries: clone(state.logs),
     logs: clone(state.logs),
     markdown: buildMarkdownLog(state.logs),
     verboseLoggingEnabled: state.verboseLoggingEnabled,
@@ -545,6 +613,12 @@ const buildDashboardPayload = (state: DemoState) => {
       txBytes: 1_280_000_000,
       txRate: 620_000,
     },
+    device: {
+      androidVersion: 'Android 16',
+      batteryPct: 84,
+      charging: true,
+      wifiDbm: -45,
+    },
     processExternal: 18_400_000,
     processHeapTotal: 94_000_000,
     processHeapUsed: 58_000_000,
@@ -563,6 +637,19 @@ const buildDashboardPayload = (state: DemoState) => {
   storage: {
     mounts: clone(state.storage),
   },
+  };
+};
+
+const buildTelemetryPayload = (state: DemoState) => {
+  const dashboard = buildDashboardPayload(state);
+  return {
+    generatedAt: dashboard.generatedAt,
+    logs: dashboard.logs,
+    monitor: dashboard.monitor,
+    serviceCatalog: dashboard.serviceCatalog,
+    serviceController: dashboard.serviceController,
+    serviceGroups: dashboard.serviceGroups,
+    services: dashboard.services,
   };
 };
 
@@ -822,6 +909,9 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
   if (pathname === '/api/dashboard' && method === 'GET') {
     return jsonResponse(buildDashboardPayload(demoState));
   }
+  if (pathname === '/api/telemetry' && method === 'GET') {
+    return jsonResponse(buildTelemetryPayload(demoState));
+  }
   if (pathname === '/api/services' && method === 'GET') {
     return jsonResponse(buildServiceResponse(demoState));
   }
@@ -860,7 +950,11 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
   if (pathname === '/api/logging' && method === 'POST') {
     demoState.verboseLoggingEnabled = Boolean(body.enabled);
     pushLog(demoState, 'info', 'Demo verbose logging changed', { enabled: demoState.verboseLoggingEnabled });
-    return jsonResponse({ enabled: demoState.verboseLoggingEnabled, success: true });
+    return jsonResponse({
+      markdown: buildMarkdownLog(demoState.logs),
+      success: true,
+      verboseLoggingEnabled: demoState.verboseLoggingEnabled,
+    });
   }
   if (pathname === '/api/drives' && method === 'GET') {
     return jsonResponse({
@@ -953,6 +1047,21 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
   }
   if (pathname === '/api/users' && method === 'GET') {
     return jsonResponse({ users: clone(demoState.users) });
+  }
+  if (pathname.match(/^\/api\/connections\/[^/]+\/disconnect$/) && method === 'POST') {
+    const sessionId = pathname.split('/')[3] || '';
+    if (sessionId === 'demo-session-admin') {
+      return jsonResponse({ error: 'You cannot disconnect your current session' }, 400);
+    }
+
+    const connectionIndex = demoState.connections.findIndex((entry) => entry.sessionId === sessionId);
+    if (connectionIndex === -1) {
+      return jsonResponse({ error: 'Connection not found' }, 404);
+    }
+
+    const [connection] = demoState.connections.splice(connectionIndex, 1);
+    pushLog(demoState, 'warn', 'Demo connection disconnected', { sessionId, username: connection.username });
+    return jsonResponse({ sessionId, success: true, username: connection.username });
   }
   if (pathname === '/api/users' && method === 'POST') {
     const username = String(body.username || '').trim().toLowerCase();

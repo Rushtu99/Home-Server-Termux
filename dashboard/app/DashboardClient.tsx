@@ -1,7 +1,7 @@
 'use client';
 
 import type { CSSProperties, FormEvent, InputHTMLAttributes, ReactNode } from 'react';
-import { startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
 import { appFetch, getDemoTerminalLines } from './demo-api';
 import { isDemoMode } from './demo-mode';
 import { useGatewayBase } from './useGatewayBase';
@@ -9,18 +9,18 @@ import { useGatewayBase } from './useGatewayBase';
 const API = process.env.NEXT_PUBLIC_API || '/api';
 
 const THEME = {
-  accent: '#7d936b',
-  accentFill: 'rgba(125, 147, 107, 0.12)',
-  brightYellow: '#b88b45',
-  crimsonRed: '#c45b5b',
-  darkPurple: '#2b2f36',
-  bg: '#111315',
-  panel: '#171a1e',
-  panelRaised: '#1d2126',
-  text: '#eceee7',
-  muted: '#9ca39b',
-  ok: '#6f9f70',
-  border: '#2d333a',
+  accent: 'var(--accent)',
+  accentFill: 'var(--accent-soft)',
+  brightYellow: 'var(--warning)',
+  crimsonRed: 'var(--danger)',
+  darkPurple: 'var(--panel-raised)',
+  bg: 'var(--background)',
+  panel: 'var(--panel)',
+  panelRaised: 'var(--panel-raised)',
+  text: 'var(--foreground)',
+  muted: 'var(--muted)',
+  ok: 'var(--ok)',
+  border: 'var(--border)',
 };
 
 type TabKey = 'home' | 'media' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
@@ -30,21 +30,33 @@ type ServiceSurface = 'home' | 'media' | 'arr' | 'terminal' | 'settings' | 'ftp'
 
 type ServiceCatalogEntry = {
   available: boolean;
+  avgLatencyMs?: number | null;
   blocker?: string;
   controlMode: 'always_on' | 'optional';
   description: string;
   group: ServiceGroupKey;
   key: string;
+  lastCheckedAt?: string | null;
+  lastTransitionAt?: string | null;
   label: string;
+  latencyMs?: number | null;
   placeholder: boolean;
   route?: string;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable' | string;
+  statusReason?: string | null;
   surface: ServiceSurface;
+  uptimePct?: number | null;
 };
 
 type Monitor = {
   cpuCores: number;
   cpuLoad: number;
+  device?: {
+    androidVersion?: string | null;
+    batteryPct?: number | null;
+    charging?: boolean | null;
+    wifiDbm?: number | null;
+  };
   eventLoopLagMs: number;
   eventLoopP95Ms: number;
   freeMem: number;
@@ -67,10 +79,12 @@ type Monitor = {
 };
 
 type ConnectedUser = {
+  durationMs?: number;
   username: string;
   ip: string;
   port: string;
   protocol: string;
+  sessionId?: string;
   status: string;
   lastSeen: string;
 };
@@ -87,6 +101,7 @@ type StorageMount = {
 };
 
 type DebugLog = {
+  id?: string;
   timestamp: string;
   level: 'info' | 'warn' | 'error' | string;
   message: string;
@@ -201,10 +216,29 @@ type DashboardPayload = {
     mounts: StorageMount[];
   };
   logs: {
+    entries?: DebugLog[];
     logs: DebugLog[];
     markdown: string;
     verboseLoggingEnabled: boolean;
   };
+};
+
+type TelemetryPayload = {
+  generatedAt: string;
+  logs: {
+    entries?: DebugLog[];
+    logs?: DebugLog[];
+    markdown?: string;
+    verboseLoggingEnabled?: boolean;
+  };
+  monitor: Monitor;
+  serviceCatalog?: ServiceCatalogEntry[];
+  serviceController?: {
+    locked?: boolean;
+    optionalServices?: string[];
+  };
+  serviceGroups?: Partial<Record<ServiceGroupKey, string[]>>;
+  services: Services;
 };
 
 type SessionUser = {
@@ -228,6 +262,13 @@ type UserDraft = {
 };
 
 type LayoutMode = 'desktop' | 'tablet' | 'mobile';
+type ThemeMode = 'dark' | 'light' | 'contrast';
+type BatteryManagerLike = {
+  charging: boolean;
+  level: number;
+  addEventListener: (event: 'chargingchange' | 'levelchange', listener: () => void) => void;
+  removeEventListener: (event: 'chargingchange' | 'levelchange', listener: () => void) => void;
+};
 
 const EMPTY_DRIVE_PAYLOAD: DrivePayload = {
   agentInstalled: false,
@@ -265,6 +306,27 @@ const WORKFLOW_STEPS: Record<'media' | 'arr', string[]> = {
   media: ['Requests', 'Downloads', 'Library', 'Streaming'],
   arr: ['Indexer', 'Discovery', 'Download', 'Subtitle'],
 };
+
+const THEME_STORAGE_KEY = 'hmstx-theme';
+const LOW_POWER_STORAGE_KEY = 'hmstx-low-power';
+const ONBOARDING_STORAGE_KEY = 'hmstx-onboarded';
+const DEMO_BANNER_STORAGE_KEY = 'hmstx-demo-banner-dismissed';
+const COLLAPSE_STORAGE_KEY = 'hmstx-collapsed-sections';
+
+const COMMAND_DOCS = [
+  {
+    id: 'docs-readme',
+    label: 'Open project README',
+    subtitle: 'Docs',
+    value: 'https://github.com/Rushtu99/Home-Server-Termux/blob/main/README.md',
+  },
+  {
+    id: 'docs-media',
+    label: 'Open media stack status',
+    subtitle: 'Docs',
+    value: 'https://github.com/Rushtu99/Home-Server-Termux/blob/main/docs/media-stack-status.md',
+  },
+];
 
 const fmtBytes = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) {
@@ -308,6 +370,39 @@ const fmtDateTime = (iso?: string | null) => {
     month: 'short',
     day: 'numeric',
   });
+};
+
+const fmtDuration = (durationMs = 0) => {
+  const totalMinutes = Math.max(0, Math.floor(durationMs / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours <= 0) {
+    return `${minutes}m`;
+  }
+  return `${hours}h ${minutes}m`;
+};
+
+const storageTone = (usePercent: number) => {
+  if (usePercent >= 80) {
+    return THEME.crimsonRed;
+  }
+  if (usePercent >= 60) {
+    return THEME.brightYellow;
+  }
+  return THEME.accent;
+};
+
+const readCollapsedSections = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as Record<string, boolean> : {};
+  } catch {
+    return {};
+  }
 };
 
 const normalizeDrivePayload = (payload: Partial<DrivePayload> | null | undefined): DrivePayload => ({
@@ -394,6 +489,8 @@ export default function Dashboard() {
   const demoMode = isDemoMode();
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('desktop');
+  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
+  const [lowPowerMode, setLowPowerMode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -412,6 +509,7 @@ export default function Dashboard() {
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [ramHistory, setRamHistory] = useState<number[]>([]);
   const [lastUpdated, setLastUpdated] = useState('');
+  const [lastTelemetryAt, setLastTelemetryAt] = useState(0);
   const [controlStatus, setControlStatus] = useState('');
   const [controlBusy, setControlBusy] = useState<Record<string, boolean>>({});
   const [serviceControllerLocked, setServiceControllerLocked] = useState(true);
@@ -450,17 +548,32 @@ export default function Dashboard() {
   const [driveError, setDriveError] = useState('');
   const [showDriveLog, setShowDriveLog] = useState(false);
   const [dashboardShares, setDashboardShares] = useState<Array<{ id: number; name: string; pathKey: string; sourceType: string }>>([]);
+  const [alertMessage, setAlertMessage] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showDemoBanner, setShowDemoBanner] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all');
+  const [logSearch, setLogSearch] = useState('');
+  const [connectionBusyId, setConnectionBusyId] = useState<string | null>(null);
+  const [disconnectTarget, setDisconnectTarget] = useState<ConnectedUser | null>(null);
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
   const ftpMenuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const fetchInFlightRef = useRef(false);
+  const telemetryInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const tabSyncReadyRef = useRef(false);
+  const previousStatusesRef = useRef<Record<string, string>>({});
   const gatewayBase = useGatewayBase();
   const isCompact = layoutMode !== 'desktop';
   const isPhone = layoutMode === 'mobile';
   const isTablet = layoutMode === 'tablet';
+  const deferredCommandQuery = useDeferredValue(commandQuery);
+  const deferredLogSearch = useDeferredValue(logSearch);
 
   const clearSession = (message = '') => {
     if (typeof window !== 'undefined') {
@@ -585,6 +698,89 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const root = document.documentElement;
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const nextTheme = storedTheme === 'light' || storedTheme === 'contrast' || storedTheme === 'dark'
+      ? storedTheme
+      : 'dark';
+    const storedLowPower = window.localStorage.getItem(LOW_POWER_STORAGE_KEY) === 'true';
+    const dismissedDemoBanner = window.localStorage.getItem(DEMO_BANNER_STORAGE_KEY) === 'true';
+    const onboardingSeen = window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === 'true';
+    const params = new URLSearchParams(window.location.search);
+
+    root.dataset.theme = nextTheme;
+    setThemeMode(nextTheme);
+    setLowPowerMode(storedLowPower);
+    setCollapsedSections(readCollapsedSections());
+    setShowOnboarding(!onboardingSeen);
+    setShowDemoBanner(demoMode && params.get('demo') !== 'false' && !dismissedDemoBanner);
+
+    if ('serviceWorker' in navigator) {
+      void navigator.serviceWorker.register(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/service-worker.js`).catch(() => {});
+    }
+  }, [demoMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    document.documentElement.dataset.theme = themeMode;
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(LOW_POWER_STORAGE_KEY, String(lowPowerMode));
+    document.documentElement.dataset.lowPower = lowPowerMode ? 'true' : 'false';
+  }, [lowPowerMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(collapsedSections));
+  }, [collapsedSections]);
+
+  useEffect(() => {
+    const batteryNavigator = typeof navigator === 'undefined'
+      ? null
+      : navigator as Navigator & { getBattery?: () => Promise<BatteryManagerLike> };
+
+    if (!batteryNavigator || typeof batteryNavigator.getBattery !== 'function') {
+      return;
+    }
+
+    let cleanup = () => {};
+
+    batteryNavigator.getBattery().then((battery) => {
+      const updatePowerMode = () => {
+        if (battery.level < 0.2 && !battery.charging) {
+          setLowPowerMode(true);
+        }
+      };
+
+      updatePowerMode();
+      battery.addEventListener('levelchange', updatePowerMode);
+      battery.addEventListener('chargingchange', updatePowerMode);
+      cleanup = () => {
+        battery.removeEventListener('levelchange', updatePowerMode);
+        battery.removeEventListener('chargingchange', updatePowerMode);
+      };
+    }).catch(() => {});
+
+    return () => cleanup();
+  }, []);
+
+  useEffect(() => {
     if (!isAuthed || sessionUser?.role !== 'admin') {
       return;
     }
@@ -594,19 +790,32 @@ export default function Dashboard() {
         return;
       }
 
-      void fetchAll();
+      void fetchTelemetry();
     };
 
+    void fetchDashboard();
     refreshTelemetry();
 
-    const interval = window.setInterval(refreshTelemetry, activeTab === 'home' ? 2000 : 5000);
+    const telemetryInterval = window.setInterval(
+      refreshTelemetry,
+      lowPowerMode ? 25000 : activeTab === 'home' ? 5000 : 9000
+    );
+    const dashboardInterval = window.setInterval(
+      () => {
+        if (document.visibilityState === 'visible') {
+          void fetchDashboard();
+        }
+      },
+      lowPowerMode ? 90000 : 30000
+    );
     document.addEventListener('visibilitychange', refreshTelemetry);
 
     return () => {
-      window.clearInterval(interval);
+      window.clearInterval(telemetryInterval);
+      window.clearInterval(dashboardInterval);
       document.removeEventListener('visibilitychange', refreshTelemetry);
     };
-  }, [activeTab, isAuthed, sessionUser?.role]);
+  }, [activeTab, isAuthed, lowPowerMode, sessionUser?.role]);
 
   useEffect(() => {
     if (!tabSyncReadyRef.current) {
@@ -798,12 +1007,18 @@ export default function Dashboard() {
   }, [ftpPath]);
 
   useEffect(() => {
+    if (lowPowerMode) {
+      return;
+    }
     drawTrend(cpuCanvas.current, cpuHistory, THEME.accent, THEME.accentFill);
-  }, [cpuHistory]);
+  }, [cpuHistory, lowPowerMode]);
 
   useEffect(() => {
+    if (lowPowerMode) {
+      return;
+    }
     drawTrend(ramCanvas.current, ramHistory, THEME.brightYellow, 'rgba(255,228,77,0.14)');
-  }, [ramHistory]);
+  }, [lowPowerMode, ramHistory]);
 
   useEffect(() => {
     if (!isAuthed || activeTab !== 'filesystem') {
@@ -813,32 +1028,67 @@ export default function Dashboard() {
     void loadDriveConsole();
   }, [activeTab, isAuthed, sessionUser?.role]);
 
-  const applyDashboardPayload = (payload: DashboardPayload) => {
-    setServices(payload.services || {});
-    setServiceCatalog(Array.isArray(payload.serviceCatalog) ? payload.serviceCatalog : []);
-    setServiceGroups(payload.serviceGroups && typeof payload.serviceGroups === 'object' ? payload.serviceGroups : {});
-    if (Array.isArray(payload.serviceController?.optionalServices) && payload.serviceController?.optionalServices.length > 0) {
+  const syncStatusTransitions = (entries: ServiceCatalogEntry[]) => {
+    const previous = previousStatusesRef.current;
+    const next = { ...previous };
+
+    for (const entry of entries) {
+      const priorStatus = previous[entry.key];
+      next[entry.key] = entry.status;
+
+      if (priorStatus === 'working' && entry.status !== 'working') {
+        setAlertMessage(`${entry.label} needs attention`);
+      }
+    }
+
+    previousStatusesRef.current = next;
+  };
+
+  const applyTelemetryPayload = (payload: TelemetryPayload | DashboardPayload) => {
+    if (payload?.services && typeof payload.services === 'object') {
+      setServices(payload.services || {});
+    }
+
+    const nextCatalog = Array.isArray(payload.serviceCatalog) ? payload.serviceCatalog : [];
+    if (nextCatalog.length > 0) {
+      setServiceCatalog(nextCatalog);
+      syncStatusTransitions(nextCatalog);
+    }
+    if (payload.serviceGroups && typeof payload.serviceGroups === 'object') {
+      setServiceGroups(payload.serviceGroups);
+    }
+    if (Array.isArray(payload.serviceController?.optionalServices)) {
       setOptionalServices(payload.serviceController.optionalServices);
     }
     if (typeof payload.serviceController?.locked === 'boolean') {
       setServiceControllerLocked(payload.serviceController.locked);
     }
-    setMonitor(payload.monitor || null);
-    setConnections(Array.isArray(payload.connections?.users) ? payload.connections.users : []);
-    setStorage(Array.isArray(payload.storage?.mounts) ? payload.storage.mounts : []);
-    setDebugLogs(Array.isArray(payload.logs?.logs) ? payload.logs.logs : []);
-    setLogsMarkdown(typeof payload.logs?.markdown === 'string' ? payload.logs.markdown : '');
-    setVerboseLogging(Boolean(payload.logs?.verboseLoggingEnabled));
-
     if (payload.monitor) {
+      setMonitor(payload.monitor || null);
       const ramPercent = payload.monitor.totalMem > 0 ? (payload.monitor.usedMem / payload.monitor.totalMem) * 100 : 0;
       setCpuHistory((prev) => [...prev.slice(-39), payload.monitor.cpuLoad]);
       setRamHistory((prev) => [...prev.slice(-39), ramPercent]);
     }
 
+    const nextLogs = Array.isArray(payload.logs?.entries)
+      ? payload.logs.entries
+      : Array.isArray(payload.logs?.logs)
+        ? payload.logs.logs
+        : [];
+    setDebugLogs(nextLogs);
+    setLogsMarkdown(typeof payload.logs?.markdown === 'string' ? payload.logs.markdown : '');
+    setVerboseLogging(Boolean(payload.logs?.verboseLoggingEnabled));
+    setLastTelemetryAt(Date.now());
+
     if (payload.generatedAt) {
       setLastUpdated(new Date(payload.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     }
+  };
+
+  const applyDashboardPayload = (payload: DashboardPayload) => {
+    applyTelemetryPayload(payload);
+    setConnections(Array.isArray(payload.connections?.users) ? payload.connections.users : []);
+    setStorage(Array.isArray(payload.storage?.mounts) ? payload.storage.mounts : []);
   };
 
   const syncServiceControllerState = async () => {
@@ -871,7 +1121,7 @@ export default function Dashboard() {
     }
   };
 
-  const fetchAll = async () => {
+  const fetchDashboard = async () => {
     if (sessionUser?.role !== 'admin') {
       return;
     }
@@ -903,14 +1153,49 @@ export default function Dashboard() {
           applyDashboardPayload(payload as DashboardPayload);
         });
       }
-
-      await syncServiceControllerState();
     } catch (err) {
       if (mountedRef.current) {
         setControlStatus(`Telemetry fetch error: ${String(err)}`);
       }
     } finally {
       fetchInFlightRef.current = false;
+    }
+  };
+
+  const fetchTelemetry = async () => {
+    if (sessionUser?.role !== 'admin') {
+      return;
+    }
+    if (telemetryInFlightRef.current) {
+      return;
+    }
+
+    telemetryInFlightRef.current = true;
+    try {
+      const res = await authFetch(`${API}/telemetry`);
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!res.ok) {
+        setControlStatus('Unable to refresh live telemetry');
+        return;
+      }
+
+      const payload = await res.json().catch(() => null);
+      if (payload) {
+        startTransition(() => {
+          applyTelemetryPayload(payload as TelemetryPayload);
+        });
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setControlStatus(`Telemetry fetch error: ${String(err)}`);
+      }
+    } finally {
+      telemetryInFlightRef.current = false;
     }
   };
 
@@ -1018,6 +1303,92 @@ export default function Dashboard() {
     }
   };
 
+  const toggleTheme = () => {
+    setThemeMode((current) => current === 'dark' ? 'light' : current === 'light' ? 'contrast' : 'dark');
+  };
+
+  const dismissOnboarding = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true');
+    }
+    setShowOnboarding(false);
+  };
+
+  const dismissDemoBanner = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(DEMO_BANNER_STORAGE_KEY, 'true');
+    }
+    setShowDemoBanner(false);
+  };
+
+  const toggleSection = (sectionId: string) => {
+    setCollapsedSections((current) => ({
+      ...current,
+      [sectionId]: !current[sectionId],
+    }));
+  };
+
+  const exportLogs = () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const filtered = debugLogs.filter((entry) => {
+      const matchesLevel = logFilter === 'all' || entry.level === logFilter;
+      const haystack = `${entry.message} ${entry.meta ? JSON.stringify(entry.meta) : ''}`.toLowerCase();
+      const matchesQuery = !deferredLogSearch.trim() || haystack.includes(deferredLogSearch.trim().toLowerCase());
+      return matchesLevel && matchesQuery;
+    });
+    const blob = new Blob(
+      [
+        filtered.map((entry) => {
+          const meta = entry.meta ? ` ${JSON.stringify(entry.meta)}` : '';
+          return `[${entry.timestamp}] ${String(entry.level).toUpperCase()} ${entry.message}${meta}`;
+        }).join('\n'),
+      ],
+      { type: 'text/plain;charset=utf-8' }
+    );
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `hmstx-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const disconnectConnection = async (user: ConnectedUser) => {
+    if (!user.sessionId) {
+      setDisconnectTarget(null);
+      return;
+    }
+
+    setConnectionBusyId(user.sessionId);
+    try {
+      const res = await authFetch(`${API}/connections/${user.sessionId}/disconnect`, {
+        method: 'POST',
+      });
+      const payload = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      if (!res.ok) {
+        setUserStatus(String(payload?.error || 'Unable to disconnect session'));
+        return;
+      }
+
+      setConnections((current) => current.filter((entry) => entry.sessionId !== user.sessionId));
+      setUserStatus(`Disconnected ${payload?.username || user.username}`);
+    } catch {
+      setUserStatus('Unable to disconnect session');
+    } finally {
+      setConnectionBusyId(null);
+      setDisconnectTarget(null);
+    }
+  };
+
   const statusToneStyle = (status: string): CSSProperties => {
     if (status === 'working') {
       return styles.serviceStatusOk;
@@ -1044,9 +1415,13 @@ export default function Dashboard() {
     const isRunning = entry.status === 'working';
     const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
     const restartBusy = Boolean(controlBusy[`${entry.key}:restart`]);
+    const statsLine = entry.uptimePct != null || entry.avgLatencyMs != null
+      ? `${entry.uptimePct != null ? `${entry.uptimePct.toFixed(1)}% uptime` : 'No uptime history'} · ${entry.avgLatencyMs != null ? `${entry.avgLatencyMs}ms avg` : 'No latency'}`
+      : 'Waiting for service history';
+    const tooltip = `${entry.label}\n${entry.statusReason || statusLabel}${entry.lastCheckedAt ? `\nLast checked: ${fmtDateTime(entry.lastCheckedAt)}` : ''}${entry.lastTransitionAt ? `\nLast transition: ${fmtDateTime(entry.lastTransitionAt)}` : ''}`;
 
     return (
-      <article key={entry.key} style={styles.serviceCard}>
+      <article key={entry.key} style={styles.serviceCard} title={tooltip}>
         <div style={styles.serviceCardHead}>
           <div>
             <h3 style={styles.serviceCardTitle}>{entry.label}</h3>
@@ -1057,6 +1432,8 @@ export default function Dashboard() {
         <p style={styles.serviceCardMeta}>
           {SERVICE_GROUP_LABELS[entry.group]} · {entry.controlMode === 'optional' ? 'Optional service' : 'Core service'}
         </p>
+        <p style={styles.serviceCardStats}>{statsLine}</p>
+        {entry.statusReason ? <p style={styles.serviceCardReason}>{entry.statusReason}</p> : null}
         {entry.blocker ? <p style={{ ...styles.smallLabel, color: entry.status === 'unavailable' ? THEME.brightYellow : THEME.muted }}>{entry.blocker}</p> : null}
         <div style={styles.serviceCardActions}>
           {linkHref ? (
@@ -1067,11 +1444,11 @@ export default function Dashboard() {
           {canOperate && entry.controlMode === 'always_on' ? (
             <>
               {!isRunning ? (
-                <button className="ui-button" style={styles.actionBtn} type="button" disabled={startBusy} onClick={() => void executeControl(entry.key, 'start')}>
+                <button className="ui-button" style={styles.actionBtn} type="button" disabled={startBusy} aria-label={`Start ${entry.label}`} onClick={() => void executeControl(entry.key, 'start')}>
                   {startBusy ? 'Starting…' : 'Start'}
                 </button>
               ) : null}
-              <button className="ui-button" style={styles.actionBtn} type="button" disabled={restartBusy} onClick={() => void executeControl(entry.key, 'restart')}>
+              <button className="ui-button" style={styles.actionBtn} type="button" disabled={restartBusy} aria-label={`Restart ${entry.label}`} onClick={() => void executeControl(entry.key, 'restart')}>
                 {restartBusy ? 'Restarting…' : 'Restart'}
               </button>
             </>
@@ -1143,6 +1520,138 @@ export default function Dashboard() {
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
   const mountedFtpFavourites = ftpFavourites.filter((favourite) => favourite.mount?.mounted).length;
   const terminalService = serviceCatalogByKey.get('ttyd') || null;
+  const telemetryStale = lastTelemetryAt > 0 && Date.now() - lastTelemetryAt > (lowPowerMode ? 60000 : 20000);
+  const filteredLogs = debugLogs.filter((entry) => {
+    const matchesLevel = logFilter === 'all' || entry.level === logFilter;
+    const haystack = `${entry.message} ${entry.meta ? JSON.stringify(entry.meta) : ''}`.toLowerCase();
+    const matchesQuery = !deferredLogSearch.trim() || haystack.includes(deferredLogSearch.trim().toLowerCase());
+    return matchesLevel && matchesQuery;
+  });
+  const paletteItems = [
+    ...serviceCatalog.map((entry) => ({
+      id: `service:${entry.key}`,
+      kind: 'service' as const,
+      label: entry.label,
+      subtitle: SERVICE_GROUP_LABELS[entry.group],
+      run: () => {
+        if (entry.surface === 'media' || entry.surface === 'arr' || entry.surface === 'terminal' || entry.surface === 'ftp') {
+          setActiveTab(entry.surface);
+        } else {
+          setActiveTab('home');
+        }
+        setCommandPaletteOpen(false);
+      },
+    })),
+    {
+      id: 'action:theme',
+      kind: 'action' as const,
+      label: 'Toggle theme',
+      subtitle: 'Action',
+      run: () => {
+        toggleTheme();
+        setCommandPaletteOpen(false);
+      },
+    },
+    {
+      id: 'action:telemetry',
+      kind: 'action' as const,
+      label: 'Refresh telemetry',
+      subtitle: 'Action',
+      run: () => {
+        void fetchTelemetry();
+        setCommandPaletteOpen(false);
+      },
+    },
+    {
+      id: 'action:logs',
+      kind: 'action' as const,
+      label: 'Download filtered logs',
+      subtitle: 'Action',
+      run: () => {
+        exportLogs();
+        setCommandPaletteOpen(false);
+      },
+    },
+    ...COMMAND_DOCS.map((item) => ({
+      id: item.id,
+      kind: 'docs' as const,
+      label: item.label,
+      subtitle: item.subtitle,
+      run: () => {
+        if (typeof window !== 'undefined') {
+          window.open(item.value, '_blank', 'noreferrer');
+        }
+        setCommandPaletteOpen(false);
+      },
+    })),
+  ].filter((item) => {
+    const query = deferredCommandQuery.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    if (query.startsWith('>') && item.kind !== 'action') {
+      return false;
+    }
+    if (query.startsWith('/') && item.kind !== 'docs') {
+      return false;
+    }
+    const cleanQuery = query.replace(/^[>/]\s*/, '');
+    return `${item.label} ${item.subtitle}`.toLowerCase().includes(cleanQuery);
+  });
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+
+      if (!commandPaletteOpen) {
+        if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && isPhone) {
+          event.preventDefault();
+          const currentIndex = TABS.findIndex((entry) => entry.key === activeTab);
+          const nextIndex = event.key === 'ArrowRight'
+            ? (currentIndex + 1) % TABS.length
+            : (currentIndex - 1 + TABS.length) % TABS.length;
+          setActiveTab(TABS[nextIndex].key);
+        }
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setCommandPaletteOpen(false);
+        return;
+      }
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setPaletteIndex((current) => Math.min(current + 1, Math.max(0, paletteItems.length - 1)));
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setPaletteIndex((current) => Math.max(current - 1, 0));
+      }
+
+      if (event.key === 'Enter') {
+        const current = paletteItems[paletteIndex];
+        if (current) {
+          event.preventDefault();
+          current.run();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeTab, commandPaletteOpen, isPhone, paletteIndex, paletteItems]);
+
+  useEffect(() => {
+    if (paletteIndex >= paletteItems.length) {
+      setPaletteIndex(0);
+    }
+  }, [paletteIndex, paletteItems.length]);
 
   const navButtonLabel = (tab: TabKey) => {
     if (!isTablet) {
@@ -1198,7 +1707,7 @@ export default function Dashboard() {
       setUsername('');
       setPassword('');
       setControlStatus('');
-      void fetchAll();
+      void fetchDashboard();
     } catch {
       setAuthError('Unable to reach auth service');
     } finally {
@@ -1227,7 +1736,7 @@ export default function Dashboard() {
       }
 
       setVerboseLogging(enabled);
-      void fetchAll();
+      void fetchTelemetry();
     } catch {
       setControlStatus('Unable to update logging mode');
     }
@@ -1694,7 +2203,27 @@ export default function Dashboard() {
   };
 
   if (!authChecked) {
-    return <div style={styles.loading} role="status" aria-live="polite">Loading…</div>;
+    return (
+      <div style={styles.loading} role="status" aria-live="polite">
+        <div style={styles.skeletonShell}>
+          <div style={styles.skeletonHeader} />
+          <div style={styles.skeletonGrid}>
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div key={`metric-${index}`} style={styles.skeletonCard} />
+            ))}
+          </div>
+          <div style={styles.skeletonSplit}>
+            <div style={{ ...styles.skeletonCard, minHeight: 220 }} />
+            <div style={{ ...styles.skeletonCard, minHeight: 220 }} />
+          </div>
+          <div style={styles.skeletonGrid}>
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={`service-${index}`} style={{ ...styles.skeletonCard, minHeight: 96 }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!isAuthed) {
@@ -1769,6 +2298,50 @@ export default function Dashboard() {
       )}
 
       <main id="app-main" style={{ ...styles.main, ...(isTablet ? styles.mainTablet : {}), ...(isPhone ? styles.mainPhone : {}) }}>
+        <div style={styles.utilityBar}>
+          <div style={styles.utilityMeta}>
+            <span style={styles.headerPill}>{themeMode}</span>
+            <span style={styles.headerPill}>{lowPowerMode ? 'Low-power on' : 'Live polling'}</span>
+            <span style={{ ...styles.headerPill, ...(telemetryStale ? styles.headerPillWarn : {}) }}>
+              {telemetryStale ? 'Telemetry stale' : 'Telemetry live'}
+            </span>
+          </div>
+          <div style={styles.utilityActions}>
+            <button className="ui-button" type="button" style={styles.actionBtn} onClick={toggleTheme} aria-label="Toggle theme">
+              Theme
+            </button>
+            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setLowPowerMode((current) => !current)} aria-label="Toggle low power mode">
+              {lowPowerMode ? 'Normal' : 'Low-Power'}
+            </button>
+            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setCommandPaletteOpen(true)} aria-label="Open command palette">
+              Search
+            </button>
+            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setShowOnboarding(true)} aria-label="Open onboarding help">
+              Help
+            </button>
+          </div>
+        </div>
+
+        {showDemoBanner ? (
+          <div style={styles.bannerWarn} role="status" aria-live="polite">
+            <div>
+              <strong>Demo mode active.</strong> Service controls, telemetry, and file actions are simulated for the Pages preview.
+            </div>
+            <button className="ui-button" type="button" style={styles.actionBtn} onClick={dismissDemoBanner}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {alertMessage ? (
+          <div style={styles.bannerAlert} role="alert" aria-live="assertive">
+            <div>{alertMessage}</div>
+            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setAlertMessage('')}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
         {activeTab === 'home' && (
           <div>
             <div style={styles.headerBar}>
@@ -1779,6 +2352,7 @@ export default function Dashboard() {
                 <span style={styles.headerPill}>{lastUpdated ? `Updated ${lastUpdated}` : 'Waiting for telemetry'}</span>
                 <span style={styles.headerPill}>{runningServices}/{totalServices} services</span>
                 <span style={styles.headerPill}>{connections.length} clients</span>
+                {monitor?.device?.batteryPct != null ? <span style={styles.headerPill}>Battery {monitor.device.batteryPct}%{monitor.device.charging ? ' charging' : ''}</span> : null}
               </div>
             </div>
 
@@ -1795,6 +2369,9 @@ export default function Dashboard() {
                     <div style={styles.keyValueRow}><span style={styles.keyLabel}>Event loop</span><strong>{monitor ? `${monitor.eventLoopP95Ms.toFixed(2)}ms p95` : '--'}</strong></div>
                     <div style={styles.keyValueRow}><span style={styles.keyLabel}>Node RSS</span><strong>{monitor ? fmtBytes(monitor.processRss) : '--'}</strong></div>
                     <div style={styles.keyValueRow}><span style={styles.keyLabel}>Network</span><strong>{monitor ? `↓ ${fmtRate(monitor.network.rxRate)} · ↑ ${fmtRate(monitor.network.txRate)}` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Wi-Fi</span><strong>{monitor?.device?.wifiDbm != null ? `${monitor.device.wifiDbm} dBm` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Battery</span><strong>{monitor?.device?.batteryPct != null ? `${monitor.device.batteryPct}%${monitor.device.charging ? ' ⚡' : ''}` : '--'}</strong></div>
+                    <div style={styles.keyValueRow}><span style={styles.keyLabel}>Android</span><strong>{monitor?.device?.androidVersion || '--'}</strong></div>
                   </div>
 
                   <div style={styles.trendStack}>
@@ -1811,7 +2388,7 @@ export default function Dashboard() {
 
                 <article style={styles.card}>
                   <h3 style={styles.cardTitle}>Storage</h3>
-                  <Progress label="Storage free" value={Math.max(0, 100 - usedStoragePct)} />
+                  <Progress label="Storage used" value={usedStoragePct} />
                   <div style={styles.mountList}>
                     {storage.slice(0, 6).map((mount) => (
                       <div key={`${mount.filesystem}-${mount.mount}`} style={styles.mountRow}>
@@ -1820,7 +2397,7 @@ export default function Dashboard() {
                           <p style={styles.mountMeta}>{mount.filesystem} {mount.fsType ? `(${mount.fsType})` : ''} {mount.category ? `- ${mount.category}` : ''}</p>
                         </div>
                         <div style={styles.mountRight}>
-                          <span>{mount.usePercent}%</span>
+                          <span style={{ color: storageTone(mount.usePercent) }}>{mount.usePercent}%</span>
                           <span style={styles.mountMeta}>{fmtBytes(mount.used)} / {fmtBytes(mount.size)}</span>
                         </div>
                       </div>
@@ -1840,10 +2417,12 @@ export default function Dashboard() {
                     {homeGroups.map(({ group, items }) => (
                       <section key={group} style={styles.serviceGroupSection}>
                         <div style={styles.serviceGroupHeader}>
-                          <h4 style={styles.serviceGroupTitle}>{SERVICE_GROUP_LABELS[group]}</h4>
+                          <button className="ui-button" style={styles.groupToggle} type="button" onClick={() => toggleSection(`home:${group}`)}>
+                            {SERVICE_GROUP_LABELS[group]}
+                          </button>
                           <span style={styles.smallLabel}>{items.length} services</span>
                         </div>
-                        <div style={styles.serviceCardGrid}>
+                        <div style={{ ...styles.serviceCardGrid, ...(collapsedSections[`home:${group}`] ? styles.collapsedSection : {}) }}>
                           {items.map((entry) => renderServiceCard(entry))}
                         </div>
                       </section>
@@ -1916,13 +2495,15 @@ export default function Dashboard() {
                           <th style={styles.th}>Username</th>
                           <th style={styles.th}>IP</th>
                           <th style={styles.th}>Protocol</th>
+                          <th style={styles.th}>Duration</th>
                           <th style={styles.th}>Last Seen</th>
+                          <th style={styles.th}>Action</th>
                         </tr>
                       </thead>
                       <tbody>
                         {connections.length === 0 && (
                           <tr>
-                            <td style={styles.td} colSpan={4}>No active users</td>
+                            <td style={styles.td} colSpan={6}>No active users</td>
                           </tr>
                         )}
                         {connections.map((user, idx) => (
@@ -1930,7 +2511,23 @@ export default function Dashboard() {
                             <td style={styles.td}>{user.username}</td>
                             <td style={styles.td}>{user.ip}</td>
                             <td style={styles.td}>{user.protocol}</td>
+                            <td style={styles.td}>{fmtDuration(user.durationMs)}</td>
                             <td style={styles.td}>{fmtTime(user.lastSeen)}</td>
+                            <td style={styles.td}>
+                              {user.sessionId ? (
+                                <button
+                                  className="ui-button"
+                                  style={styles.actionBtn}
+                                  type="button"
+                                  disabled={connectionBusyId === user.sessionId}
+                                  onClick={() => setDisconnectTarget(user)}
+                                >
+                                  {connectionBusyId === user.sessionId ? 'Disconnecting…' : 'Disconnect'}
+                                </button>
+                              ) : (
+                                <span style={styles.smallLabel}>—</span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1941,13 +2538,38 @@ export default function Dashboard() {
                 <article style={styles.card}>
                   <div style={styles.logControlRow}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Debug Log</h3>
-                    <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
-                      {verboseLogging ? 'Disable Verbose' : 'Enable Verbose'}
-                    </button>
+                    <div style={styles.actionWrap}>
+                      <button className="ui-button" style={styles.linkBtn} type="button" onClick={() => toggleVerboseLogging(!verboseLogging)}>
+                        {verboseLogging ? 'Disable Verbose' : 'Enable Verbose'}
+                      </button>
+                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={exportLogs}>
+                        Download
+                      </button>
+                    </div>
+                  </div>
+                  <div style={styles.logFilters}>
+                    <input
+                      className="ui-input"
+                      type="search"
+                      placeholder="Filter logs"
+                      value={logSearch}
+                      onChange={(event) => setLogSearch(event.target.value)}
+                    />
+                    {(['all', 'info', 'warn', 'error'] as const).map((level) => (
+                      <button
+                        key={level}
+                        className="ui-button"
+                        type="button"
+                        style={{ ...styles.actionBtn, ...(logFilter === level ? styles.navBtnActive : {}) }}
+                        onClick={() => setLogFilter(level)}
+                      >
+                        {level.toUpperCase()}
+                      </button>
+                    ))}
                   </div>
                   <div style={styles.logBoxCompact}>
-                    {debugLogs.length === 0 && <p style={styles.smallLabel}>No debug events yet.</p>}
-                    {debugLogs.slice(0, 20).map((log, idx) => (
+                    {filteredLogs.length === 0 && <p style={styles.smallLabel}>No debug events yet.</p>}
+                    {filteredLogs.slice(0, 60).map((log, idx) => (
                       <p key={`${log.timestamp}-${idx}`} style={styles.logLine}>
                         <span style={styles.logTime}>{fmtTime(log.timestamp)}</span>
                         <span style={{ ...styles.logLevel, color: log.level === 'error' ? THEME.crimsonRed : log.level === 'warn' ? THEME.brightYellow : THEME.accent }}>
@@ -2108,8 +2730,11 @@ export default function Dashboard() {
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Media Services</h3>
                     <p style={styles.smallLabel}>Streaming, downloads, and requests stay grouped here so the stack reads like one workflow.</p>
                   </div>
+                  <button className="ui-button" style={styles.groupToggle} type="button" onClick={() => toggleSection('media:stack')}>
+                    {collapsedSections['media:stack'] ? 'Expand' : 'Collapse'}
+                  </button>
                 </div>
-                <div style={styles.serviceCardGrid}>
+                <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['media:stack'] ? styles.collapsedSection : {}) }}>
                   {mediaServices.map((entry) => renderServiceCard(entry))}
                 </div>
               </article>
@@ -2141,8 +2766,11 @@ export default function Dashboard() {
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>ARR Services</h3>
                     <p style={styles.smallLabel}>These services are expected to stay up. Restart them here without putting them in the generic controller.</p>
                   </div>
+                  <button className="ui-button" style={styles.groupToggle} type="button" onClick={() => toggleSection('arr:stack')}>
+                    {collapsedSections['arr:stack'] ? 'Expand' : 'Collapse'}
+                  </button>
                 </div>
-                <div style={styles.serviceCardGrid}>
+                <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['arr:stack'] ? styles.collapsedSection : {}) }}>
                   {arrServices.map((entry) => renderServiceCard(entry))}
                 </div>
               </article>
@@ -2464,6 +3092,10 @@ export default function Dashboard() {
                 <h3 style={styles.cardTitle}>Session</h3>
                 <p style={styles.smallLabel}>Session access is cookie-based and invalidates on logout or timeout.</p>
                 <div style={styles.actionWrap}>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={toggleTheme}>Cycle Theme</button>
+                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setLowPowerMode((current) => !current)}>
+                    {lowPowerMode ? 'Disable Low-Power' : 'Enable Low-Power'}
+                  </button>
                   <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
                 </div>
               </div>
@@ -2615,6 +3247,92 @@ export default function Dashboard() {
           ))}
         </nav>
       )}
+
+      {commandPaletteOpen && (
+        <div style={styles.modalOverlay} onClick={() => setCommandPaletteOpen(false)}>
+          <div style={{ ...styles.modalCard, maxWidth: 640 }} onClick={(event) => event.stopPropagation()}>
+            <div style={styles.sectionHeader}>
+              <div>
+                <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Command Palette</h3>
+                <p style={styles.smallLabel}>Search services, actions, and docs. Use <code>Ctrl/Cmd+K</code>, <code>&gt;</code>, or <code>/</code>.</p>
+              </div>
+              <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setCommandPaletteOpen(false)}>
+                Close
+              </button>
+            </div>
+            <input
+              autoFocus
+              className="ui-input"
+              type="search"
+              placeholder="Search services, actions, and docs"
+              value={commandQuery}
+              onChange={(event) => setCommandQuery(event.target.value)}
+            />
+            <div style={styles.paletteList}>
+              {paletteItems.length === 0 ? (
+                <p style={styles.smallLabel}>No matches.</p>
+              ) : paletteItems.map((item, index) => (
+                <button
+                  key={item.id}
+                  className="ui-button"
+                  type="button"
+                  style={{ ...styles.paletteItem, ...(paletteIndex === index ? styles.paletteItemActive : {}) }}
+                  onClick={item.run}
+                >
+                  <span>{item.label}</span>
+                  <span style={styles.smallLabel}>{item.subtitle}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOnboarding && (
+        <div style={styles.modalOverlay} onClick={dismissOnboarding}>
+          <div style={styles.modalCard} onClick={(event) => event.stopPropagation()}>
+            <h3 style={styles.cardTitle}>Welcome to HmSTx</h3>
+            <div style={styles.surfaceStack}>
+              <div style={styles.quickLink}>
+                <strong>Monitor the host</strong>
+                <span>Track CPU, memory, storage, and Android-side device health from one screen.</span>
+              </div>
+              <div style={styles.quickLink}>
+                <strong>Operate optional services</strong>
+                <span>Unlock the controller once per session, then start, stop, or restart optional services safely.</span>
+              </div>
+              <div style={styles.quickLink}>
+                <strong>Search quickly</strong>
+                <span>Use Ctrl/Cmd+K to jump to services, run actions, and open docs without hunting through tabs.</span>
+              </div>
+            </div>
+            <div style={{ ...styles.actionWrap, marginTop: 16 }}>
+              <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={dismissOnboarding}>
+                Get Started
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {disconnectTarget && (
+        <div style={styles.modalOverlay} onClick={() => setDisconnectTarget(null)}>
+          <div style={styles.modalCard} onClick={(event) => event.stopPropagation()}>
+            <h3 style={styles.cardTitle}>Disconnect session</h3>
+            <p style={styles.smallLabel}>
+              Disconnect {disconnectTarget.username} at {disconnectTarget.ip} from the dashboard session list?
+            </p>
+            <div style={styles.actionWrap}>
+              <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setDisconnectTarget(null)}>
+                Cancel
+              </button>
+              <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={() => void disconnectConnection(disconnectTarget)}>
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2672,6 +3390,7 @@ function TextField({
 
 function Progress({ label, value }: { label: string; value: number }) {
   const safeValue = Math.max(0, Math.min(value, 100));
+  const fill = safeValue >= 85 ? THEME.crimsonRed : safeValue >= 70 ? THEME.brightYellow : THEME.accent;
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={styles.progressLabel}>
@@ -2679,7 +3398,7 @@ function Progress({ label, value }: { label: string; value: number }) {
         <span>{safeValue.toFixed(0)}%</span>
       </div>
       <div style={styles.progressTrack}>
-        <div style={{ ...styles.progressFill, width: `${safeValue}%` }} />
+        <div style={{ ...styles.progressFill, background: fill, width: `${safeValue}%` }} />
       </div>
     </div>
   );
@@ -2787,7 +3506,7 @@ function drawTrend(canvas: HTMLCanvasElement | null, data: number[], stroke: str
   const max = 100;
 
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = fill;
+  ctx.fillStyle = '#121519';
   ctx.fillRect(0, 0, w, h);
 
   ctx.strokeStyle = 'rgba(255,255,255,0.12)';
@@ -2799,6 +3518,20 @@ function drawTrend(canvas: HTMLCanvasElement | null, data: number[], stroke: str
     ctx.lineTo(w, y);
     ctx.stroke();
   }
+
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = 'rgba(184,139,69,0.45)';
+  ctx.beginPath();
+  ctx.moveTo(0, h - (70 / max) * (h - 12) - 6);
+  ctx.lineTo(w, h - (70 / max) * (h - 12) - 6);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.38)';
+  ctx.font = '11px var(--font-geist-mono), monospace';
+  ctx.fillText('100%', 8, 14);
+  ctx.fillText('50%', 8, h / 2);
+  ctx.fillText('0%', 8, h - 8);
 
   ctx.strokeStyle = stroke;
   ctx.lineWidth = 2;
@@ -2815,6 +3548,14 @@ function drawTrend(canvas: HTMLCanvasElement | null, data: number[], stroke: str
   });
 
   ctx.stroke();
+
+  ctx.fillStyle = fill;
+  ctx.globalAlpha = 0.28;
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
 
   ctx.fillStyle = stroke;
   data.forEach((val, i) => {
@@ -2837,6 +3578,36 @@ const styles: Record<string, CSSProperties> = {
     placeItems: 'center',
     background: THEME.bg,
     color: THEME.text,
+    padding: 24,
+  },
+  skeletonShell: {
+    width: 'min(1120px, 100%)',
+    display: 'grid',
+    gap: 16,
+  },
+  skeletonHeader: {
+    height: 44,
+    borderRadius: 10,
+    border: `1px solid ${THEME.border}`,
+    background: THEME.panel,
+    animation: 'hmstx-pulse 1.4s ease-in-out infinite',
+  },
+  skeletonGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: 16,
+  },
+  skeletonSplit: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 16,
+  },
+  skeletonCard: {
+    minHeight: 88,
+    borderRadius: 10,
+    border: `1px solid ${THEME.border}`,
+    background: THEME.panel,
+    animation: 'hmstx-pulse 1.4s ease-in-out infinite',
   },
   loginShell: {
     minHeight: '100dvh',
@@ -2938,6 +3709,24 @@ const styles: Record<string, CSSProperties> = {
   main: { flex: 1, minHeight: 0, padding: 24, overflowY: 'auto' },
   mainTablet: { padding: 18 },
   mainPhone: { padding: 16, overflowY: 'visible' },
+  utilityBar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  utilityMeta: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  utilityActions: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   title: { margin: '0 0 4px', fontSize: 24, fontWeight: 700, color: THEME.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   panelSubtitle: { margin: '0 0 16px', color: THEME.muted, fontSize: 12, maxWidth: 680, overflowWrap: 'anywhere' },
   pageHeader: {
@@ -2985,6 +3774,34 @@ const styles: Record<string, CSSProperties> = {
     color: THEME.muted,
     fontSize: 12,
     padding: '6px 10px',
+  },
+  headerPillWarn: {
+    color: THEME.brightYellow,
+    borderColor: 'rgba(184, 139, 69, 0.32)',
+  },
+  bannerWarn: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    padding: '10px 12px',
+    border: `1px solid rgba(184, 139, 69, 0.32)`,
+    borderRadius: 10,
+    background: 'rgba(184, 139, 69, 0.12)',
+    color: THEME.text,
+  },
+  bannerAlert: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    padding: '10px 12px',
+    border: `1px solid rgba(196, 91, 91, 0.32)`,
+    borderRadius: 10,
+    background: 'rgba(196, 91, 91, 0.12)',
+    color: THEME.text,
   },
   homeLayout: {
     display: 'flex',
@@ -3138,10 +3955,17 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     color: THEME.text,
   },
+  groupToggle: {
+    padding: '8px 10px',
+    fontSize: 12,
+  },
   serviceCardGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
     gap: 12,
+  },
+  collapsedSection: {
+    display: 'none',
   },
   serviceCard: {
     display: 'grid',
@@ -3173,6 +3997,18 @@ const styles: Record<string, CSSProperties> = {
     margin: 0,
     color: THEME.muted,
     fontSize: 12,
+  },
+  serviceCardStats: {
+    margin: 0,
+    color: THEME.text,
+    fontSize: 12,
+    fontFamily: 'var(--font-geist-mono), monospace',
+  },
+  serviceCardReason: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 12,
+    lineHeight: 1.45,
   },
   serviceCardActions: {
     display: 'flex',
@@ -3250,6 +4086,12 @@ const styles: Record<string, CSSProperties> = {
   mountRight: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 },
   mountMeta: { margin: 0, fontSize: 12, color: THEME.muted, overflowWrap: 'anywhere' },
   logControlRow: { marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  logFilters: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 10,
+  },
   logBoxCompact: {
     maxHeight: 220,
     overflow: 'auto',
@@ -3503,5 +4345,21 @@ const styles: Record<string, CSSProperties> = {
     border: `1px solid ${THEME.border}`,
     borderRadius: 10,
     padding: 16,
+  },
+  paletteList: {
+    display: 'grid',
+    gap: 8,
+    marginTop: 12,
+    maxHeight: 360,
+    overflowY: 'auto',
+  },
+  paletteItem: {
+    justifyContent: 'space-between',
+    width: '100%',
+    padding: '10px 12px',
+  },
+  paletteItemActive: {
+    background: THEME.panelRaised,
+    borderColor: THEME.accent,
   },
 };

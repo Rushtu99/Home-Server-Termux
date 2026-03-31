@@ -1,187 +1,282 @@
-# Home-Server-Termux
+# HmSTx
 
-Termux-first home server stack for Android, with optional Linux/WSL contributor tooling.
+HmSTx is a Termux-first home server dashboard and operations layer built for an Android-hosted NAS. It is designed for a Pixel-class phone acting as a loopback-bound server, fronted by nginx, and controlled through a production Next.js dashboard that also exports a dummy-data demo build for GitHub Pages.
 
-## Stack
-- Frontend: Next.js dashboard in `dashboard/`
-- Backend: Express API in `server/`
-- Reverse proxy: nginx in `nginx.conf`
-- Services: FileBrowser, ttyd, sshd, optional local FTP server, remote FTP client tab
+The project is opinionated:
+- nginx on `:8088` is the intended public entrypoint
+- dashboard and API stay loopback-bound
+- always-on services are grouped by stack instead of exposed as generic toggles
+- optional services remain lock-gated behind an admin action password
+- the GitHub Pages demo uses the same frontend shell as production and swaps only the data layer
 
-## Runtime Ports
-- `8088` nginx gateway, intended as the only network-exposed entrypoint
-- `3000` dashboard frontend, bound to loopback
-- `4000` backend API, bound to loopback
-- `8080` FileBrowser, bound to loopback
-- `7681` ttyd, bound to loopback
-- `8022` sshd, disabled by default in single-port mode
-- `2121` optional local FTP server, bound to loopback when enabled
+## What HmSTx Does
 
-## Quick Start (Termux)
+HmSTx combines several roles into one operational surface:
+- server dashboard for health, storage, sessions, logs, and service control
+- media stack control plane for Jellyfin, qBittorrent, Sonarr, Radarr, Prowlarr, Redis, and PostgreSQL
+- filesystem and drive console for Android shared storage, removable media, and share shortcuts
+- FTP client workspace for saved remotes, browse/pull/upload flows, and root-helper mounts
+- terminal and admin settings surface for session, logging, and account management
+
+The current frontend is tab-driven:
+- `Home`
+- `Media`
+- `ARR`
+- `Terminal`
+- `Filesystem`
+- `FTP`
+- `Settings`
+
+## Architecture
+
+### Runtime
+- Frontend: Next.js app in `dashboard/`
+- Backend: Express API in `server/index.js`
+- Reverse proxy: `nginx.conf`
+- Startup/orchestration: `start.sh`
+- Service wrappers: `scripts/`
+
+### Network model
+- `8088` nginx gateway, intended to be the only exposed port
+- `3000` dashboard frontend, loopback-bound
+- `4000` backend API, loopback-bound
+- internal companion services such as ttyd, Jellyfin, qBittorrent, Sonarr, Radarr, Prowlarr, Redis, and PostgreSQL bind to loopback and are routed through nginx when needed
+
+### Storage model
+HmSTx treats `~/Drives` as the stable top-level filesystem root. `start.sh` prepares and maintains:
+- `~/Drives/C` for Android shared storage
+- removable-drive mount folders managed by `termux-drive-agent`
+- the `Media` share layout for the streaming stack
+
+Current media directories:
+- `~/Drives/Media/movies`
+- `~/Drives/Media/series`
+- `~/Drives/Media/downloads`
+- `~/Drives/Media/downloads/manual`
+- `~/Drives/Media/iptv-cache`
+- `~/Drives/Media/iptv-epg`
+
+## Dashboard Model
+
+### Service catalog
+The dashboard no longer infers service grouping in the client. The backend owns:
+- service label
+- description
+- group
+- surface/tab
+- control mode
+- route
+- status
+- availability / placeholder state
+- blocker text
+- health metadata such as latency, uptime, and last transition
+
+This keeps the live app and the GitHub Pages demo aligned on one contract.
+
+### Service grouping
+Always-on services stay grouped inside stack tabs:
+- `Media`: Jellyfin, qBittorrent, Jellyseerr placeholder, Redis, PostgreSQL
+- `ARR`: Sonarr, Radarr, Prowlarr, Bazarr placeholder
+- `Platform`: nginx, ttyd
+
+Optional services remain in the lockable controller:
+- FTP
+- copyparty
+- Syncthing
+- Samba
+- sshd
+
+### Telemetry
+The backend now exposes:
+- `/api/dashboard` for full page hydrate
+- `/api/telemetry` for lightweight refreshes
+- `/api/services` for lock/controller state and service catalog refresh
+
+The frontend uses:
+- full dashboard hydrate for storage, connections, and logs
+- lighter telemetry polling for monitor + service health
+- low-power mode to slow refresh intervals and reduce chart work
+
+### UX systems implemented
+- persistent theme cycling: dark, light, high-contrast
+- pre-hydration theme bootstrapping to avoid flash
+- skeleton loading shell instead of plain loading text
+- service alert banner when a service regresses out of working state
+- command palette for services, actions, and docs
+- onboarding modal for first-time users
+- low-power mode for phone-hosted operation
+- dismissible demo banner when running the exported Pages build
+- per-service uptime / latency metadata on service cards
+- log filtering and log export
+- session disconnect flow for dashboard sessions visible in the connections list
+- PWA shell assets and service worker for cached shell loading
+
+## Media and Streaming Stack
+
+HmSTx is moving toward a self-hosted media platform built around:
+- Jellyfin
+- qBittorrent
+- Sonarr
+- Radarr
+- Prowlarr
+- Redis
+- PostgreSQL
+
+Current state in this repo:
+- Jellyfin, qBittorrent, Redis, PostgreSQL, Sonarr, Radarr, and Prowlarr are represented in the service catalog and routed through the dashboard/gateway model
+- Bazarr and Jellyseerr remain explicit placeholder services when they are not runnable on this Android host
+- the dashboard UI is already grouped around the media workflow and ARR workflow rather than treating every process as a generic card
+
+The intended operational flow is:
+
+`Requests -> Downloads -> Library -> Streaming`
+
+and
+
+`Indexer -> Discovery -> Download -> Subtitle`
+
+## GitHub Pages Demo
+
+HmSTx supports a dummy-data export for GitHub Pages. The important rule is that the Pages demo must use the same frontend shell as production.
+
+Current design:
+- production app: real Next dashboard + real backend API
+- Pages demo: same Next dashboard in demo mode via [dashboard/app/demo-api.ts](/data/data/com.termux/files/home/home-server/dashboard/app/demo-api.ts)
+
+The demo intentionally simulates:
+- login
+- telemetry
+- service catalog state
+- filesystem browsing
+- FTP actions
+- logs
+- optional-service control
+
+It does not make live NAS API calls on GitHub Pages.
+
+## Security Model
+
+- dashboard auth is cookie-based and server-side session backed
+- nginx protects internal tools through auth verification endpoints
+- service control remains admin-only
+- optional service control requires a separate admin action password and lock/unlock lifecycle
+- sessions can be invalidated from the dashboard
+- loopback binding remains the default for internal services
+
+Important production requirement:
+- do not run with the default bootstrap credentials from `server/.env.example`
+
+## Quick Start
+
+### Android / Termux
 ```bash
 cd ~/home-server
 cp server/.env.example server/.env
 bash start.sh
 ```
 
-`start.sh` loads `server/.env`, prepares `~/Drives` as the file-system root, and:
-- bind-mounts Android shared storage at `~/Drives/C`
-- keeps removable-drive ownership outside the repo through `termux-drive-agent`
-- treats `C` as the only always-present drive until the external agent detects and mounts removable storage
-- binds the dashboard/backend/helper services to loopback so nginx on `:8088` is the default public entrypoint
-- triggers the external `termux-drive-agent` to refresh removable drive mounts and write `~/Drives/.state/drives.json`
+`start.sh` will:
+- load `server/.env`
+- prepare runtime directories
+- prepare `~/Drives`
+- mount Android shared storage into `~/Drives/C`
+- refresh removable-drive state through `termux-drive-agent`
+- start the dashboard/backend/gateway stack
 
-FileBrowser serves `~/Drives`, and ttyd opens in `~/home-server`.
-Run `start.sh` from the normal Termux app user, not from a root shell.
-
-If Android enumerates your external disks differently, you can override the source block devices for startup:
-
-```bash
-D_SOURCE=/dev/block/sde1 E_SOURCE=/dev/block/sdf1 bash start.sh
-```
-
-## Drive Mounting
-`termux-drive-agent` now owns removable-drive detection and mount cleanup:
-- it installs to `/data/data/com.termux/files/usr/bin/termux-drive-agent`
-- it writes `~/Drives/.state/drives.json` and `~/Drives/.state/drive-events.jsonl`
-- it names connected removable drives as `D (Label)`, `E (Label)`, `F (Label)`, and so on
-- it removes those directories when the underlying device disconnects or is unmounted
-
-`start.sh` only prepares `C` and asks the external agent for one sync pass. The continuous 60s retry loop is expected to come from the Termux:Boot launcher at `~/.termux/boot/termux-drive-agent.sh`.
-
-For boot-time startup with Termux:Boot, run:
-
-```bash
-cd ~/home-server
-bash scripts/install-termux-boot.sh
-```
-
-That installs a symlinked launcher at `~/.termux/boot/home-server.sh` and disables the older conflicting boot entries.
-
-## Optional Linux/WSL Dev Helper
-```bash
-cd /path/to/Home-Server-Termux
-bash start-wsl.sh
-```
-
-This is contributor tooling only. The Android runtime path stays on `start.sh`.
-
-## Optional Web Research Helper
-```bash
-cd ~/home-server
-bash analyze-web.sh https://your-deployed-app.example
-```
-
-This requires `tools/agent-browser-workspace` to exist locally. Output is written to `research/<timestamp>/`.
-
-## Auth and Security
-- Dashboard login uses JWT.
-- Backend uses the httpOnly auth cookie for the dashboard, stores users/settings in the embedded SQLite app DB, and tracks active sessions server-side.
-- nginx protects `/files` and `/term` through `auth_request` against `/api/auth/verify`.
-- Service control requires `ADMIN_ACTION_PASSWORD`.
-- nginx is excluded from dashboard controls to avoid self-lockout.
-- Dashboard, backend, FileBrowser, ttyd, and the optional local FTP server stay on loopback so only nginx is externally exposed by default.
-- sshd is disabled by default via `ENABLE_SSHD=false`; if you re-enable it, it binds to loopback unless you override `SSHD_BIND_HOST`.
-- Login attempts are rate-limited and sessions expire on idle and absolute timeouts.
-
-## Backend Environment
-Start from `server/.env.example`:
-
-```env
-PORT=4000
-CORS_ORIGIN=
-EXEC_SHELL=
-BACKEND_BIND_HOST=127.0.0.1
-FILEBROWSER_ROOT=/data/data/com.termux/files/home/Drives
-FILEBROWSER_BIND_HOST=127.0.0.1
-RUNTIME_DIR=/data/data/com.termux/files/home/home-server/runtime
-APP_DB_PATH=/data/data/com.termux/files/home/home-server/runtime/app.db
-FILEBROWSER_DB_PATH=/data/data/com.termux/files/home/home-server/runtime/filebrowser.db
-SERVER_NODE_OPTIONS=--max-old-space-size=192
-DASHBOARD_NODE_OPTIONS=--max-old-space-size=384
-TTYD_BIND_HOST=127.0.0.1
-FTP_BIND_HOST=127.0.0.1
-FTP_SERVER_PORT=2121
-DRIVE_AGENT_CMD=/data/data/com.termux/files/usr/bin/termux-drive-agent
-TERMUX_CLOUD_MOUNT_CMD=/data/data/com.termux/files/usr/bin/termux-cloud-mount
-TERMUX_CLOUD_MOUNT_ROOT=/mnt/cloud/home-server
-DRIVE_STATE_PATH=/data/data/com.termux/files/home/Drives/.state/drives.json
-DRIVE_EVENTS_PATH=/data/data/com.termux/files/home/Drives/.state/drive-events.jsonl
-DRIVE_REFRESH_INTERVAL_MS=60000
-ENABLE_SSHD=false
-SSHD_BIND_HOST=127.0.0.1
-SSHD_PORT=8022
-DRIVE_DETECT_RETRIES=6
-DRIVE_DETECT_DELAY=1
-JWT_SECRET=replace-with-a-long-random-secret
-TOKEN_TTL=12h
-DASHBOARD_USER=admin
-DASHBOARD_PASS=change-me
-ADMIN_ACTION_PASSWORD=change-me-too
-AUTH_COOKIE_NAME=hs_jwt
-COOKIE_SECURE=false
-COOKIE_SAME_SITE=lax
-COOKIE_DOMAIN=
-FTP_ROOT=/data/data/com.termux/files/home/Drives
-FTP_CLIENT_DOWNLOAD_ROOT=/data/data/com.termux/files/home/Drives
-FTP_CLIENT_HOST=192.168.1.8
-FTP_CLIENT_PORT=2121
-FTP_CLIENT_USER=anonymous
-FTP_CLIENT_PASSWORD=anonymous@
-FTP_CLIENT_SECURE=false
-```
-
-`DASHBOARD_USER` and `DASHBOARD_PASS` now act as first-run bootstrap credentials for the embedded app DB. Once the initial admin user is seeded, later logins come from `runtime/app.db`.
-
-Removable disks are now expected to be managed by the external `termux-drive-agent`, which installs to `/data/data/com.termux/files/usr/bin/termux-drive-agent` and writes a manifest plus event log under `~/Drives/.state/`.
-
-## Validation Commands
+### Validation
 ```bash
 npm --prefix server run check
-npm --prefix dashboard run build
+cd dashboard && npx next typegen && npx tsc --noEmit
 bash -n start.sh
-bash -n start-wsl.sh
-bash -n analyze-web.sh
 nginx -t -p "$(pwd)" -c "$(pwd)/nginx.conf"
 ```
 
+## PWA and Offline Behavior
+
+The dashboard now ships a manifest and service worker from `dashboard/public/`:
+- `manifest.webmanifest`
+- `service-worker.js`
+- SVG app icons
+
+The service worker is intentionally conservative:
+- it caches the app shell and static assets
+- it does not cache authenticated `/api/*` responses as offline truth
+- it falls back to the cached shell when the network is unavailable
+
+This is useful on Android, where Termux-hosted services may temporarily disappear during reboots, app kills, or thermal pressure.
+
+## Environment and Host Notes
+
+HmSTx is built around a rooted Android / Termux environment. That creates some real constraints:
+
+- background processes can be killed by Android
+- thermal throttling matters
+- battery state matters
+- native Linux packages do not always behave the same as on a normal Debian host
+- some services are only viable through wrappers or chroot/proot paths
+
+The dashboard reflects that with:
+- low-power mode
+- Android device telemetry fields
+- explicit placeholder services for unavailable stack members
+- loopback + gateway routing instead of exposing every service port directly
+
+## Known Build Constraint on This Host
+
+The Next app can compile successfully on this device, but the final `next build` step on this Android host still hits a framework-level failure:
+
+`Error: invalid type: unit value, expected usize`
+
+This is a Next.js / platform issue, not an application TypeScript failure. Current practical workflow:
+- use `npx tsc --noEmit` for app-level type safety on-device
+- use the Linux/GitHub runner path for final export/deployment builds when needed
+
+## Operational Endpoints
+
+Primary API endpoints used by the dashboard:
+- `/api/dashboard`
+- `/api/telemetry`
+- `/api/services`
+- `/api/control`
+- `/api/control/unlock`
+- `/api/control/lock`
+- `/api/logging`
+- `/api/drives`
+- `/api/shares`
+- `/api/users`
+- `/api/connections`
+- `/api/connections/:id/disconnect`
+- `/api/fs/*`
+- `/api/ftp/*`
+
+## Development Notes
+
+- keep live API payloads and `demo-api.ts` in lockstep
+- keep the frontend demo path and production path on the same component tree
+- keep always-on services out of the optional controller
+- do not reintroduce glassmorphism or decorative dashboard filler; the shell is intentionally flat and operational
+- prefer backend-owned truth for service grouping, status, and descriptions
+
 ## Troubleshooting
 
-### Blank or stale dashboard
-Rerun:
+### Dashboard loads but telemetry stops moving
+- check `/api/telemetry`
+- confirm the backend is still running on loopback
+- confirm nginx is still proxying the API
+- if low-power mode is enabled, expect slower refresh cadence
 
-```bash
-bash start.sh
-```
+### Optional service buttons are locked
+- unlock the controller with the admin action password
+- the unlock is session-scoped and can be manually re-locked
 
-This reloads `server/.env`, clears the repo-managed service processes, and starts the stack again in the expected order.
+### Pages demo does not match the live UI
+- the demo should come from the same Next frontend
+- if the demo drifts, update `dashboard/app/demo-api.ts`, not a separate mock dashboard
 
-### `/files` or `/term` returns `401`
-Login through the dashboard first. Those routes are protected by nginx and require the dashboard auth cookie.
+### Session disconnect fails
+- only dashboard sessions with server session IDs are disconnectable
+- non-session or external client traffic in the connections table is informational only
 
-### Remote FTP access
-Open the FTP tab in the dashboard. It now supports saved favourites, direct browsing, and root-helper mount/unmount into `~/Drives/<FavouriteName>`. The default preset is the PS4 host at `192.168.1.8:2121`.
-
-The dashboard FTP client can:
-- browse remote directories
-- pull remote files or whole folders into `~/Drives`
-- upload a local server file path to the remote host
-- create remote folders
-- save favourite remotes with a drive folder name
-- mount or unmount saved favourites through `termux-cloud-mount`
-
-If your PS4 GoldHEN setup uses different credentials or port, override them in the form or in `server/.env`.
-
-`termux-cloud-mount` runs `rclone mount` through Magisk root in the global mount namespace and exposes the mounted remote back into `~/Drives` as a symlink. If that helper is unavailable or root FUSE fails, the favourite stays saved and browseable and the UI falls back to browse-only mode.
-
-### Local FTP server is not available
-The optional local FTP server only appears in service controls when one of these providers exists:
-- `python3 -m pyftpdlib`
-- BusyBox `ftpd`
-
-If neither is installed, use SFTP over SSH on port `8022`.
-
-## Contributor Notes
-- Keep API response shapes aligned between `server/index.js` and `dashboard/app/page.tsx`.
-- Keep service command parity across `server/index.js`, `start.sh`, and `start-wsl.sh`.
-- Keep runtime-only artifacts out of git.
+### Local Android build fails during `next build`
+- rerun `cd dashboard && npx tsc --noEmit` to verify app code first
+- use a Linux/GitHub runner for the final production or demo export build

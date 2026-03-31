@@ -514,6 +514,7 @@ const MAX_DEBUG_EVENTS = 300;
 let cpuSnapshot = null;
 let verboseLoggingEnabled = appDb.getBooleanSetting('logging.verboseEnabled', false);
 const serviceStateCache = {};
+const serviceHealthHistory = {};
 let ftpProviderCache = {
   checkedAt: 0,
   provider: null,
@@ -538,6 +539,8 @@ const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
 const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
 const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'access'];
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
+const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SERVICE_HISTORY_LIMIT = 400;
 
 eventLoopDelay.enable();
 
@@ -808,10 +811,11 @@ const resolveServiceInstall = async (serviceName, svc) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const isPortOpen = (port, host = '127.0.0.1', timeoutMs = 1200) =>
+const probePort = (port, host = '127.0.0.1', timeoutMs = 1200) =>
   new Promise((resolve) => {
     const socket = new net.Socket();
     let done = false;
+    const startedAt = Date.now();
 
     const finish = (open) => {
       if (done) {
@@ -820,7 +824,10 @@ const isPortOpen = (port, host = '127.0.0.1', timeoutMs = 1200) =>
 
       done = true;
       socket.destroy();
-      resolve(open);
+      resolve({
+        latencyMs: Date.now() - startedAt,
+        open,
+      });
     };
 
     socket.setTimeout(timeoutMs);
@@ -841,49 +848,183 @@ const checkService = async (svc) => {
     return true;
   }
 
-  return isPortOpen(svc.port, svc.host || '127.0.0.1');
+  const result = await probePort(svc.port, svc.host || '127.0.0.1');
+  return result.open;
+};
+
+const trimServiceHistory = (history = []) => {
+  const cutoff = Date.now() - SERVICE_STATS_WINDOW_MS;
+  const next = history.filter((entry) => entry.checkedAtMs >= cutoff);
+  return next.slice(-SERVICE_HISTORY_LIMIT);
+};
+
+const getServiceStats = (serviceName) => {
+  const history = trimServiceHistory(serviceHealthHistory[serviceName] || []);
+  serviceHealthHistory[serviceName] = history;
+
+  if (history.length === 0) {
+    return {
+      avgLatencyMs: null,
+      lastCheckedAt: null,
+      lastTransitionAt: null,
+      latencyMs: null,
+      samples: 0,
+      uptimePct: null,
+    };
+  }
+
+  let latencyTotal = 0;
+  let latencyCount = 0;
+  let upCount = 0;
+
+  for (const sample of history) {
+    if (sample.status === 'working') {
+      upCount += 1;
+    }
+
+    if (Number.isFinite(sample.latencyMs)) {
+      latencyTotal += sample.latencyMs;
+      latencyCount += 1;
+    }
+  }
+
+  const last = history[history.length - 1];
+
+  return {
+    avgLatencyMs: latencyCount > 0 ? Number((latencyTotal / latencyCount).toFixed(0)) : null,
+    lastCheckedAt: last.checkedAt,
+    lastTransitionAt: last.transitionAt || last.checkedAt,
+    latencyMs: Number.isFinite(last.latencyMs) ? last.latencyMs : null,
+    samples: history.length,
+    uptimePct: history.length > 0 ? Number(((upCount / history.length) * 100).toFixed(1)) : null,
+  };
+};
+
+const recordServiceObservation = (serviceName, status, latencyMs) => {
+  const now = new Date();
+  const checkedAt = now.toISOString();
+  const history = trimServiceHistory(serviceHealthHistory[serviceName] || []);
+  const previous = history[history.length - 1] || null;
+  const transitionAt = previous?.status === status ? previous.transitionAt || previous.checkedAt : checkedAt;
+
+  history.push({
+    checkedAt,
+    checkedAtMs: now.getTime(),
+    latencyMs: Number.isFinite(latencyMs) ? latencyMs : null,
+    status,
+    transitionAt,
+  });
+
+  serviceHealthHistory[serviceName] = trimServiceHistory(history);
+  return getServiceStats(serviceName);
+};
+
+const statusReasonForService = (entry) => {
+  if (!entry.available) {
+    return entry.blocker || 'Not installed on this host.';
+  }
+
+  if (entry.status === 'working') {
+    if (Number.isFinite(entry.latencyMs) && entry.latencyMs > 800) {
+      return 'Healthy, but response time is elevated.';
+    }
+    return 'Healthy.';
+  }
+
+  if (entry.controlMode === 'optional') {
+    return 'Stopped by operator.';
+  }
+
+  return 'Expected to be running, but the health check failed.';
+};
+
+const checkServiceHealth = async (serviceName, svc) => {
+  const startedAt = Date.now();
+
+  try {
+    await runCommand(svc.check);
+  } catch {
+    return {
+      latencyMs: null,
+      running: false,
+    };
+  }
+
+  if (!svc.port) {
+    return {
+      latencyMs: Date.now() - startedAt,
+      running: true,
+    };
+  }
+
+  const probe = await probePort(svc.port, svc.host || '127.0.0.1');
+  return {
+    latencyMs: probe.open ? probe.latencyMs : null,
+    running: probe.open,
+  };
+};
+
+const inspectServiceCatalogEntry = async (name, meta) => {
+  const svc = SERVICES[name];
+  let available = true;
+  let blocker = '';
+  let running = false;
+  let latencyMs = null;
+
+  if (name === 'sshd' && !ENABLE_SSHD) {
+    available = false;
+    blocker = 'Disabled in single-port mode.';
+  } else if (name === 'ftp' && !(await detectFtpProvider())) {
+    available = false;
+    blocker = 'Requires python3 + pyftpdlib or busybox ftpd.';
+  } else {
+    const install = await resolveServiceInstall(name, svc);
+    available = install.available;
+    if (!install.available) {
+      blocker = PLACEHOLDER_SERVICE_SET.has(name)
+        ? `Currently blocked on ${install.label}.`
+        : `Requires ${install.label}.`;
+    } else {
+      const health = await checkServiceHealth(name, svc);
+      running = health.running;
+      latencyMs = health.latencyMs;
+    }
+  }
+
+  const status = !available
+    ? 'unavailable'
+    : (running ? 'working' : meta.controlMode === 'optional' ? 'stopped' : 'stalled');
+  const stats = recordServiceObservation(name, status, latencyMs);
+
+  const entry = {
+    available,
+    avgLatencyMs: stats.avgLatencyMs,
+    blocker: blocker || undefined,
+    controlMode: meta.controlMode,
+    description: meta.description,
+    group: meta.group,
+    key: name,
+    label: meta.label,
+    lastCheckedAt: stats.lastCheckedAt,
+    lastTransitionAt: stats.lastTransitionAt,
+    latencyMs: stats.latencyMs,
+    placeholder: !available && PLACEHOLDER_SERVICE_SET.has(name),
+    route: meta.route || undefined,
+    status,
+    statusReason: null,
+    surface: meta.surface,
+    uptimePct: stats.uptimePct,
+  };
+
+  entry.statusReason = statusReasonForService(entry);
+  return entry;
 };
 
 const buildServiceCatalog = async () => {
   const entries = [];
 
   for (const [name, meta] of Object.entries(SERVICE_CATALOG_META)) {
-    const svc = SERVICES[name];
-    let available = true;
-    let blocker = '';
-    let running = false;
-
-    if (name === 'sshd' && !ENABLE_SSHD) {
-      available = false;
-      blocker = 'Disabled in single-port mode.';
-    } else if (name === 'ftp' && !(await detectFtpProvider())) {
-      available = false;
-      blocker = 'Requires python3 + pyftpdlib or busybox ftpd.';
-    } else {
-      const install = await resolveServiceInstall(name, svc);
-      available = install.available;
-      if (!install.available) {
-        blocker = PLACEHOLDER_SERVICE_SET.has(name)
-          ? `Currently blocked on ${install.label}.`
-          : `Requires ${install.label}.`;
-      } else {
-        running = await checkService(svc);
-      }
-    }
-
-    entries.push({
-      available,
-      blocker: blocker || undefined,
-      controlMode: meta.controlMode,
-      description: meta.description,
-      group: meta.group,
-      key: name,
-      label: meta.label,
-      placeholder: !available && PLACEHOLDER_SERVICE_SET.has(name),
-      route: meta.route || undefined,
-      status: !available ? 'unavailable' : (running ? 'working' : meta.controlMode === 'optional' ? 'stopped' : 'stalled'),
-      surface: meta.surface,
-    });
+    entries.push(await inspectServiceCatalogEntry(name, meta));
   }
 
   return entries;
@@ -1170,12 +1311,14 @@ const rememberConnection = (req) => {
 
   const protocol = protocolFromRequest(req);
   let username = ip === '127.0.0.1' || ip === '::1' ? 'local-user' : 'remote-user';
+  let sessionId = '';
 
   const token = readToken(req);
   if (token) {
     try {
       const { decoded } = validateSessionToken(token);
       username = decoded?.sub || username;
+      sessionId = String(decoded?.jti || '');
     } catch {
       // Ignore invalid tokens for telemetry purposes.
     }
@@ -1189,6 +1332,7 @@ const rememberConnection = (req) => {
     ip,
     port,
     protocol,
+    sessionId,
     status: 'connected',
     lastSeen: new Date().toISOString(),
     lastSeenMs: Date.now(),
@@ -1448,10 +1592,52 @@ const readLanDevices = () => {
   }
 };
 
+const readCommandJson = async (command) => {
+  try {
+    const output = await runCommand(command);
+    return JSON.parse(output);
+  } catch {
+    return null;
+  }
+};
+
+const readDeviceTelemetry = async () => {
+  const result = {
+    androidVersion: os.release ? os.release() : null,
+    batteryPct: null,
+    charging: null,
+    wifiDbm: null,
+  };
+
+  if (await commandExists('termux-battery-status')) {
+    const battery = await readCommandJson('termux-battery-status');
+    if (battery && typeof battery === 'object') {
+      const percentage = Number(battery.percentage);
+      result.batteryPct = Number.isFinite(percentage) ? percentage : null;
+      result.charging = typeof battery.status === 'string'
+        ? ['charging', 'full'].includes(battery.status.toLowerCase())
+        : null;
+    }
+  }
+
+  if (await commandExists('termux-wifi-connectioninfo')) {
+    const wifi = await readCommandJson('termux-wifi-connectioninfo');
+    if (wifi && typeof wifi === 'object') {
+      const rssi = Number(wifi.rssi);
+      result.wifiDbm = Number.isFinite(rssi) ? rssi : null;
+    }
+  }
+
+  return result;
+};
+
 const collectMonitorSnapshot = async () => {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
-  const cpuLoad = await readCpuUsage();
+  const [cpuLoad, device] = await Promise.all([
+    readCpuUsage(),
+    readDeviceTelemetry(),
+  ]);
   const processMemory = process.memoryUsage();
   const [load1m, load5m, load15m] = os.loadavg();
   const loopMeanMs = Number((eventLoopDelay.mean / 1e6).toFixed(2));
@@ -1462,6 +1648,7 @@ const collectMonitorSnapshot = async () => {
   return {
     cpuCores,
     cpuLoad,
+    device,
     freeMem,
     loadAvg1m: Number(load1m.toFixed(2)),
     loadAvg5m: Number(load5m.toFixed(2)),
@@ -1514,7 +1701,10 @@ const getConnectionsSnapshot = () => {
     users: [...recentConnections.values()]
       .sort((a, b) => b.lastSeenMs - a.lastSeenMs)
       .slice(0, MAX_CONNECTIONS)
-      .map(({ lastSeenMs, ...entry }) => entry),
+      .map(({ lastSeenMs, ...entry }) => ({
+        ...entry,
+        durationMs: Math.max(0, Date.now() - lastSeenMs),
+      })),
   };
 };
 
@@ -1523,6 +1713,16 @@ const getNetworkDevicesSnapshot = () => ({
 });
 
 const getLogsSnapshot = () => ({
+  entries: debugEvents
+    .slice(-120)
+    .reverse()
+    .map((entry, index) => ({
+      id: `${entry.timestamp}-${index}`,
+      level: entry.level,
+      message: entry.message,
+      meta: entry.meta || null,
+      timestamp: entry.timestamp,
+    })),
   logs: debugEvents.slice(-120).reverse(),
   markdown: buildMarkdownLog(80),
   verboseLoggingEnabled,
@@ -1633,6 +1833,33 @@ const getDashboardSnapshot = async (sessionId) => {
       optionalServices: controlledServiceNames,
     },
     logs: getLogsSnapshot(),
+  };
+};
+
+const getTelemetrySnapshot = async (sessionId) => {
+  const [monitor, serviceCatalog] = await Promise.all([
+    getMonitorSnapshot(),
+    buildServiceCatalog(),
+  ]);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    logs: getLogsSnapshot(),
+    monitor,
+    serviceCatalog,
+    serviceGroups: buildServiceGroups(serviceCatalog),
+    serviceController: {
+      locked: !isServiceControllerUnlocked(sessionId),
+      optionalServices: serviceCatalog
+        .filter((entry) => entry.controlMode === 'optional' && entry.available)
+        .map((entry) => entry.key),
+    },
+    services: serviceCatalog.reduce((acc, entry) => {
+      if (entry.available) {
+        acc[entry.key] = entry.status === 'working';
+      }
+      return acc;
+    }, {}),
   };
 };
 
@@ -2689,11 +2916,56 @@ const monitorHandler = async (req, res) => {
   pushDebugEvent('info', 'Monitor snapshot served', { cpuLoad: Number(payload.cpuLoad.toFixed(2)) });
 };
 
+const telemetryHandler = async (req, res) => {
+  try {
+    const payload = await getTelemetrySnapshot(req.session?.id);
+    res.json(payload);
+  } catch (err) {
+    pushDebugEvent('error', 'Telemetry snapshot failed', { error: String(err) }, true);
+    res.status(500).json({ error: 'Unable to build telemetry snapshot' });
+  }
+};
+
 const connectionsHandler = (req, res) => {
   const payload = getConnectionsSnapshot();
 
   pushDebugEvent('info', 'Connections snapshot served', { count: payload.users.length });
   res.json(payload);
+};
+
+const disconnectConnectionHandler = (req, res) => {
+  const sessionId = String(req.params.id || '').trim();
+  if (!sessionId) {
+    return res.status(400).json({ error: 'Connection id is required' });
+  }
+
+  if (sessionId === String(req.session?.id || '')) {
+    return res.status(400).json({ error: 'You cannot disconnect your current session' });
+  }
+
+  const session = activeSessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Connection not found' });
+  }
+
+  invalidateSession(sessionId);
+
+  for (const [key, entry] of recentConnections.entries()) {
+    if (entry.sessionId === sessionId) {
+      recentConnections.delete(key);
+    }
+  }
+
+  pushAuditEvent(req, 'warn', 'Dashboard session disconnected', {
+    sessionId,
+    username: session.username,
+  });
+
+  return res.json({
+    sessionId,
+    success: true,
+    username: session.username,
+  });
 };
 
 const storageHandler = async (req, res) => {
@@ -3523,6 +3795,8 @@ const ftpMkdirHandler = async (req, res) => {
 
 app.get('/connections', requireAuth, requireAdmin, connectionsHandler);
 app.get('/api/connections', requireAuth, requireAdmin, connectionsHandler);
+app.post('/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
+app.post('/api/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
 app.get('/storage', requireAuth, requireAdmin, storageHandler);
 app.get('/api/storage', requireAuth, requireAdmin, storageHandler);
 app.get('/logs', requireAuth, requireAdmin, logsHandler);
@@ -3547,6 +3821,8 @@ app.post('/users', requireAuth, requireAdmin, createUserHandler);
 app.post('/api/users', requireAuth, requireAdmin, createUserHandler);
 app.put('/users/:id', requireAuth, requireAdmin, updateUserHandler);
 app.put('/api/users/:id', requireAuth, requireAdmin, updateUserHandler);
+app.get('/telemetry', requireAuth, requireAdmin, telemetryHandler);
+app.get('/api/telemetry', requireAuth, requireAdmin, telemetryHandler);
 app.get('/fs/list', requireAuth, filesystemListHandler);
 app.get('/api/fs/list', requireAuth, filesystemListHandler);
 app.post('/fs/mkdir', requireAuth, filesystemMkdirHandler);
