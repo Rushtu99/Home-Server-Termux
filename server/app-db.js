@@ -173,6 +173,23 @@ const createAppDb = ({ dbPath }) => {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS llm_conversations (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS llm_messages (
+      id INTEGER PRIMARY KEY,
+      conversation_id INTEGER NOT NULL REFERENCES llm_conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      model_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS ftp_favourites (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -246,6 +263,41 @@ const createAppDb = ({ dbPath }) => {
       WHERE id = ?
     `),
     getSetting: db.prepare('SELECT value FROM app_settings WHERE key = ? LIMIT 1'),
+    listLlmConversationsByUserId: db.prepare(`
+      SELECT id, user_id AS userId, title, created_at AS createdAt, updated_at AS updatedAt
+      FROM llm_conversations
+      WHERE user_id = ?
+      ORDER BY updated_at DESC, id DESC
+    `),
+    getLlmConversationById: db.prepare(`
+      SELECT id, user_id AS userId, title, created_at AS createdAt, updated_at AS updatedAt
+      FROM llm_conversations
+      WHERE id = ?
+      LIMIT 1
+    `),
+    insertLlmConversation: db.prepare(`
+      INSERT INTO llm_conversations (user_id, title, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `),
+    updateLlmConversationTouch: db.prepare(`
+      UPDATE llm_conversations
+      SET updated_at = ?
+      WHERE id = ?
+    `),
+    deleteLlmConversation: db.prepare(`
+      DELETE FROM llm_conversations
+      WHERE id = ?
+    `),
+    listLlmMessagesByConversationId: db.prepare(`
+      SELECT id, conversation_id AS conversationId, role, content, model_id AS modelId, created_at AS createdAt
+      FROM llm_messages
+      WHERE conversation_id = ?
+      ORDER BY id ASC
+    `),
+    insertLlmMessage: db.prepare(`
+      INSERT INTO llm_messages (conversation_id, role, content, model_id, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `),
     upsertSetting: db.prepare(`
       INSERT INTO app_settings (key, value, updated_at)
       VALUES (?, ?, ?)
@@ -513,6 +565,35 @@ const createAppDb = ({ dbPath }) => {
     };
   };
 
+  const serializeLlmConversation = (row) => {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: Number(row.id),
+      userId: Number(row.userId),
+      title: normalizeText(row.title),
+      createdAt: normalizeText(row.createdAt),
+      updatedAt: normalizeText(row.updatedAt),
+    };
+  };
+
+  const serializeLlmMessage = (row) => {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: Number(row.id),
+      conversationId: Number(row.conversationId),
+      role: normalizeText(row.role),
+      content: String(row.content || ''),
+      modelId: normalizeText(row.modelId),
+      createdAt: normalizeText(row.createdAt),
+    };
+  };
+
   const api = {
     dbPath,
     bootstrapAdmin({ username, password, role = 'admin' }) {
@@ -609,6 +690,91 @@ const createAppDb = ({ dbPath }) => {
     },
     setSetting(key, value) {
       statements.upsertSetting.run(String(key || ''), String(value ?? ''), nowIso());
+    },
+    listLlmConversations(userId) {
+      const numericUserId = Number(userId);
+      if (!Number.isInteger(numericUserId) || numericUserId <= 0) {
+        throw new Error('Valid userId is required');
+      }
+
+      return statements.listLlmConversationsByUserId
+        .all(numericUserId)
+        .map((row) => serializeLlmConversation(row));
+    },
+    getLlmConversation(id) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        return null;
+      }
+
+      return serializeLlmConversation(statements.getLlmConversationById.get(numericId));
+    },
+    createLlmConversation({ userId, title = '' } = {}) {
+      const numericUserId = Number(userId);
+      if (!Number.isInteger(numericUserId) || numericUserId <= 0) {
+        throw new Error('Valid userId is required');
+      }
+
+      const timestamp = nowIso();
+      statements.insertLlmConversation.run(
+        numericUserId,
+        normalizeText(title),
+        timestamp,
+        timestamp
+      );
+
+      return this.getLlmConversation(db.prepare('SELECT last_insert_rowid() AS id').get().id);
+    },
+    touchLlmConversation(id) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        throw new Error('Valid conversation id is required');
+      }
+
+      statements.updateLlmConversationTouch.run(nowIso(), numericId);
+    },
+    deleteLlmConversation(id) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        throw new Error('Valid conversation id is required');
+      }
+
+      statements.deleteLlmConversation.run(numericId);
+    },
+    listLlmMessages(conversationId) {
+      const numericConversationId = Number(conversationId);
+      if (!Number.isInteger(numericConversationId) || numericConversationId <= 0) {
+        throw new Error('Valid conversationId is required');
+      }
+
+      return statements.listLlmMessagesByConversationId
+        .all(numericConversationId)
+        .map((row) => serializeLlmMessage(row));
+    },
+    appendLlmMessage({ conversationId, role, content, modelId = '' } = {}) {
+      const numericConversationId = Number(conversationId);
+      if (!Number.isInteger(numericConversationId) || numericConversationId <= 0) {
+        throw new Error('Valid conversationId is required');
+      }
+      const normalizedRole = normalizeText(role).toLowerCase();
+      if (!['system', 'user', 'assistant', 'tool'].includes(normalizedRole)) {
+        throw new Error('Valid message role is required');
+      }
+
+      const text = String(content || '').trim();
+      if (!text) {
+        throw new Error('Message content is required');
+      }
+
+      statements.insertLlmMessage.run(
+        numericConversationId,
+        normalizedRole,
+        text,
+        normalizeText(modelId),
+        nowIso()
+      );
+      this.touchLlmConversation(numericConversationId);
+      return this.listLlmMessages(numericConversationId).slice(-1)[0] || null;
     },
     listShares({ includePermissions = false } = {}) {
       return statements.listShares.all().map((row) => serializeShare(row, { includePermissions }));

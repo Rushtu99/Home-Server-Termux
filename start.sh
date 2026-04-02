@@ -82,6 +82,7 @@ LOOPBACK_LOCKDOWN_CMD="${LOOPBACK_LOCKDOWN_CMD:-$PROJECT/scripts/loopback-lockdo
 LLM_SERVICE_CMD="${LLM_SERVICE_CMD:-$PROJECT/scripts/llm-service.sh}"
 MEDIA_IMPORTER_CMD="${MEDIA_IMPORTER_CMD:-$PROJECT/scripts/media-importer.sh}"
 MEDIA_WORKFLOW_SERVICE_CMD="${MEDIA_WORKFLOW_SERVICE_CMD:-$PROJECT/scripts/media-workflow-service.sh}"
+STORAGE_WATCHDOG_SERVICE_CMD="${STORAGE_WATCHDOG_SERVICE_CMD:-$PROJECT/scripts/storage-watchdog-service.sh}"
 REDIS_SERVICE_CMD="${REDIS_SERVICE_CMD:-$PROJECT/scripts/redis-service.sh}"
 POSTGRES_SERVICE_CMD="${POSTGRES_SERVICE_CMD:-$PROJECT/scripts/postgres-service.sh}"
 JELLYFIN_SERVICE_CMD="${JELLYFIN_SERVICE_CMD:-$PROJECT/scripts/jellyfin-service.sh}"
@@ -113,6 +114,7 @@ BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
 JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
 LLM_PID_PATH="${LLM_PID_PATH:-$RUNTIME_DIR/llm.pid}"
 MEDIA_WORKFLOW_PID_PATH="${MEDIA_WORKFLOW_PID_PATH:-$RUNTIME_DIR/media-workflow.pid}"
+STORAGE_WATCHDOG_PID_PATH="${STORAGE_WATCHDOG_PID_PATH:-$RUNTIME_DIR/storage-watchdog.pid}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 FRONTEND_BIND_HOST="${FRONTEND_BIND_HOST:-}"
 if [ -z "$FRONTEND_BIND_HOST" ]; then
@@ -1037,6 +1039,7 @@ stop_managed_services() {
     stop_pidfile_process "jellyseerr" "$JELLYSEERR_PID_PATH"
     stop_pidfile_process "llm" "$LLM_PID_PATH"
     stop_pidfile_process "media-workflow" "$MEDIA_WORKFLOW_PID_PATH"
+    stop_pidfile_process "storage-watchdog" "$STORAGE_WATCHDOG_PID_PATH"
     stop_repo_nginx
 }
 
@@ -1203,6 +1206,7 @@ start_media_stack_services() {
         start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
     fi
 
+    start_worker_helper "Storage watchdog" "$STORAGE_WATCHDOG_SERVICE_CMD" "$STORAGE_WATCHDOG_PID_PATH"
     start_worker_helper "Media workflow sweeper" "$MEDIA_WORKFLOW_SERVICE_CMD" "$MEDIA_WORKFLOW_PID_PATH"
 }
 

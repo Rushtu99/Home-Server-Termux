@@ -36,6 +36,8 @@ type ServiceSurface = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'set
 type ServiceCatalogEntry = {
   available: boolean;
   avgLatencyMs?: number | null;
+  blockedBy?: 'storage_watchdog' | string;
+  blockedReason?: string;
   blocker?: string;
   controlMode: 'always_on' | 'optional';
   description: string;
@@ -49,6 +51,7 @@ type ServiceCatalogEntry = {
   route?: string;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable' | string;
   statusReason?: string | null;
+  resumeRequired?: boolean;
   surface: ServiceSurface;
   uptimePct?: number | null;
 };
@@ -103,6 +106,35 @@ type StorageMount = {
   usePercent: number;
   mount: string;
   category?: string;
+};
+
+type StorageProtectionState = {
+  available?: boolean;
+  blockedServices?: string[];
+  enabled?: boolean;
+  generatedAt?: string | null;
+  healthyStreak?: number;
+  lastDegradedAt?: string | null;
+  lastHealthyAt?: string | null;
+  lastTransitionAt?: string | null;
+  manualResume?: boolean;
+  overallHealthy?: boolean;
+  reason?: string;
+  resumeRequired?: boolean;
+  state?: 'healthy' | 'degraded' | 'recovered' | string;
+  stoppedByWatchdog?: string[];
+  vault?: {
+    healthy?: boolean;
+    reason?: string;
+    drives?: string[];
+    roots?: string[];
+  };
+  scratch?: {
+    healthy?: boolean;
+    reason?: string;
+    drives?: string[];
+    roots?: string[];
+  };
 };
 
 type DebugLog = {
@@ -280,6 +312,9 @@ type MediaWorkflowPayload = {
     serviceKeys?: string[];
     status?: string;
     summary?: string;
+  };
+  storage?: {
+    protection?: StorageProtectionState;
   };
   watch?: {
     libraryRootReady?: boolean;
@@ -679,6 +714,8 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState('');
   const [lastTelemetryAt, setLastTelemetryAt] = useState(0);
   const [controlStatus, setControlStatus] = useState('');
+  const [storageProtectionStatus, setStorageProtectionStatus] = useState('');
+  const [storageProtectionBusy, setStorageProtectionBusy] = useState(false);
   const [controlBusy, setControlBusy] = useState<Record<string, boolean>>({});
   const [serviceControllerLocked, setServiceControllerLocked] = useState(true);
   const [serviceUnlockBusy, setServiceUnlockBusy] = useState(false);
@@ -1889,6 +1926,80 @@ export default function Dashboard() {
     }
   };
 
+  const runStorageRecheck = async () => {
+    setStorageProtectionBusy(true);
+    setStorageProtectionStatus('');
+    try {
+      const res = await authFetch(`${API}/storage/protection/recheck`, {
+        method: 'POST',
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStorageProtectionStatus(String(payload?.error || 'Unable to recheck storage'));
+        return;
+      }
+
+      const blockedCount = Array.isArray(payload?.storageProtection?.blockedServices)
+        ? payload.storageProtection.blockedServices.length
+        : 0;
+      setStorageProtectionStatus(blockedCount > 0 ? `Storage recheck complete: ${blockedCount} service block(s) active` : 'Storage recheck complete: healthy');
+      await syncServiceControllerState();
+      await fetchDashboard();
+    } catch {
+      setStorageProtectionStatus('Unable to recheck storage');
+    } finally {
+      if (mountedRef.current) {
+        setStorageProtectionBusy(false);
+      }
+    }
+  };
+
+  const resumeStorageServices = async () => {
+    setStorageProtectionBusy(true);
+    setStorageProtectionStatus('');
+    try {
+      const res = await authFetch(`${API}/storage/protection/resume`, {
+        method: 'POST',
+      });
+
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 207) {
+        setStorageProtectionStatus(String(payload?.error || 'Unable to resume storage-blocked services'));
+        return;
+      }
+
+      const resumedCount = Array.isArray(payload?.resumed) ? payload.resumed.length : 0;
+      const failedCount = Array.isArray(payload?.failed) ? payload.failed.length : 0;
+      if (failedCount > 0) {
+        setStorageProtectionStatus(`Resumed ${resumedCount} service(s), ${failedCount} failed`);
+      } else if (resumedCount > 0) {
+        setStorageProtectionStatus(`Resumed ${resumedCount} service(s)`);
+      } else {
+        setStorageProtectionStatus('No storage-blocked services were pending');
+      }
+
+      await syncServiceControllerState();
+      await fetchDashboard();
+    } catch {
+      setStorageProtectionStatus('Unable to resume storage-blocked services');
+    } finally {
+      if (mountedRef.current) {
+        setStorageProtectionBusy(false);
+      }
+    }
+  };
+
   const toggleTheme = () => {
     setThemeMode((current) => current === 'dark' ? 'light' : current === 'light' ? 'contrast' : 'dark');
   };
@@ -2033,6 +2144,9 @@ export default function Dashboard() {
     }
     if (entries.some((entry) => entry.status === 'stalled')) {
       return 'stalled';
+    }
+    if (entries.some((entry) => entry.status === 'blocked')) {
+      return 'blocked';
     }
     if (entries.some((entry) => entry.status === 'stopped')) {
       return 'stopped';
@@ -2202,6 +2316,13 @@ export default function Dashboard() {
     : controlStatus.includes('succeeded')
       ? THEME.ok
       : THEME.crimsonRed;
+  const storageProtectionStatusColor = !storageProtectionStatus
+    ? THEME.muted
+    : storageProtectionStatus.toLowerCase().includes('unable')
+      || storageProtectionStatus.toLowerCase().includes('failed')
+      || storageProtectionStatus.toLowerCase().includes('error')
+      ? THEME.crimsonRed
+      : THEME.ok;
   const ftpStatusColor = !ftpStatus
     ? THEME.muted
     : ftpStatus.toLowerCase().includes('failed') || ftpStatus.toLowerCase().includes('unable') || ftpStatus.toLowerCase().includes('error')
@@ -2281,6 +2402,25 @@ export default function Dashboard() {
   const liveTvSummary = mediaWorkflow?.liveTv?.summary || 'Configure Jellyfin with an M3U tuner, XMLTV guide, and mapped channels';
   const liveTvChannelCount = mediaWorkflow?.liveTv?.channelCount ?? null;
   const liveTvSourcesReady = Boolean(mediaWorkflow?.liveTv?.playlistConfigured && mediaWorkflow?.liveTv?.guideConfigured);
+  const storageProtection = mediaWorkflow?.storage?.protection || null;
+  const storageBlockedServices = Array.isArray(storageProtection?.blockedServices) ? storageProtection.blockedServices : [];
+  const storageStoppedByWatchdog = Array.isArray(storageProtection?.stoppedByWatchdog) ? storageProtection.stoppedByWatchdog : [];
+  const storageProtectionDegraded = Boolean(
+    storageProtection
+    && (storageProtection.state === 'degraded' || storageBlockedServices.length > 0 || storageProtection.overallHealthy === false)
+  );
+  const storageProtectionRecoverable = Boolean(
+    storageProtection
+    && storageProtection.overallHealthy
+    && storageProtection.resumeRequired
+    && storageStoppedByWatchdog.length > 0
+  );
+  const storageProtectionSummary = storageProtectionDegraded
+    ? (storageProtection?.reason || 'Storage watchdog detected missing vault or scratch mounts.')
+    : storageProtectionRecoverable
+      ? `Storage recovered; ${storageStoppedByWatchdog.length} service(s) need manual resume`
+      : 'Storage watchdog reports healthy mount state';
+  const storageProtectionTone = storageProtectionDegraded ? THEME.crimsonRed : storageProtectionRecoverable ? THEME.brightYellow : THEME.ok;
   const telemetryStale = lastTelemetryAt > 0 && Date.now() - lastTelemetryAt > (lowPowerMode ? 60000 : 20000);
   const batteryPct = monitor?.device?.batteryPct ?? null;
   const batteryLow = batteryPct != null && batteryPct <= 20 && !monitor?.device?.charging;
@@ -3398,6 +3538,34 @@ export default function Dashboard() {
               </div>
 
               <div style={{ ...styles.homeSecondary, ...styles.homeColumnDense }}>
+                {storageProtection ? (
+                  <article className="hmstx-reveal hmstx-reveal-4 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
+                    <div style={{ ...styles.logControlRow, ...styles.homeLogControlRow }}>
+                      <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 0 }}>Storage Protection</h3>
+                      <span style={{ ...styles.headerPill, ...styles.homeHeaderPill, color: storageProtectionTone }}>
+                        {storageProtection.state || 'unknown'}
+                      </span>
+                    </div>
+                    <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel, color: storageProtectionTone }}>
+                      {storageProtectionSummary}
+                    </p>
+                    <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>
+                      Blocked: {storageBlockedServices.length > 0 ? storageBlockedServices.join(', ') : 'none'} · Last transition: {storageProtection.lastTransitionAt ? fmtTime(storageProtection.lastTransitionAt) : 'n/a'}
+                    </p>
+                    <div style={styles.actionWrap}>
+                      <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void runStorageRecheck()} disabled={storageProtectionBusy}>
+                        {storageProtectionBusy ? 'Checking…' : 'Recheck'}
+                      </button>
+                      <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void resumeStorageServices()} disabled={storageProtectionBusy || !storageProtectionRecoverable}>
+                        {storageProtectionBusy ? 'Working…' : 'Resume stopped'}
+                      </button>
+                    </div>
+                    <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel, color: storageProtectionStatus ? storageProtectionStatusColor : THEME.muted }}>
+                      {storageProtectionStatus || (storageProtectionRecoverable ? `${storageStoppedByWatchdog.length} service(s) awaiting manual resume` : 'No pending resume actions')}
+                    </p>
+                  </article>
+                ) : null}
+
                 <article className="hmstx-reveal hmstx-reveal-4 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
                   <div style={{ ...styles.logControlRow, ...styles.homeLogControlRow }}>
                     <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 0 }}>Optional Services</h3>
@@ -3684,6 +3852,32 @@ export default function Dashboard() {
             meta={[downloadServices.length > 0 ? `${downloadServices.filter((entry) => entry.status === 'working').length}/${downloadServices.length} working` : 'No clients', downloadsSummary]}
           >
             <div style={styles.surfaceStack}>
+              {storageProtection ? (
+                <article style={styles.card}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Storage Guard</h3>
+                      <p style={{ ...styles.smallLabel, color: storageProtectionTone }}>{storageProtectionSummary}</p>
+                    </div>
+                    <span style={{ ...styles.headerPill, color: storageProtectionTone }}>{storageProtection.state || 'unknown'}</span>
+                  </div>
+                  <p style={styles.smallLabel}>
+                    Blocked services: {storageBlockedServices.length > 0 ? storageBlockedServices.join(', ') : 'none'} · Stopped by watchdog: {storageStoppedByWatchdog.length}
+                  </p>
+                  <div style={styles.actionWrap}>
+                    <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void runStorageRecheck()} disabled={storageProtectionBusy}>
+                      {storageProtectionBusy ? 'Checking…' : 'Recheck Storage'}
+                    </button>
+                    <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void resumeStorageServices()} disabled={storageProtectionBusy || !storageProtectionRecoverable}>
+                      {storageProtectionBusy ? 'Working…' : 'Resume stopped'}
+                    </button>
+                  </div>
+                  <p style={{ ...styles.smallLabel, color: storageProtectionStatus ? storageProtectionStatusColor : THEME.muted }}>
+                    {storageProtectionStatus || (storageProtectionRecoverable ? `${storageStoppedByWatchdog.length} service(s) await manual resume` : 'No pending resume actions')}
+                  </p>
+                </article>
+              ) : null}
+
               <article style={styles.card}>
                 <div style={styles.sectionHeader}>
                   <div>

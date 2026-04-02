@@ -20,6 +20,7 @@ DRIVE_DETECT_DELAY="${DRIVE_DETECT_DELAY:-1}"
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
 MOUNT_RUNTIME_DIR="${MOUNT_RUNTIME_DIR:-$RUNTIME_DIR/mounts}"
 EXFAT_E_RAW_DIR="${EXFAT_E_RAW_DIR:-$MOUNT_RUNTIME_DIR/E-raw}"
+HMSTX_DRIVE_ROLE_FILE_NAME="${HMSTX_DRIVE_ROLE_FILE_NAME:-.hmstx-role.conf}"
 
 block_device_exists() {
     local device="$1"
@@ -176,4 +177,80 @@ mount_external_drive() {
     esac
 
     printf 'failed:%s\n' "$device"
+}
+
+list_external_drive_dirs() {
+    find "$DRIVES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+        | while IFS= read -r drive_dir; do
+            case "$(basename "$drive_dir")" in
+                C|PS4|.state)
+                    continue
+                    ;;
+                *)
+                    printf '%s\n' "$drive_dir"
+                    ;;
+            esac
+        done \
+        | sort
+}
+
+resolve_drive_dir() {
+    local token="$1"
+    local candidate=""
+    local normalized_token=""
+    local drive_dir=""
+    local base_name=""
+
+    case "$token" in
+        /*)
+            candidate="$token"
+            ;;
+        *)
+            candidate="$DRIVES_DIR/$token"
+            ;;
+    esac
+
+    if [ -d "$candidate" ]; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    normalized_token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -z "$normalized_token" ]; then
+        return 1
+    fi
+
+    while IFS= read -r drive_dir; do
+        [ -n "$drive_dir" ] || continue
+        base_name="$(basename "$drive_dir")"
+        case "$base_name" in
+            "$normalized_token"|"${normalized_token} "*)
+                printf '%s\n' "$drive_dir"
+                return 0
+                ;;
+        esac
+    done < <(list_external_drive_dirs)
+
+    return 1
+}
+
+drive_role_file_path() {
+    local drive_dir="$1"
+    printf '%s/%s\n' "$drive_dir" "$HMSTX_DRIVE_ROLE_FILE_NAME"
+}
+
+is_writable_dir() {
+    local directory="$1"
+    local probe="$directory/.hmstx-write-test.$$"
+
+    if ! mkdir -p "$directory" 2>/dev/null; then
+        return 1
+    fi
+
+    if ! : > "$probe" 2>/dev/null; then
+        return 1
+    fi
+
+    rm -f "$probe" 2>/dev/null || true
+    return 0
 }

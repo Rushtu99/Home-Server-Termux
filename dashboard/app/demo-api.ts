@@ -93,10 +93,12 @@ type DemoRemoteNode = {
 type DemoServiceCatalogEntry = {
   available: boolean;
   avgLatencyMs?: number | null;
+  blockedBy?: string;
+  blockedReason?: string;
   blocker?: string;
   controlMode: 'always_on' | 'optional';
   description: string;
-  group: 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads';
+  group: 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads' | 'ai';
   key: string;
   lastCheckedAt?: string | null;
   lastTransitionAt?: string | null;
@@ -104,9 +106,10 @@ type DemoServiceCatalogEntry = {
   latencyMs?: number | null;
   placeholder: boolean;
   route?: string;
-  status: 'working' | 'stopped' | 'stalled' | 'unavailable';
+  status: 'working' | 'stopped' | 'stalled' | 'unavailable' | 'blocked';
   statusReason?: string;
-  surface: 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
+  resumeRequired?: boolean;
+  surface: 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem' | 'ai';
   uptimePct?: number | null;
 };
 
@@ -133,6 +136,7 @@ const SERVICE_META: DemoServiceCatalogEntry[] = [
   { available: true, controlMode: 'optional', description: 'Device sync and backup across phones, laptops, and shares.', group: 'access', key: 'syncthing', label: 'Syncthing', placeholder: false, status: 'working', surface: 'home' },
   { available: true, controlMode: 'optional', description: 'LAN file sharing for desktop and TV clients.', group: 'access', key: 'samba', label: 'Samba', placeholder: false, status: 'stopped', surface: 'home' },
   { available: true, controlMode: 'optional', description: 'Shell access for maintenance and recovery.', group: 'access', key: 'sshd', label: 'sshd', placeholder: false, status: 'stopped', surface: 'home' },
+  { available: true, controlMode: 'optional', description: 'Local on-device inference using llama.cpp with selectable GGUF models.', group: 'ai', key: 'llm', label: 'Local LLM', placeholder: false, route: '/llm/', status: 'working', surface: 'ai' },
 ];
 
 const jsonResponse = (body: unknown, status = 200) =>
@@ -292,6 +296,19 @@ type DemoState = {
     user: string;
   };
   ftpFavourites: DemoFtpFavourite[];
+  llmActiveModelId: string;
+  llmApiKeyConfigured: boolean;
+  llmOnline: {
+    activeModelId: string;
+    available: boolean;
+    configured: boolean;
+    error: string;
+    models: Array<{ id: string; label: string }>;
+  };
+  llmConversations: Array<{ id: number; title: string; createdAt: string; updatedAt: string }>;
+  llmMessagesByConversation: Record<number, Array<{ id: number; role: 'user' | 'assistant' | 'system'; content: string; modelId: string; createdAt: string }>>;
+  llmModels: Array<{ id: string; label: string; source: 'preset' | 'custom'; path: string; installed: boolean }>;
+  llmPullJobs: Array<{ id: string; status: 'queued' | 'running' | 'success' | 'failed'; modelId: string; message: string; updatedAt: string }>;
   logs: DemoLog[];
   remoteNodes: Map<string, DemoRemoteNode>;
   serviceUnlockExpiresAt: string | null;
@@ -468,6 +485,28 @@ const seedState = (): DemoState => {
       user: 'anonymous',
     },
     ftpFavourites,
+    llmActiveModelId: 'qwen2.5-coder-1.5b-q4_k_m',
+    llmApiKeyConfigured: true,
+    llmOnline: {
+      activeModelId: 'gpt-4.1-mini',
+      available: true,
+      configured: true,
+      error: '',
+      models: [
+        { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+        { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+      ],
+    },
+    llmConversations: [],
+    llmMessagesByConversation: {},
+    llmModels: [
+      { id: 'qwen2.5-coder-1.5b-q4_k_m', label: 'Qwen2.5-Coder 1.5B Q4_K_M', source: 'preset', path: '~/services/llm/models/qwen2.5-coder-1.5b-q4_k_m/model.gguf', installed: false },
+      { id: 'qwen2.5-coder-3b-q4_k_m', label: 'Qwen2.5-Coder 3B Q4_K_M', source: 'preset', path: '~/services/llm/models/qwen2.5-coder-3b-q4_k_m/model.gguf', installed: true },
+      { id: 'qwen2.5-coder-7b-q4_k_m', label: 'Qwen2.5-Coder 7B Q4_K_M', source: 'preset', path: '~/services/llm/models/qwen2.5-coder-7b-q4_k_m/model.gguf', installed: false },
+      { id: 'mistral-7b-instruct-v0.3-q4_k_m', label: 'Mistral 7B Instruct v0.3 Q4_K_M', source: 'preset', path: '~/services/llm/models/mistral-7b-instruct-v0.3-q4_k_m/model.gguf', installed: false },
+      { id: 'llama-3.2-3b-instruct-q4_k_m', label: 'Llama 3.2 3B Instruct Q4_K_M', source: 'preset', path: '~/services/llm/models/llama-3.2-3b-instruct-q4_k_m/model.gguf', installed: false },
+    ],
+    llmPullJobs: [],
     logs: [
       { level: 'info', message: 'Demo mode bootstrapped', timestamp: currentTime },
       { level: 'info', message: 'Dashboard preview is using dummy data', timestamp: currentTime },
@@ -479,6 +518,7 @@ const seedState = (): DemoState => {
       copyparty: false,
       ftp: true,
       jellyfin: true,
+      llm: true,
       nginx: true,
       postgres: true,
       prowlarr: true,
@@ -508,7 +548,7 @@ const seedState = (): DemoState => {
 
 const demoState = seedState();
 
-const optionalServices = ['ftp', 'copyparty', 'syncthing', 'samba', 'sshd'];
+const optionalServices = ['ftp', 'copyparty', 'syncthing', 'samba', 'sshd', 'llm'];
 const demoServiceLatency: Record<string, number> = {
   copyparty: 0,
   ftp: 132,
@@ -524,6 +564,7 @@ const demoServiceLatency: Record<string, number> = {
   sshd: 0,
   syncthing: 94,
   ttyd: 61,
+  llm: 74,
 };
 
 const statusReasonForDemoService = (entry: DemoServiceCatalogEntry) => {
@@ -598,6 +639,9 @@ const aggregateCatalogStatus = (entries: DemoServiceCatalogEntry[]) => {
   if (entries.some((entry) => entry.status === 'working' || entry.status === 'stalled')) {
     return 'stalled';
   }
+  if (entries.some((entry) => entry.status === 'blocked')) {
+    return 'blocked';
+  }
   if (entries.some((entry) => entry.status === 'stopped')) {
     return 'stopped';
   }
@@ -655,6 +699,98 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       status: aggregateCatalogStatus(downloadEntries),
       summary: `${primaryDownloadEntry?.label || 'Download clients'} run in the dedicated Downloads tab. Save path: ~/Drives/Media/downloads/manual`,
       workspaceTab: 'downloads',
+    },
+    storage: {
+      compatibilityRoot: '~/Drives/Media',
+      vaultRoot: '~/Drives/D/VAULT/Media',
+      vaultRoots: ['~/Drives/D/VAULT/Media'],
+      scratchRoot: '~/Drives/E/SCRATCH/HmSTxScratch',
+      scratchRoots: ['~/Drives/E/SCRATCH/HmSTxScratch'],
+      importAbortFreeGb: 200,
+      vaultWarnFreeGb: 250,
+      scratchWarnFreeGb: 150,
+      scratchWarnUsedPercent: 85,
+      scratchRetentionDays: 30,
+      scratchMinFreeGb: 200,
+      scratchCleanupEnabled: true,
+      cleanupMode: 'hybrid_age_and_size',
+      importReviewDir: '~/Drives/E/SCRATCH/HmSTxScratch/review',
+      importLogDir: '~/Drives/E/SCRATCH/HmSTxScratch/logs',
+      transcodeDir: '~/Drives/E/SCRATCH/HmSTxScratch/cache/jellyfin',
+      miscCacheDir: '~/Drives/E/SCRATCH/HmSTxScratch/cache/misc',
+      qbitTempDir: '~/Drives/E/SCRATCH/HmSTxScratch/tmp/qbittorrent',
+      qbitDefaultSavePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual',
+      qbitCategoryPaths: {
+        manual: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual',
+        movies: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/movies',
+        series: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/series',
+      },
+      reviewQueueCount: 0,
+      importStatus: {
+        status: 'ok',
+        trigger: 'demo',
+        imported: 4,
+        skippedExisting: 1,
+        ambiguousReview: 0,
+        failed: 0,
+        collisionCount: 1,
+        scannedItems: 5,
+        aborted: false,
+        abortReason: '',
+        lastRunAt: nowIso(),
+      },
+      cleanupStatus: {
+        status: 'ok',
+        trigger: 'demo',
+        cleanupMode: 'hybrid_age_and_size',
+        scratchPressureBefore: false,
+        scratchPressureAfter: false,
+        deletedItems: 0,
+        deletedBytes: 0,
+        deletedCacheItems: 0,
+        deletedImportedItems: 0,
+        lastRunAt: nowIso(),
+      },
+      lastImportRunAt: nowIso(),
+      lastCleanupRunAt: nowIso(),
+      vault: {
+        freeGb: 721.42,
+        usedPercent: 81.3,
+        warning: false,
+      },
+      scratch: {
+        freeGb: 882.11,
+        usedPercent: 52.7,
+        warning: false,
+      },
+      protection: {
+        available: true,
+        blockedServices: [],
+        enabled: true,
+        generatedAt: nowIso(),
+        healthyStreak: 4,
+        lastDegradedAt: null,
+        lastHealthyAt: nowIso(),
+        lastTransitionAt: nowIso(),
+        manualResume: true,
+        overallHealthy: true,
+        reason: 'Storage healthy',
+        resumeRequired: false,
+        state: 'healthy',
+        stoppedByWatchdog: [],
+        vault: {
+          healthy: true,
+          reason: '',
+          drives: ['~/Drives/D'],
+          roots: ['~/Drives/D/VAULT/Media'],
+        },
+        scratch: {
+          healthy: true,
+          reason: '',
+          drives: ['~/Drives/E'],
+          roots: ['~/Drives/E/SCRATCH/HmSTxScratch'],
+        },
+      },
     },
     subtitles: {
       blocker: !subtitleEntry || !subtitleEntry.available ? subtitleEntry?.blocker || 'Subtitle automation is not installed in this demo host.' : null,
@@ -1020,6 +1156,20 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
   if (pathname === '/api/services' && method === 'GET') {
     return jsonResponse(buildServiceResponse(demoState));
   }
+  if (pathname === '/api/storage/protection' && method === 'GET') {
+    const protection = buildMediaWorkflow(demoState, buildServiceCatalog(demoState)).storage?.protection || null;
+    return jsonResponse({ events: [], storageProtection: protection });
+  }
+  if (pathname === '/api/storage/protection/recheck' && method === 'POST') {
+    const protection = buildMediaWorkflow(demoState, buildServiceCatalog(demoState)).storage?.protection || null;
+    pushLog(demoState, 'info', 'Demo storage recheck requested');
+    return jsonResponse({ success: true, storageProtection: protection });
+  }
+  if (pathname === '/api/storage/protection/resume' && method === 'POST') {
+    const protection = buildMediaWorkflow(demoState, buildServiceCatalog(demoState)).storage?.protection || null;
+    pushLog(demoState, 'info', 'Demo storage resume requested');
+    return jsonResponse({ success: true, resumed: [], failed: [], storageProtection: protection });
+  }
   if (pathname === '/api/control/unlock' && method === 'POST') {
     if (!String(body.adminPassword || '').trim()) {
       return jsonResponse({ error: 'Admin password is required' }, 400);
@@ -1051,6 +1201,186 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
     }
     pushLog(demoState, 'info', 'Demo service control used', { action, service });
     return jsonResponse({ expectedRunning: action !== 'stop', output: '(demo)', running: demoState.services[service], success: true });
+  }
+  if (pathname === '/api/llm/state' && method === 'GET') {
+    const activeModel = demoState.llmModels.find((entry) => entry.id === demoState.llmActiveModelId) || null;
+    return jsonResponse({
+      activeModel,
+      activeModelId: demoState.llmActiveModelId,
+      apiKeyConfigured: demoState.llmApiKeyConfigured,
+      available: true,
+      blocker: null,
+      models: clone(demoState.llmModels),
+      online: clone(demoState.llmOnline),
+      pullJobs: clone(demoState.llmPullJobs),
+      running: Boolean(demoState.services.llm),
+    });
+  }
+  if (pathname === '/api/llm/models/select' && method === 'POST') {
+    const modelId = String(body.modelId || '').trim();
+    const model = demoState.llmModels.find((entry) => entry.id === modelId) || null;
+    if (!model) {
+      return jsonResponse({ error: 'Model not found' }, 404);
+    }
+    if (!model.installed) {
+      return jsonResponse({ error: 'Model is not installed locally' }, 409);
+    }
+    demoState.llmActiveModelId = modelId;
+    pushLog(demoState, 'info', 'Demo model selected', { modelId });
+    return jsonResponse({ success: true, model, restartRequired: Boolean(demoState.services.llm) });
+  }
+  if (pathname === '/api/llm/models/add-local' && method === 'POST') {
+    const label = String(body.label || '').trim() || 'Custom GGUF';
+    const modelPath = String(body.path || '').trim();
+    if (!modelPath) {
+      return jsonResponse({ error: 'path is required' }, 400);
+    }
+    const modelId = `local-${Date.now()}`;
+    const model = { id: modelId, label, source: 'custom' as const, path: modelPath, installed: true };
+    demoState.llmModels.push(model);
+    pushLog(demoState, 'info', 'Demo local model added', { modelId, path: modelPath });
+    return jsonResponse({ success: true, model });
+  }
+  if (pathname === '/api/llm/models/pull' && method === 'POST') {
+    const modelId = String(body.modelId || '').trim();
+    const model = demoState.llmModels.find((entry) => entry.id === modelId) || null;
+    if (!model) {
+      return jsonResponse({ error: 'Preset model not found' }, 404);
+    }
+    if (model.installed) {
+      return jsonResponse({ success: true, alreadyInstalled: true, model });
+    }
+    const jobId = `pull-${Date.now()}`;
+    demoState.llmPullJobs.unshift({
+      id: jobId,
+      status: 'success',
+      modelId,
+      message: 'Download complete (demo)',
+      updatedAt: nowIso(),
+    });
+    model.installed = true;
+    pushLog(demoState, 'info', 'Demo model pull completed', { jobId, modelId });
+    return jsonResponse({ success: true, jobId, modelId });
+  }
+  if (pathname.startsWith('/api/llm/models/pull/') && method === 'GET') {
+    const jobId = pathname.split('/').pop() || '';
+    const job = demoState.llmPullJobs.find((entry) => entry.id === jobId) || null;
+    if (!job) {
+      return jsonResponse({ error: 'Pull job not found' }, 404);
+    }
+    return jsonResponse(job);
+  }
+  if (pathname === '/api/llm/online/models/refresh' && method === 'POST') {
+    return jsonResponse({ success: true, online: clone(demoState.llmOnline) });
+  }
+  if (pathname === '/api/llm/online/models/select' && method === 'POST') {
+    const modelId = String(body.modelId || '').trim();
+    const model = demoState.llmOnline.models.find((entry) => entry.id === modelId) || null;
+    if (!model) {
+      return jsonResponse({ error: 'A valid online model is required.' }, 400);
+    }
+    demoState.llmOnline.activeModelId = model.id;
+    pushLog(demoState, 'info', 'Demo online model selected', { modelId: model.id });
+    return jsonResponse({ success: true, model: clone(model) });
+  }
+  if (pathname === '/api/llm/conversations' && method === 'GET') {
+    return jsonResponse({ conversations: clone(demoState.llmConversations) });
+  }
+  if (pathname.startsWith('/api/llm/conversations/') && pathname.endsWith('/messages') && method === 'GET') {
+    const conversationId = Number(pathname.split('/')[4] || 0);
+    const conversation = demoState.llmConversations.find((entry) => entry.id === conversationId) || null;
+    if (!conversation) {
+      return jsonResponse({ error: 'Conversation not found' }, 404);
+    }
+    return jsonResponse({
+      conversation,
+      messages: clone(demoState.llmMessagesByConversation[conversationId] || []),
+    });
+  }
+  if (pathname.startsWith('/api/llm/conversations/') && method === 'DELETE') {
+    const conversationId = Number(pathname.split('/')[4] || 0);
+    demoState.llmConversations = demoState.llmConversations.filter((entry) => entry.id !== conversationId);
+    delete demoState.llmMessagesByConversation[conversationId];
+    return jsonResponse({ success: true, id: conversationId });
+  }
+  if (pathname === '/api/llm/chat' && method === 'POST') {
+    const text = String(body.message || '').trim();
+    if (!text) {
+      return jsonResponse({ error: 'message is required' }, 400);
+    }
+    const mode = String(body.mode || 'local').toLowerCase() === 'online' ? 'online' : 'local';
+    let conversationId = Number(body.conversationId || 0);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      conversationId = Math.max(0, ...demoState.llmConversations.map((entry) => entry.id)) + 1;
+      demoState.llmConversations.unshift({
+        id: conversationId,
+        title: text.slice(0, 80),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      });
+      demoState.llmMessagesByConversation[conversationId] = [];
+    }
+    const activeModelId = mode === 'online'
+      ? String(body.onlineModelId || demoState.llmOnline.activeModelId || '').trim()
+      : demoState.llmActiveModelId;
+    if (!activeModelId) {
+      return jsonResponse({ error: mode === 'online' ? 'A valid online model is required.' : 'No active local model selected.' }, 400);
+    }
+    const userMessage = { id: Date.now(), role: 'user' as const, content: text, modelId: activeModelId, createdAt: nowIso() };
+    const assistantMessage = {
+      id: Date.now() + 1,
+      role: 'assistant' as const,
+      content: mode === 'online'
+        ? `Demo online reply: processed "${text.slice(0, 120)}" with ${activeModelId}.`
+        : `Demo local reply: processed "${text.slice(0, 120)}" with ${activeModelId}.`,
+      modelId: activeModelId,
+      createdAt: nowIso(),
+    };
+    demoState.llmMessagesByConversation[conversationId] ||= [];
+    demoState.llmMessagesByConversation[conversationId].push(userMessage, assistantMessage);
+    const conversation = demoState.llmConversations.find((entry) => entry.id === conversationId);
+    if (conversation) {
+      conversation.updatedAt = nowIso();
+    }
+    return jsonResponse({ success: true, conversationId, assistantMessage, mode });
+  }
+  if (pathname === '/api/openai/v1/models' && method === 'GET') {
+    return jsonResponse({
+      object: 'list',
+      data: demoState.llmModels.filter((entry) => entry.installed).map((entry) => ({
+        id: entry.id,
+        object: 'model',
+        owned_by: entry.source,
+        created: 0,
+      })),
+      active_model: demoState.llmActiveModelId,
+    });
+  }
+  if (pathname === '/api/openai/v1/chat/completions' && method === 'POST') {
+    const incomingMessages = Array.isArray(body.messages) ? body.messages : [];
+    const lastUser = [...incomingMessages].reverse().find((entry) => String(entry?.role || '') === 'user');
+    const prompt = String(lastUser?.content || '').trim();
+    return jsonResponse({
+      id: `chatcmpl-demo-${Date.now()}`,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: demoState.llmActiveModelId,
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: `Demo OpenAI-compatible response for: ${prompt || 'no prompt'}`,
+          },
+        },
+      ],
+      usage: {
+        prompt_tokens: 42,
+        completion_tokens: 28,
+        total_tokens: 70,
+      },
+    });
   }
   if (pathname === '/api/logging' && method === 'POST') {
     demoState.verboseLoggingEnabled = Boolean(body.enabled);

@@ -4,10 +4,24 @@ set -euo pipefail
 
 USER_HOME="${HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
+if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
+    . "$PROJECT/scripts/drive-common.sh"
+fi
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
 LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
 MEDIA_SERVICES_HOME="${MEDIA_SERVICES_HOME:-$USER_HOME/services}"
 JELLYFIN_HOME="${JELLYFIN_HOME:-$MEDIA_SERVICES_HOME/jellyfin}"
+MEDIA_SCRATCH_DRIVES="${MEDIA_SCRATCH_DRIVES:-E}"
+DEFAULT_SCRATCH_DRIVE_DIR=""
+if type resolve_drive_dir >/dev/null 2>&1; then
+    DEFAULT_SCRATCH_DRIVE_DIR="$(resolve_drive_dir "${MEDIA_SCRATCH_DRIVES%%,*}" || true)"
+fi
+MEDIA_SCRATCH_ROOT="${MEDIA_SCRATCH_ROOT:-${DEFAULT_SCRATCH_DRIVE_DIR:+$DEFAULT_SCRATCH_DRIVE_DIR/SCRATCH/HmSTxScratch}}"
+if [ -z "$MEDIA_SCRATCH_ROOT" ]; then
+    MEDIA_SCRATCH_ROOT="$USER_HOME/Drives/E/SCRATCH/HmSTxScratch"
+fi
+MEDIA_TRANSCODE_DIR="${MEDIA_TRANSCODE_DIR:-$MEDIA_SCRATCH_ROOT/cache/jellyfin}"
+MEDIA_MISC_CACHE_DIR="${MEDIA_MISC_CACHE_DIR:-$MEDIA_SCRATCH_ROOT/cache/misc}"
 JELLYFIN_BIND_HOST="${JELLYFIN_BIND_HOST:-127.0.0.1}"
 JELLYFIN_PORT="${JELLYFIN_PORT:-8096}"
 JELLYFIN_PID_PATH="${JELLYFIN_PID_PATH:-$RUNTIME_DIR/jellyfin.pid}"
@@ -16,8 +30,10 @@ JELLYFIN_BIN="${JELLYFIN_BIN:-$(command -v jellyfin-server || command -v jellyfi
 JELLYFIN_DOTNET_ROOT="${JELLYFIN_DOTNET_ROOT:-/data/data/com.termux/files/usr/lib/dotnet}"
 JELLYFIN_WEB_DIR="${JELLYFIN_WEB_DIR:-/data/data/com.termux/files/usr/lib/jellyfin/jellyfin-web}"
 JELLYFIN_FFMPEG_BIN="${JELLYFIN_FFMPEG_BIN:-/data/data/com.termux/files/usr/opt/jellyfin/bin/ffmpeg}"
+JELLYFIN_CACHE_DIR="${JELLYFIN_CACHE_DIR:-${MEDIA_TRANSCODE_DIR:-$JELLYFIN_HOME/cache}}"
+JELLYFIN_MISC_CACHE_DIR="${JELLYFIN_MISC_CACHE_DIR:-${MEDIA_MISC_CACHE_DIR:-$JELLYFIN_HOME/cache}}"
 
-mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYFIN_HOME/cache" "$JELLYFIN_HOME/config" "$JELLYFIN_HOME/data"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYFIN_CACHE_DIR" "$JELLYFIN_MISC_CACHE_DIR" "$JELLYFIN_HOME/config" "$JELLYFIN_HOME/data"
 
 is_running() {
     local pid=""
@@ -39,16 +55,16 @@ start_service() {
     if command -v setsid >/dev/null 2>&1; then
         setsid env \
             HOME="$JELLYFIN_HOME" \
-            XDG_CACHE_HOME="$JELLYFIN_HOME/cache" \
+            XDG_CACHE_HOME="$JELLYFIN_MISC_CACHE_DIR" \
             XDG_CONFIG_HOME="$JELLYFIN_HOME/config" \
             JELLYFIN_DATA_DIR="$JELLYFIN_HOME/data" \
-            JELLYFIN_CACHE_DIR="$JELLYFIN_HOME/cache" \
+            JELLYFIN_CACHE_DIR="$JELLYFIN_CACHE_DIR" \
             DOTNET_ROOT="$JELLYFIN_DOTNET_ROOT" \
             ASPNETCORE_URLS="http://$JELLYFIN_BIND_HOST:$JELLYFIN_PORT" \
             "$JELLYFIN_BIN" \
             --service \
             --datadir "$JELLYFIN_HOME/data" \
-            --cachedir "$JELLYFIN_HOME/cache" \
+            --cachedir "$JELLYFIN_CACHE_DIR" \
             --configdir "$JELLYFIN_HOME/config" \
             --logdir "$LOG_DIR" \
             --webdir "$JELLYFIN_WEB_DIR" \
@@ -57,16 +73,16 @@ start_service() {
     else
         nohup env \
             HOME="$JELLYFIN_HOME" \
-            XDG_CACHE_HOME="$JELLYFIN_HOME/cache" \
+            XDG_CACHE_HOME="$JELLYFIN_MISC_CACHE_DIR" \
             XDG_CONFIG_HOME="$JELLYFIN_HOME/config" \
             JELLYFIN_DATA_DIR="$JELLYFIN_HOME/data" \
-            JELLYFIN_CACHE_DIR="$JELLYFIN_HOME/cache" \
+            JELLYFIN_CACHE_DIR="$JELLYFIN_CACHE_DIR" \
             DOTNET_ROOT="$JELLYFIN_DOTNET_ROOT" \
             ASPNETCORE_URLS="http://$JELLYFIN_BIND_HOST:$JELLYFIN_PORT" \
             "$JELLYFIN_BIN" \
             --service \
             --datadir "$JELLYFIN_HOME/data" \
-            --cachedir "$JELLYFIN_HOME/cache" \
+            --cachedir "$JELLYFIN_CACHE_DIR" \
             --configdir "$JELLYFIN_HOME/config" \
             --logdir "$LOG_DIR" \
             --webdir "$JELLYFIN_WEB_DIR" \

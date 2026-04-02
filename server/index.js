@@ -209,6 +209,10 @@ const RADARR_SERVICE_CMD = process.env.RADARR_SERVICE_CMD || path.join(ROOT_DIR,
 const PROWLARR_SERVICE_CMD = process.env.PROWLARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'prowlarr-service.sh');
 const BAZARR_SERVICE_CMD = process.env.BAZARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'bazarr-service.sh');
 const JELLYSEERR_SERVICE_CMD = process.env.JELLYSEERR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'jellyseerr-service.sh');
+const MEDIA_WORKFLOW_SERVICE_CMD = process.env.MEDIA_WORKFLOW_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'media-workflow-service.sh');
+const STORAGE_WATCHDOG_SERVICE_CMD = process.env.STORAGE_WATCHDOG_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'storage-watchdog-service.sh');
+const STORAGE_WATCHDOG_STATE_FILE = process.env.STORAGE_WATCHDOG_STATE_FILE || path.join(RUNTIME_DIR, 'storage-watchdog-state.json');
+const STORAGE_WATCHDOG_EVENTS_FILE = process.env.STORAGE_WATCHDOG_EVENTS_FILE || path.join(RUNTIME_DIR, 'storage-watchdog-events.jsonl');
 const SONARR_BASE_PATH = process.env.SONARR_BASE_PATH || '/sonarr';
 const RADARR_BASE_PATH = process.env.RADARR_BASE_PATH || '/radarr';
 const PROWLARR_BASE_PATH = process.env.PROWLARR_BASE_PATH || '/prowlarr';
@@ -1316,7 +1320,7 @@ const checkServiceHealth = async (serviceName, svc) => {
   };
 };
 
-const inspectServiceCatalogEntry = async (name, meta) => {
+const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
   const svc = SERVICES[name];
   let available = true;
   let blocker = '';
@@ -1343,9 +1347,13 @@ const inspectServiceCatalogEntry = async (name, meta) => {
     }
   }
 
-  const status = !available
+  let status = !available
     ? 'unavailable'
     : (running ? 'working' : meta.controlMode === 'optional' ? 'stopped' : 'stalled');
+  const storageBlock = getStorageBlockForService(name, storageProtection);
+  if (storageBlock.blocked) {
+    status = 'blocked';
+  }
   const stats = recordServiceObservation(name, status, latencyMs);
 
   const entry = {
@@ -1368,15 +1376,24 @@ const inspectServiceCatalogEntry = async (name, meta) => {
     uptimePct: stats.uptimePct,
   };
 
-  entry.statusReason = statusReasonForService(entry);
+  if (storageBlock.blocked) {
+    entry.blockedBy = 'storage_watchdog';
+    entry.blockedReason = storageBlock.reason;
+    entry.resumeRequired = Boolean(storageBlock.resumeRequired);
+    entry.statusReason = storageBlock.reason;
+    entry.blocker = storageBlock.reason;
+  } else {
+    entry.statusReason = statusReasonForService(entry);
+  }
   return entry;
 };
 
 const buildServiceCatalog = async () => {
   const entries = [];
+  const storageProtection = readStorageProtectionState();
 
   for (const [name, meta] of Object.entries(SERVICE_CATALOG_META)) {
-    entries.push(await inspectServiceCatalogEntry(name, meta));
+    entries.push(await inspectServiceCatalogEntry(name, meta, storageProtection));
   }
 
   return entries;
@@ -1401,6 +1418,9 @@ const aggregateCatalogStatus = (entries) => {
   if (entries.some((entry) => entry.status === 'working' || entry.status === 'stalled')) {
     return 'stalled';
   }
+  if (entries.some((entry) => entry.status === 'blocked')) {
+    return 'blocked';
+  }
   if (entries.some((entry) => entry.status === 'stopped')) {
     return 'stopped';
   }
@@ -1408,6 +1428,7 @@ const aggregateCatalogStatus = (entries) => {
 };
 
 const buildMediaWorkflowSnapshot = (catalog) => {
+  const storageProtection = readStorageProtectionState();
   const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
   const watchEntry = catalogByKey.get('jellyfin') || null;
   const requestEntry = catalogByKey.get('jellyseerr') || null;
@@ -1500,6 +1521,16 @@ const buildMediaWorkflowSnapshot = (catalog) => {
         : playlistConfigured || guideConfigured
           ? 'stalled'
           : 'setup';
+  const watchSummary = watchEntry?.status === 'blocked'
+    ? watchEntry.statusReason || 'Watch stack is blocked by storage protection.'
+    : libraryRootReady
+      ? `Library roots ready at ${libraryRoots.join(' and ')}`
+      : `Library roots missing under ${MEDIA_VAULT_ROOT}`;
+  const downloadsSummary = primaryDownloadEntry?.status === 'blocked'
+    ? primaryDownloadEntry.statusReason || 'Downloads are blocked by storage protection.'
+    : downloadEntries.length > 0
+      ? `${primaryDownloadEntry?.label || 'Download clients'} run in the Downloads tab. Save path: ${qbittorrentConfig.defaultSavePath || downloadRoots.join(' and ')}`
+      : 'No download clients are configured yet.';
 
   return {
     watch: {
@@ -1507,9 +1538,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
       libraryRoots,
       serviceKeys: watchEntry ? [watchEntry.key] : [],
       status: watchEntry?.status || 'unavailable',
-      summary: libraryRootReady
-        ? `Library roots ready at ${libraryRoots.join(' and ')}`
-        : `Library roots missing under ${MEDIA_VAULT_ROOT}`,
+      summary: watchSummary,
     },
     requests: {
       blocker: requestsBlocked ? requestEntry?.blocker || 'Request portal is not installed on this host yet.' : null,
@@ -1539,9 +1568,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
       primaryServiceKey: primaryDownloadEntry?.key || null,
       serviceKeys: downloadEntries.map((entry) => entry.key),
       status: downloadsStatus,
-      summary: downloadEntries.length > 0
-        ? `${primaryDownloadEntry?.label || 'Download clients'} run in the Downloads tab. Save path: ${qbittorrentConfig.defaultSavePath || downloadRoots.join(' and ')}`
-        : 'No download clients are configured yet.',
+      summary: downloadsSummary,
       workspaceTab: 'downloads',
     },
     storage: {
@@ -1596,6 +1623,24 @@ const buildMediaWorkflowSnapshot = (catalog) => {
         usedPercent: Number(scratchUsage.usedPercent.toFixed(2)),
         warning: scratchWarning,
       } : null,
+      protection: {
+        available: storageProtection.available,
+        blockedServices: storageProtection.blockedServices,
+        enabled: storageProtection.enabled,
+        generatedAt: storageProtection.generatedAt,
+        healthyStreak: storageProtection.healthyStreak,
+        lastDegradedAt: storageProtection.lastDegradedAt,
+        lastHealthyAt: storageProtection.lastHealthyAt,
+        lastTransitionAt: storageProtection.lastTransitionAt,
+        manualResume: storageProtection.manualResume,
+        overallHealthy: storageProtection.overallHealthy,
+        reason: storageProtection.reason,
+        resumeRequired: storageProtection.resumeRequired,
+        state: storageProtection.state,
+        stoppedByWatchdog: storageProtection.stoppedByWatchdog,
+        vault: storageProtection.vault,
+        scratch: storageProtection.scratch,
+      },
     },
     subtitles: {
       blocker: !subtitleEntry || !subtitleEntry.available ? subtitleEntry?.blocker || 'Subtitle automation is not installed on this host.' : null,
@@ -2269,6 +2314,7 @@ const getMonitorSnapshot = () => withTimedCache('monitor', 1500, collectMonitorS
 
 const collectServicesSnapshot = async () => {
   const result = {};
+  const storageProtection = readStorageProtectionState();
 
   for (const name of Object.keys(SERVICE_CATALOG_META)) {
     if (name === 'sshd' && !ENABLE_SSHD) {
@@ -2282,7 +2328,12 @@ const collectServicesSnapshot = async () => {
     const svc = SERVICES[name];
     const install = await resolveServiceInstall(name, svc);
     if (install.available) {
-      result[name] = await checkService(svc);
+      const storageBlock = getStorageBlockForService(name, storageProtection);
+      if (storageBlock.blocked) {
+        result[name] = false;
+      } else {
+        result[name] = await checkService(svc);
+      }
     }
   }
 
@@ -2376,6 +2427,160 @@ const readJsonLines = (filePath, limit = 80) => {
       .filter(Boolean);
   } catch {
     return [];
+  }
+};
+
+const writeJsonFileAtomic = (filePath, payload) => {
+  const directoryPath = path.dirname(filePath);
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.mkdirSync(directoryPath, { recursive: true });
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2));
+  fs.renameSync(tmpPath, filePath);
+};
+
+const normalizeStringArray = (value) =>
+  (Array.isArray(value) ? value : [])
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean);
+
+const normalizeStorageRoleState = (value = {}) => ({
+  drives: normalizeStringArray(value?.drives),
+  healthy: value?.healthy !== false,
+  reason: String(value?.reason || ''),
+  roots: normalizeStringArray(value?.roots),
+});
+
+const readStorageProtectionState = () => {
+  const raw = readJsonFile(STORAGE_WATCHDOG_STATE_FILE, null);
+  const fallbackRole = {
+    drives: [],
+    healthy: true,
+    reason: '',
+    roots: [],
+  };
+  const fallbackState = {
+    available: fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD),
+    blockedServices: [],
+    enabled: fs.existsSync(STORAGE_WATCHDOG_STATE_FILE),
+    generatedAt: null,
+    healthyStreak: 0,
+    lastDegradedAt: null,
+    lastHealthyAt: null,
+    lastTransitionAt: null,
+    manualResume: true,
+    overallHealthy: true,
+    reason: '',
+    resumeRequired: false,
+    schema: 1,
+    state: 'unknown',
+    stoppedByWatchdog: [],
+    vault: fallbackRole,
+    scratch: fallbackRole,
+  };
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return fallbackState;
+  }
+
+  const blockedServices = normalizeStringArray(raw.blockedServices);
+  const stoppedByWatchdog = normalizeStringArray(raw.stoppedByWatchdog);
+
+  return {
+    available: fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD),
+    blockedServices,
+    enabled: true,
+    generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : null,
+    healthyStreak: Math.max(0, Number(raw.healthyStreak || 0) || 0),
+    lastDegradedAt: typeof raw.lastDegradedAt === 'string' ? raw.lastDegradedAt : null,
+    lastHealthyAt: typeof raw.lastHealthyAt === 'string' ? raw.lastHealthyAt : null,
+    lastTransitionAt: typeof raw.lastTransitionAt === 'string' ? raw.lastTransitionAt : null,
+    manualResume: raw.manualResume !== false,
+    overallHealthy: Boolean(raw.overallHealthy),
+    reason: String(raw.reason || ''),
+    resumeRequired: Boolean(raw.resumeRequired) && stoppedByWatchdog.length > 0,
+    schema: Math.max(1, Number(raw.schema || 1) || 1),
+    state: String(raw.state || (blockedServices.length > 0 ? 'degraded' : 'healthy')),
+    stoppedByWatchdog,
+    vault: normalizeStorageRoleState(raw.vault || {}),
+    scratch: normalizeStorageRoleState(raw.scratch || {}),
+  };
+};
+
+const buildStorageBlockReasonForService = (serviceName, storageProtection) => {
+  const vaultHealthy = storageProtection?.vault?.healthy !== false;
+  const scratchHealthy = storageProtection?.scratch?.healthy !== false;
+
+  if (!vaultHealthy && !scratchHealthy) {
+    return 'Blocked by storage watchdog: vault and scratch are unavailable.';
+  }
+
+  if (!scratchHealthy && ['qbittorrent', 'media-workflow'].includes(serviceName)) {
+    const detail = storageProtection?.scratch?.reason || storageProtection?.reason || 'scratch storage unavailable';
+    return `Blocked by storage watchdog: ${detail}`;
+  }
+
+  if (!vaultHealthy && ['jellyfin', 'bazarr', 'media-workflow'].includes(serviceName)) {
+    const detail = storageProtection?.vault?.reason || storageProtection?.reason || 'vault storage unavailable';
+    return `Blocked by storage watchdog: ${detail}`;
+  }
+
+  if (storageProtection?.reason) {
+    return `Blocked by storage watchdog: ${storageProtection.reason}`;
+  }
+
+  return 'Blocked by storage watchdog: required media storage is unavailable.';
+};
+
+const getStorageBlockForService = (serviceName, storageProtection) => {
+  if (!storageProtection || !Array.isArray(storageProtection.blockedServices)) {
+    return { blocked: false, reason: '' };
+  }
+
+  if (!storageProtection.blockedServices.includes(serviceName)) {
+    return { blocked: false, reason: '' };
+  }
+
+  return {
+    blocked: true,
+    reason: buildStorageBlockReasonForService(serviceName, storageProtection),
+    resumeRequired: Boolean(storageProtection.resumeRequired)
+      && Array.isArray(storageProtection.stoppedByWatchdog)
+      && storageProtection.stoppedByWatchdog.includes(serviceName),
+  };
+};
+
+const clearStorageResumeRequirementForService = (serviceName) => {
+  try {
+    if (!fs.existsSync(STORAGE_WATCHDOG_STATE_FILE)) {
+      return false;
+    }
+
+    const raw = readJsonFile(STORAGE_WATCHDOG_STATE_FILE, null);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return false;
+    }
+
+    const stoppedByWatchdog = normalizeStringArray(raw.stoppedByWatchdog)
+      .filter((entry) => entry !== serviceName);
+    const nextState = {
+      ...raw,
+      generatedAt: new Date().toISOString(),
+      stoppedByWatchdog,
+    };
+
+    if (stoppedByWatchdog.length === 0 && Boolean(raw.overallHealthy)) {
+      nextState.resumeRequired = false;
+      if (String(nextState.state || '') === 'recovered') {
+        nextState.state = 'healthy';
+      }
+    } else if (stoppedByWatchdog.length > 0) {
+      nextState.resumeRequired = true;
+    }
+
+    writeJsonFileAtomic(STORAGE_WATCHDOG_STATE_FILE, nextState);
+    return true;
+  } catch {
+    return false;
   }
 };
 
@@ -4244,8 +4449,20 @@ const controlHandler = async (req, res) => {
 
   try {
     const svc = SERVICES[service];
+    const storageProtection = readStorageProtectionState();
+    const storageBlock = getStorageBlockForService(service, storageProtection);
 
     if (['start', 'restart'].includes(action)) {
+        if (storageBlock.blocked) {
+          const error = storageBlock.reason || 'Service is blocked by storage watchdog';
+          pushAuditEvent(req, 'warn', `${service} ${action} blocked by storage watchdog`, { service, action, error });
+          return res.status(423).json({
+            error,
+            blockedBy: 'storage_watchdog',
+            service,
+            state: storageProtection.state,
+          });
+        }
         const install = await resolveServiceInstall(service, svc);
         if (!install.available) {
           const error = `Command '${install.label}' is not installed`;
@@ -4265,6 +4482,9 @@ const controlHandler = async (req, res) => {
       `${service} ${action} requested`,
       { running, expectedRunning, output: output || '(no output)', service, action }
     );
+    if (running && expectedRunning && ['start', 'restart'].includes(action)) {
+      clearStorageResumeRequirementForService(service);
+    }
     res.json({
       success: running === expectedRunning,
       running,
@@ -4403,6 +4623,125 @@ const drivesCheckHandler = async (req, res) => {
     pushAuditEvent(req, 'error', 'Drive agent scan failed', { error });
     return res.status(500).json({ error, ...(await getDriveSnapshot()) });
   }
+};
+
+const storageProtectionHandler = (req, res) => {
+  res.json({
+    events: readJsonLines(STORAGE_WATCHDOG_EVENTS_FILE, 80),
+    storageProtection: readStorageProtectionState(),
+  });
+};
+
+const storageProtectionRecheckHandler = async (req, res) => {
+  const helperAvailable = fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD) || await commandExists(STORAGE_WATCHDOG_SERVICE_CMD);
+  if (!helperAvailable) {
+    return res.status(503).json({
+      error: `Storage watchdog helper is not installed at ${STORAGE_WATCHDOG_SERVICE_CMD}`,
+      storageProtection: readStorageProtectionState(),
+    });
+  }
+
+  try {
+    await runCommand(`"${STORAGE_WATCHDOG_SERVICE_CMD}" check-now`);
+    const payload = readStorageProtectionState();
+    pushAuditEvent(req, 'info', 'Storage watchdog recheck requested', {
+      blockedServices: payload.blockedServices.length,
+      state: payload.state,
+    });
+    return res.json({
+      success: true,
+      storageProtection: payload,
+    });
+  } catch (err) {
+    const error = String(err || 'Storage watchdog recheck failed');
+    pushAuditEvent(req, 'error', 'Storage watchdog recheck failed', { error });
+    return res.status(500).json({
+      error,
+      storageProtection: readStorageProtectionState(),
+    });
+  }
+};
+
+const storageProtectionResumeHandler = async (req, res) => {
+  const currentState = readStorageProtectionState();
+
+  if (!currentState.overallHealthy || currentState.state === 'degraded') {
+    return res.status(409).json({
+      error: currentState.reason || 'Storage is still degraded',
+      storageProtection: currentState,
+    });
+  }
+
+  const pending = normalizeStringArray(currentState.stoppedByWatchdog);
+  if (pending.length === 0) {
+    return res.json({ success: true, resumed: [], failed: [], storageProtection: currentState });
+  }
+
+  const resumed = [];
+  const failed = [];
+
+  for (const service of pending) {
+    const latestState = readStorageProtectionState();
+    const storageBlock = getStorageBlockForService(service, latestState);
+    if (storageBlock.blocked) {
+      failed.push({ service, error: storageBlock.reason || 'Still blocked by storage watchdog' });
+      continue;
+    }
+
+    try {
+      if (service === 'media-workflow') {
+        if (!fileIsExecutable(MEDIA_WORKFLOW_SERVICE_CMD)) {
+          failed.push({ service, error: `Missing helper ${MEDIA_WORKFLOW_SERVICE_CMD}` });
+          continue;
+        }
+        await runCommand(`"${MEDIA_WORKFLOW_SERVICE_CMD}" start`);
+        try {
+          await runCommand(`"${MEDIA_WORKFLOW_SERVICE_CMD}" status`);
+        } catch {
+          failed.push({ service, error: 'media-workflow did not report healthy state after start' });
+          continue;
+        }
+      } else {
+        const svc = SERVICES[service];
+        if (!svc) {
+          failed.push({ service, error: 'Service is not managed by this controller' });
+          continue;
+        }
+
+        const install = await resolveServiceInstall(service, svc);
+        if (!install.available) {
+          failed.push({ service, error: `Command '${install.label}' is not installed` });
+          continue;
+        }
+
+        await runCommand(svc.start);
+        const running = await waitForServiceState(svc, true);
+        if (!running) {
+          failed.push({ service, error: 'Service failed to become healthy after start' });
+          continue;
+        }
+      }
+
+      resumed.push(service);
+      clearStorageResumeRequirementForService(service);
+    } catch (err) {
+      failed.push({ service, error: String(err || 'Unable to start service') });
+    }
+  }
+
+  const nextState = readStorageProtectionState();
+  const success = failed.length === 0;
+  pushAuditEvent(req, success ? 'info' : 'warn', 'Storage resume requested', {
+    failed,
+    resumed,
+    state: nextState.state,
+  });
+  return res.status(success ? 200 : 207).json({
+    success,
+    resumed,
+    failed,
+    storageProtection: nextState,
+  });
 };
 
 const sanitizeShareName = (value = '') => String(value || '').replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -5156,6 +5495,9 @@ registerDualRoute('get', '/dashboard', requireAuth, requireAdmin, dashboardHandl
 registerDualRoute('get', '/connections', requireAuth, requireAdmin, connectionsHandler);
 registerDualRoute('post', '/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
 registerDualRoute('get', '/storage', requireAuth, requireAdmin, storageHandler);
+registerDualRoute('get', '/storage/protection', requireAuth, requireAdmin, storageProtectionHandler);
+registerDualRoute('post', '/storage/protection/recheck', requireAuth, requireAdmin, storageProtectionRecheckHandler);
+registerDualRoute('post', '/storage/protection/resume', requireAuth, requireAdmin, storageProtectionResumeHandler);
 registerDualRoute('get', '/logs', requireAuth, requireAdmin, logsHandler);
 registerDualRoute('get', '/logging', requireAuth, requireAdmin, loggingGetHandler);
 registerDualRoute('post', '/logging', requireAuth, requireAdmin, loggingPostHandler);
