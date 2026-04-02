@@ -79,6 +79,21 @@ ENABLE_SSHD="${ENABLE_SSHD:-false}"
 DRIVE_AGENT_CMD="${DRIVE_AGENT_CMD:-/data/data/com.termux/files/usr/bin/termux-drive-agent}"
 TERMUX_CLOUD_MOUNT_CMD="${TERMUX_CLOUD_MOUNT_CMD:-/data/data/com.termux/files/usr/bin/termux-cloud-mount}"
 LOOPBACK_LOCKDOWN_CMD="${LOOPBACK_LOCKDOWN_CMD:-$PROJECT/scripts/loopback-lockdown.sh}"
+LLM_SERVICE_CMD="${LLM_SERVICE_CMD:-$PROJECT/scripts/llm-service.sh}"
+MEDIA_IMPORTER_CMD="${MEDIA_IMPORTER_CMD:-$PROJECT/scripts/media-importer.sh}"
+MEDIA_WORKFLOW_SERVICE_CMD="${MEDIA_WORKFLOW_SERVICE_CMD:-$PROJECT/scripts/media-workflow-service.sh}"
+REDIS_SERVICE_CMD="${REDIS_SERVICE_CMD:-$PROJECT/scripts/redis-service.sh}"
+POSTGRES_SERVICE_CMD="${POSTGRES_SERVICE_CMD:-$PROJECT/scripts/postgres-service.sh}"
+JELLYFIN_SERVICE_CMD="${JELLYFIN_SERVICE_CMD:-$PROJECT/scripts/jellyfin-service.sh}"
+QBITTORRENT_SERVICE_CMD="${QBITTORRENT_SERVICE_CMD:-$PROJECT/scripts/qbittorrent-service.sh}"
+SONARR_SERVICE_CMD="${SONARR_SERVICE_CMD:-$PROJECT/scripts/sonarr-service.sh}"
+RADARR_SERVICE_CMD="${RADARR_SERVICE_CMD:-$PROJECT/scripts/radarr-service.sh}"
+PROWLARR_SERVICE_CMD="${PROWLARR_SERVICE_CMD:-$PROJECT/scripts/prowlarr-service.sh}"
+BAZARR_SERVICE_CMD="${BAZARR_SERVICE_CMD:-$PROJECT/scripts/bazarr-service.sh}"
+JELLYSEERR_SERVICE_CMD="${JELLYSEERR_SERVICE_CMD:-$PROJECT/scripts/jellyseerr-service.sh}"
+LLM_BIND_HOST="${LLM_BIND_HOST:-127.0.0.1}"
+LLM_PORT="${LLM_PORT:-11435}"
+LLM_AUTO_START="${LLM_AUTO_START:-true}"
 
 BACKEND_PID_PATH="${BACKEND_PID_PATH:-$RUNTIME_DIR/backend.pid}"
 FRONTEND_PID_PATH="${FRONTEND_PID_PATH:-$RUNTIME_DIR/frontend.pid}"
@@ -96,6 +111,8 @@ RADARR_PID_PATH="${RADARR_PID_PATH:-$RUNTIME_DIR/radarr.pid}"
 PROWLARR_PID_PATH="${PROWLARR_PID_PATH:-$RUNTIME_DIR/prowlarr.pid}"
 BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
 JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
+LLM_PID_PATH="${LLM_PID_PATH:-$RUNTIME_DIR/llm.pid}"
+MEDIA_WORKFLOW_PID_PATH="${MEDIA_WORKFLOW_PID_PATH:-$RUNTIME_DIR/media-workflow.pid}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 FRONTEND_BIND_HOST="${FRONTEND_BIND_HOST:-}"
 if [ -z "$FRONTEND_BIND_HOST" ]; then
@@ -107,14 +124,49 @@ if [ -z "$FRONTEND_BIND_HOST" ]; then
 fi
 MEDIA_SHARE_NAME="${MEDIA_SHARE_NAME:-Media}"
 MEDIA_ROOT="${MEDIA_ROOT:-$FILESYSTEM_ROOT/$MEDIA_SHARE_NAME}"
-MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-$MEDIA_ROOT/movies}"
-MEDIA_SERIES_DIR="${MEDIA_SERIES_DIR:-$MEDIA_ROOT/series}"
-MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-$MEDIA_ROOT/downloads}"
-MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-$MEDIA_DOWNLOADS_DIR/movies}"
-MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-$MEDIA_DOWNLOADS_DIR/series}"
-MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-$MEDIA_DOWNLOADS_DIR/manual}"
-MEDIA_IPTV_CACHE_DIR="${MEDIA_IPTV_CACHE_DIR:-$MEDIA_ROOT/iptv-cache}"
-MEDIA_IPTV_EPG_DIR="${MEDIA_IPTV_EPG_DIR:-$MEDIA_ROOT/iptv-epg}"
+HMSTX_DRIVE_ROLE_FILE_NAME="${HMSTX_DRIVE_ROLE_FILE_NAME:-.hmstx-role.conf}"
+MEDIA_VAULT_DRIVES="${MEDIA_VAULT_DRIVES:-D}"
+MEDIA_SCRATCH_DRIVES="${MEDIA_SCRATCH_DRIVES:-E}"
+MEDIA_VAULT_DIR_NAME="${MEDIA_VAULT_DIR_NAME:-VAULT}"
+MEDIA_SCRATCH_DIR_NAME="${MEDIA_SCRATCH_DIR_NAME:-SCRATCH}"
+MEDIA_VAULT_MEDIA_SUBDIR="${MEDIA_VAULT_MEDIA_SUBDIR:-Media}"
+MEDIA_SCRATCH_MEDIA_SUBDIR="${MEDIA_SCRATCH_MEDIA_SUBDIR:-HmSTxScratch}"
+MEDIA_LAYOUT_STRICT="${MEDIA_LAYOUT_STRICT:-false}"
+MEDIA_LAYOUT_AUTO_ADOPT_EMPTY="${MEDIA_LAYOUT_AUTO_ADOPT_EMPTY:-true}"
+MEDIA_VAULT_ROOTS="${MEDIA_VAULT_ROOTS:-}"
+MEDIA_SCRATCH_ROOTS="${MEDIA_SCRATCH_ROOTS:-}"
+MEDIA_VAULT_ROOT="${MEDIA_VAULT_ROOT:-}"
+MEDIA_SCRATCH_ROOT="${MEDIA_SCRATCH_ROOT:-}"
+MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-}"
+MEDIA_SERIES_DIR="${MEDIA_SERIES_DIR:-}"
+MEDIA_MUSIC_DIR="${MEDIA_MUSIC_DIR:-}"
+MEDIA_AUDIOBOOKS_DIR="${MEDIA_AUDIOBOOKS_DIR:-}"
+MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-}"
+MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-}"
+MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-}"
+MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-}"
+MEDIA_IMPORT_REVIEW_DIR="${MEDIA_IMPORT_REVIEW_DIR:-}"
+MEDIA_IMPORT_LOG_DIR="${MEDIA_IMPORT_LOG_DIR:-}"
+MEDIA_TRANSCODE_DIR="${MEDIA_TRANSCODE_DIR:-}"
+MEDIA_MISC_CACHE_DIR="${MEDIA_MISC_CACHE_DIR:-}"
+MEDIA_IPTV_CACHE_DIR="${MEDIA_IPTV_CACHE_DIR:-}"
+MEDIA_IPTV_EPG_DIR="${MEDIA_IPTV_EPG_DIR:-}"
+MEDIA_QBIT_TMP_DIR="${MEDIA_QBIT_TMP_DIR:-}"
+MEDIA_IMPORT_ABORT_FREE_GB="${MEDIA_IMPORT_ABORT_FREE_GB:-200}"
+MEDIA_VAULT_WARN_FREE_GB="${MEDIA_VAULT_WARN_FREE_GB:-250}"
+MEDIA_SCRATCH_WARN_FREE_GB="${MEDIA_SCRATCH_WARN_FREE_GB:-150}"
+MEDIA_SCRATCH_WARN_USED_PERCENT="${MEDIA_SCRATCH_WARN_USED_PERCENT:-85}"
+MEDIA_SCRATCH_RETENTION_DAYS="${MEDIA_SCRATCH_RETENTION_DAYS:-30}"
+MEDIA_SCRATCH_MIN_FREE_GB="${MEDIA_SCRATCH_MIN_FREE_GB:-200}"
+MEDIA_SCRATCH_CLEANUP_ENABLED="${MEDIA_SCRATCH_CLEANUP_ENABLED:-true}"
+MEDIA_VAULT_EXPECT_MIN_GB="${MEDIA_VAULT_EXPECT_MIN_GB:-3000}"
+MEDIA_SCRATCH_EXPECT_MIN_GB="${MEDIA_SCRATCH_EXPECT_MIN_GB:-1400}"
+MEDIA_PREFLIGHT_FAIL_CLOSED="${MEDIA_PREFLIGHT_FAIL_CLOSED:-false}"
+START_LOCK_DIR="${START_LOCK_DIR:-$RUNTIME_DIR/start.lock.d}"
+
+if [ "$MEDIA_PREFLIGHT_FAIL_CLOSED" = "true" ] && [ "$MEDIA_LAYOUT_STRICT" != "true" ]; then
+    MEDIA_LAYOUT_STRICT="true"
+fi
 
 mkdir -p "$LOG_DIR" "$RUNTIME_DIR" "$MOUNT_RUNTIME_DIR"
 START_LOG="$LOG_DIR/start.log"
@@ -139,6 +191,50 @@ log_error() {
 HOTKEY_PID=""
 RELOAD_REQUESTED=0
 
+acquire_start_lock() {
+    local lock_pid_file="$START_LOCK_DIR/pid"
+    local existing_pid=""
+
+    if mkdir "$START_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$lock_pid_file"
+        return 0
+    fi
+
+    if [ -f "$lock_pid_file" ]; then
+        existing_pid="$(tr -d '[:space:]' < "$lock_pid_file" 2>/dev/null || true)"
+        if [ -n "$existing_pid" ] && [ "$existing_pid" = "$$" ]; then
+            return 0
+        fi
+        if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+            log_error "Another start.sh instance is already running (pid $existing_pid)"
+            exit 1
+        fi
+    fi
+
+    rm -rf "$START_LOCK_DIR" 2>/dev/null || true
+    if mkdir "$START_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$lock_pid_file"
+        return 0
+    fi
+
+    log_error "Unable to acquire startup lock at $START_LOCK_DIR"
+    exit 1
+}
+
+release_start_lock() {
+    local lock_pid_file="$START_LOCK_DIR/pid"
+    local lock_pid=""
+
+    if [ ! -f "$lock_pid_file" ]; then
+        return 0
+    fi
+
+    lock_pid="$(tr -d '[:space:]' < "$lock_pid_file" 2>/dev/null || true)"
+    if [ "$lock_pid" = "$$" ]; then
+        rm -rf "$START_LOCK_DIR" 2>/dev/null || true
+    fi
+}
+
 stop_hotkey_listener() {
     if [ -n "${HOTKEY_PID:-}" ] && kill -0 "$HOTKEY_PID" 2>/dev/null; then
         kill "$HOTKEY_PID" 2>/dev/null || true
@@ -150,25 +246,29 @@ stop_hotkey_listener() {
 ensure_node_dependencies() {
     local app_dir="$1"
     local label="$2"
+    local stale=0
 
     [ -f "$app_dir/package.json" ] || return 0
 
     if [ ! -d "$app_dir/node_modules" ]; then
-        log_info "Installing $label dependencies"
-        (cd "$app_dir" && npm install --no-fund --no-audit)
-        return 0
+        log_error "$label dependencies missing in $app_dir; run 'npm install' before starting."
+        return 1
     fi
 
     if [ -f "$app_dir/package-lock.json" ] && [ "$app_dir/package-lock.json" -nt "$app_dir/node_modules" ]; then
-        log_info "Refreshing $label dependencies"
-        (cd "$app_dir" && npm install --no-fund --no-audit)
-        return 0
+        stale=1
     fi
 
     if [ "$app_dir/package.json" -nt "$app_dir/node_modules" ]; then
-        log_info "Refreshing $label dependencies"
-        (cd "$app_dir" && npm install --no-fund --no-audit)
+        stale=1
     fi
+
+    if [ "$stale" -eq 1 ]; then
+        log_error "$label dependencies look out of date; run 'npm install' in $app_dir before starting."
+        return 1
+    fi
+
+    return 0
 }
 
 ensure_production_dashboard_build() {
@@ -331,29 +431,47 @@ stop_drive_watcher() {
 }
 
 run_drive_agent_scan() {
+    local attempt=0
+    local max_attempts=3
+
     if [ ! -x "$DRIVE_AGENT_CMD" ]; then
         log_info "termux-drive-agent not installed; only C will be present until the agent is added"
         return 0
     fi
 
-    if "$DRIVE_AGENT_CMD" scan >/dev/null 2>&1; then
-        log_info "termux-drive-agent synced removable drive state"
-    else
-        log_warn "termux-drive-agent scan failed; check ~/.termux/logs/termux-drive-agent.log"
-    fi
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        if "$DRIVE_AGENT_CMD" scan >/dev/null 2>&1; then
+            log_info "termux-drive-agent synced removable drive state"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    log_warn "termux-drive-agent scan failed after $max_attempts attempts; check ~/.termux/logs/termux-drive-agent.log"
+    return 0
 }
 
 sync_cloud_mount_links() {
+    local attempt=0
+    local max_attempts=2
+
     if [ ! -x "$TERMUX_CLOUD_MOUNT_CMD" ]; then
         log_info "termux-cloud-mount not installed; FTP mounts stay in browse-only mode until the helper is added"
         return 0
     fi
 
-    if "$TERMUX_CLOUD_MOUNT_CMD" sync-links >/dev/null 2>&1; then
-        log_info "termux-cloud-mount synced FTP drive links"
-    else
-        log_warn "termux-cloud-mount sync-links failed; check root mount helper state"
-    fi
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        if "$TERMUX_CLOUD_MOUNT_CMD" sync-links >/dev/null 2>&1; then
+            log_info "termux-cloud-mount synced FTP drive links"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    log_warn "termux-cloud-mount sync-links failed after $max_attempts attempts; check root mount helper state"
+    return 0
 }
 
 apply_loopback_lockdown() {
@@ -384,17 +502,506 @@ apply_loopback_lockdown() {
 }
 
 ensure_media_layout() {
+    :
+}
+
+normalize_csv_list() {
+    local input="$1"
+    printf '%s\n' "$input" | tr ';' ',' | tr '\n' ',' | tr -s ',' | sed 's/^,*//; s/,*$//'
+}
+
+csv_to_array() {
+    local csv="$1"
+    local out_name="$2"
+    local token=""
+    local -n out_ref="$out_name"
+
+    out_ref=()
+    csv="$(normalize_csv_list "$csv")"
+    [ -n "$csv" ] || return 0
+
+    while IFS= read -r token; do
+        token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$token" ] || continue
+        out_ref+=("$token")
+    done < <(printf '%s\n' "$csv" | tr ',' '\n')
+}
+
+array_contains() {
+    local needle="$1"
+    shift
+    local item=""
+
+    for item in "$@"; do
+        if [ "$item" = "$needle" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+array_push_unique() {
+    local out_name="$1"
+    local value="$2"
+    local -n out_ref="$out_name"
+
+    if ! array_contains "$value" "${out_ref[@]}"; then
+        out_ref+=("$value")
+    fi
+}
+
+join_csv() {
+    local out_name="$1"
+    local -n out_ref="$out_name"
+    local IFS=','
+    printf '%s\n' "${out_ref[*]}"
+}
+
+read_drive_roles_from_marker() {
+    local drive_dir="$1"
+    local role_file
+    local roles=""
+
+    role_file="$(drive_role_file_path "$drive_dir")"
+    [ -f "$role_file" ] || return 1
+
+    roles="$(awk -F= '/^HMSTX_ROLES=/{print $2; found=1; exit} /^HMSTX_ROLE=/{if(!found){print $2; exit}}' "$role_file" 2>/dev/null || true)"
+    roles="$(normalize_csv_list "$roles")"
+    [ -n "$roles" ] || return 1
+    printf '%s\n' "$roles"
+}
+
+drive_marker_has_role() {
+    local drive_dir="$1"
+    local role="$2"
+    local roles=""
+    local role_item=""
+
+    roles="$(read_drive_roles_from_marker "$drive_dir" || true)"
+    [ -n "$roles" ] || return 1
+
+    while IFS= read -r role_item; do
+        role_item="$(printf '%s' "$role_item" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        if [ "$role_item" = "$role" ]; then
+            return 0
+        fi
+    done < <(printf '%s\n' "$roles" | tr ',' '\n')
+
+    return 1
+}
+
+collect_marker_drive_dirs() {
+    local role="$1"
+    local out_name="$2"
+    local drive_dir=""
+    local -n out_ref="$out_name"
+
+    out_ref=()
+    while IFS= read -r drive_dir; do
+        [ -n "$drive_dir" ] || continue
+        if drive_marker_has_role "$drive_dir" "$role"; then
+            array_push_unique "$out_name" "$drive_dir"
+        fi
+    done < <(list_external_drive_dirs)
+}
+
+resolve_candidate_drive_dirs() {
+    local candidates_csv="$1"
+    local out_name="$2"
+    local candidate_tokens=()
+    local token=""
+    local resolved=""
+    local -n out_ref="$out_name"
+
+    out_ref=()
+    csv_to_array "$candidates_csv" candidate_tokens
+    for token in "${candidate_tokens[@]}"; do
+        resolved="$(resolve_drive_dir "$token" || true)"
+        if [ -z "$resolved" ]; then
+            log_warn "Configured drive '$token' is missing under $DRIVES_DIR"
+            continue
+        fi
+        array_push_unique "$out_name" "$resolved"
+    done
+}
+
+ensure_drive_role_marker() {
+    local drive_dir="$1"
+    local role="$2"
+    local role_file existing_roles=""
+    local roles_csv normalized_role
+    local roles_array=()
+    local item=""
+
+    normalized_role="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
+    role_file="$(drive_role_file_path "$drive_dir")"
+    existing_roles="$(read_drive_roles_from_marker "$drive_dir" || true)"
+    if [ -n "$existing_roles" ]; then
+        csv_to_array "$existing_roles" roles_array
+    fi
+
+    if ! array_contains "$normalized_role" "${roles_array[@]}"; then
+        roles_array+=("$normalized_role")
+    fi
+
+    # Keep the marker stable and append roles without clobbering unrelated content on the drive.
+    roles_csv=""
+    for item in "${roles_array[@]}"; do
+        item="$(printf '%s' "$item" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$item" ] || continue
+        if [ -n "$roles_csv" ]; then
+            roles_csv="$roles_csv,$item"
+        else
+            roles_csv="$item"
+        fi
+    done
+
+    cat > "$role_file" <<EOF
+HMSTX_SCHEMA=1
+HMSTX_DRIVE_ID=$(basename "$drive_dir")
+HMSTX_ROLES=$roles_csv
+HMSTX_UPDATED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+}
+
+assert_drive_ready() {
+    local drive_dir="$1"
+    local role="$2"
+    local marker=""
+
+    if [ ! -d "$drive_dir" ]; then
+        log_error "Drive path for $role is missing: $drive_dir"
+        return 1
+    fi
+
+    if ! is_writable_dir "$drive_dir"; then
+        log_error "Drive path for $role is not writable: $drive_dir"
+        return 1
+    fi
+
+    marker="$(drive_role_file_path "$drive_dir")"
+    if [ ! -f "$marker" ]; then
+        ensure_drive_role_marker "$drive_dir" "$role"
+    fi
+
+    if ! grep -Fq " $drive_dir " /proc/mounts 2>/dev/null; then
+        log_warn "Drive path $drive_dir is not a direct mountpoint in /proc/mounts"
+    fi
+
+    return 0
+}
+
+build_pool_roots() {
+    local role="$1"
+    local candidates_csv="$2"
+    local role_dir_name="$3"
+    local subdir_name="$4"
+    local out_roots_name="$5"
+    local out_drives_name="$6"
+    local marker_drives=()
+    local configured_drives=()
+    local all_drives=()
+    local drive_dir=""
+    local role_root=""
+    local -n out_roots_ref="$out_roots_name"
+    local -n out_drives_ref="$out_drives_name"
+
+    out_roots_ref=()
+    out_drives_ref=()
+    collect_marker_drive_dirs "$role" marker_drives
+    resolve_candidate_drive_dirs "$candidates_csv" configured_drives
+
+    for drive_dir in "${marker_drives[@]}"; do
+        array_push_unique all_drives "$drive_dir"
+    done
+    for drive_dir in "${configured_drives[@]}"; do
+        array_push_unique all_drives "$drive_dir"
+    done
+
+    if [ "${#all_drives[@]}" -eq 0 ]; then
+        log_error "No drives resolved for role '$role' (candidates: $candidates_csv)"
+        return 1
+    fi
+
+    for drive_dir in "${all_drives[@]}"; do
+        if ! assert_drive_ready "$drive_dir" "$role"; then
+            if [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
+                return 1
+            fi
+            continue
+        fi
+
+        ensure_drive_role_marker "$drive_dir" "$role"
+        role_root="$drive_dir/$role_dir_name/$subdir_name"
+        if ! mkdir -p "$role_root" 2>/dev/null; then
+            log_error "Unable to create $role root at $role_root"
+            if [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
+                return 1
+            fi
+            continue
+        fi
+
+        if ! is_writable_dir "$role_root"; then
+            log_error "$role root is not writable: $role_root"
+            if [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
+                return 1
+            fi
+            continue
+        fi
+
+        out_roots_ref+=("$role_root")
+        out_drives_ref+=("$drive_dir")
+    done
+
+    if [ "${#out_roots_ref[@]}" -eq 0 ]; then
+        log_error "No writable roots available for role '$role'"
+        return 1
+    fi
+
+    return 0
+}
+
+ensure_compat_link() {
+    local name="$1"
+    local target="$2"
+    local compat_path="$MEDIA_ROOT/$name"
+    local current_target=""
+    local has_conflict=0
+
+    mkdir -p "$target"
+
+    if [ -L "$compat_path" ]; then
+        current_target="$(readlink -f "$compat_path" 2>/dev/null || true)"
+        if [ "$current_target" = "$target" ]; then
+            return 0
+        fi
+        log_warn "Compatibility link $compat_path points to $current_target (expected $target)"
+        has_conflict=1
+    elif [ -e "$compat_path" ]; then
+        if [ -d "$compat_path" ] && [ "$MEDIA_LAYOUT_AUTO_ADOPT_EMPTY" = "true" ] && [ -z "$(find "$compat_path" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
+            rmdir "$compat_path" 2>/dev/null || true
+            ln -sfn "$target" "$compat_path"
+            return 0
+        fi
+        log_warn "Compatibility path exists and is not a managed symlink: $compat_path"
+        has_conflict=1
+    else
+        ln -sfn "$target" "$compat_path"
+        return 0
+    fi
+
+    if [ "$has_conflict" -eq 1 ] && [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
+        return 1
+    fi
+    return 0
+}
+
+path_free_gb() {
+    local target="$1"
+    local kb_free=""
+
+    kb_free="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+    if [ -z "$kb_free" ] || ! [[ "$kb_free" =~ ^[0-9]+$ ]]; then
+        printf '0\n'
+        return 0
+    fi
+
+    printf '%s\n' "$((kb_free / 1024 / 1024))"
+}
+
+path_total_gb() {
+    local target="$1"
+    local kb_total=""
+
+    kb_total="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $2}' || true)"
+    if [ -z "$kb_total" ] || ! [[ "$kb_total" =~ ^[0-9]+$ ]]; then
+        printf '0\n'
+        return 0
+    fi
+
+    printf '%s\n' "$((kb_total / 1024 / 1024))"
+}
+
+path_mount_device() {
+    local target="$1"
+    df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $1}'
+}
+
+path_mount_options() {
+    local target="$1"
+    local device=""
+
+    device="$(path_mount_device "$target")"
+    [ -n "$device" ] || return 0
+    awk -v dev="$device" '$1 == dev {print $4; exit}' /proc/mounts 2>/dev/null || true
+}
+
+path_fs_type() {
+    local target="$1"
+    stat -f -c %T "$target" 2>/dev/null || printf 'unknown\n'
+}
+
+run_pool_preflight() {
+    local role="$1"
+    local roots_name="$2"
+    local expected_min_gb="$3"
+    local -n roots_ref="$roots_name"
+    local root=""
+    local total_gb=0
+    local free_gb=0
+    local fs_type=""
+    local mount_opts=""
+    local failures=0
+
+    for root in "${roots_ref[@]}"; do
+        total_gb="$(path_total_gb "$root")"
+        free_gb="$(path_free_gb "$root")"
+        fs_type="$(path_fs_type "$root")"
+        mount_opts="$(path_mount_options "$root")"
+
+        log_info "Preflight $role root: $root (fs=$fs_type total=${total_gb}GiB free=${free_gb}GiB opts=${mount_opts:-unknown})"
+
+        if ! is_writable_dir "$root"; then
+            log_error "$role root is not writable: $root"
+            failures=$((failures + 1))
+            continue
+        fi
+
+        if [ "$expected_min_gb" -gt 0 ] && [ "$total_gb" -lt "$expected_min_gb" ]; then
+            log_warn "$role root capacity ${total_gb}GiB is below expected floor ${expected_min_gb}GiB: $root"
+            failures=$((failures + 1))
+        fi
+    done
+
+    if [ "$failures" -gt 0 ] && [ "$MEDIA_PREFLIGHT_FAIL_CLOSED" = "true" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+run_storage_preflight() {
+    local vault_roots_name="$1"
+    local scratch_roots_name="$2"
+
+    if ! run_pool_preflight "vault" "$vault_roots_name" "$MEDIA_VAULT_EXPECT_MIN_GB"; then
+        return 1
+    fi
+    if ! run_pool_preflight "scratch" "$scratch_roots_name" "$MEDIA_SCRATCH_EXPECT_MIN_GB"; then
+        return 1
+    fi
+    return 0
+}
+
+apply_storage_layout_exports() {
+    local vault_roots=()
+    local scratch_roots=()
+    local vault_drives=()
+    local scratch_drives=()
+    local vault_roots_csv=""
+    local scratch_roots_csv=""
+    local vault_free_gb=0
+
+    if ! build_pool_roots "vault" "$MEDIA_VAULT_DRIVES" "$MEDIA_VAULT_DIR_NAME" "$MEDIA_VAULT_MEDIA_SUBDIR" vault_roots vault_drives; then
+        return 1
+    fi
+
+    if ! build_pool_roots "scratch" "$MEDIA_SCRATCH_DRIVES" "$MEDIA_SCRATCH_DIR_NAME" "$MEDIA_SCRATCH_MEDIA_SUBDIR" scratch_roots scratch_drives; then
+        return 1
+    fi
+
+    if ! run_storage_preflight vault_roots scratch_roots; then
+        log_error "Storage preflight checks failed"
+        return 1
+    fi
+
+    vault_roots_csv="$(join_csv vault_roots)"
+    scratch_roots_csv="$(join_csv scratch_roots)"
+    MEDIA_VAULT_ROOTS="$vault_roots_csv"
+    MEDIA_SCRATCH_ROOTS="$scratch_roots_csv"
+    MEDIA_VAULT_ROOT="${vault_roots[0]}"
+    MEDIA_SCRATCH_ROOT="${scratch_roots[0]}"
+
+    MEDIA_MOVIES_DIR="$MEDIA_VAULT_ROOT/movies"
+    MEDIA_SERIES_DIR="$MEDIA_VAULT_ROOT/series"
+    MEDIA_MUSIC_DIR="$MEDIA_VAULT_ROOT/music"
+    MEDIA_AUDIOBOOKS_DIR="$MEDIA_VAULT_ROOT/audiobooks"
+
+    MEDIA_DOWNLOADS_DIR="$MEDIA_SCRATCH_ROOT/downloads"
+    MEDIA_DOWNLOADS_MOVIES_DIR="$MEDIA_DOWNLOADS_DIR/movies"
+    MEDIA_DOWNLOADS_SERIES_DIR="$MEDIA_DOWNLOADS_DIR/series"
+    MEDIA_DOWNLOADS_MANUAL_DIR="$MEDIA_DOWNLOADS_DIR/manual"
+    MEDIA_IMPORT_REVIEW_DIR="$MEDIA_SCRATCH_ROOT/review"
+    MEDIA_IMPORT_LOG_DIR="$MEDIA_SCRATCH_ROOT/logs"
+    MEDIA_TRANSCODE_DIR="$MEDIA_SCRATCH_ROOT/cache/jellyfin"
+    MEDIA_MISC_CACHE_DIR="$MEDIA_SCRATCH_ROOT/cache/misc"
+    MEDIA_IPTV_CACHE_DIR="$MEDIA_SCRATCH_ROOT/iptv-cache"
+    MEDIA_IPTV_EPG_DIR="$MEDIA_SCRATCH_ROOT/iptv-epg"
+    MEDIA_QBIT_TMP_DIR="$MEDIA_SCRATCH_ROOT/tmp/qbittorrent"
+
+    export MEDIA_VAULT_ROOTS MEDIA_SCRATCH_ROOTS MEDIA_VAULT_ROOT MEDIA_SCRATCH_ROOT
+    export MEDIA_MOVIES_DIR MEDIA_SERIES_DIR MEDIA_MUSIC_DIR MEDIA_AUDIOBOOKS_DIR
+    export MEDIA_DOWNLOADS_DIR MEDIA_DOWNLOADS_MOVIES_DIR MEDIA_DOWNLOADS_SERIES_DIR MEDIA_DOWNLOADS_MANUAL_DIR
+    export MEDIA_IMPORT_REVIEW_DIR MEDIA_IMPORT_LOG_DIR MEDIA_TRANSCODE_DIR MEDIA_MISC_CACHE_DIR
+    export MEDIA_IPTV_CACHE_DIR MEDIA_IPTV_EPG_DIR MEDIA_QBIT_TMP_DIR
+    export MEDIA_IMPORT_ABORT_FREE_GB MEDIA_VAULT_WARN_FREE_GB MEDIA_SCRATCH_WARN_FREE_GB
+    export MEDIA_SCRATCH_WARN_USED_PERCENT MEDIA_SCRATCH_RETENTION_DAYS MEDIA_SCRATCH_MIN_FREE_GB
+    export MEDIA_SCRATCH_CLEANUP_ENABLED MEDIA_IMPORTER_CMD MEDIA_WORKFLOW_SERVICE_CMD
+
     mkdir -p \
         "$MEDIA_ROOT" \
         "$MEDIA_MOVIES_DIR" \
         "$MEDIA_SERIES_DIR" \
+        "$MEDIA_MUSIC_DIR" \
+        "$MEDIA_AUDIOBOOKS_DIR" \
         "$MEDIA_DOWNLOADS_DIR" \
         "$MEDIA_DOWNLOADS_MOVIES_DIR" \
         "$MEDIA_DOWNLOADS_SERIES_DIR" \
         "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+        "$MEDIA_IMPORT_REVIEW_DIR" \
+        "$MEDIA_IMPORT_LOG_DIR" \
+        "$MEDIA_TRANSCODE_DIR" \
+        "$MEDIA_MISC_CACHE_DIR" \
         "$MEDIA_IPTV_CACHE_DIR" \
-        "$MEDIA_IPTV_EPG_DIR"
-    log_info "Media share ready at $MEDIA_ROOT"
+        "$MEDIA_IPTV_EPG_DIR" \
+        "$MEDIA_QBIT_TMP_DIR"
+
+    ensure_compat_link "movies" "$MEDIA_MOVIES_DIR" || return 1
+    ensure_compat_link "series" "$MEDIA_SERIES_DIR" || return 1
+    ensure_compat_link "music" "$MEDIA_MUSIC_DIR" || return 1
+    ensure_compat_link "audiobooks" "$MEDIA_AUDIOBOOKS_DIR" || return 1
+    ensure_compat_link "downloads" "$MEDIA_DOWNLOADS_DIR" || return 1
+    ensure_compat_link "iptv-cache" "$MEDIA_IPTV_CACHE_DIR" || return 1
+    ensure_compat_link "iptv-epg" "$MEDIA_IPTV_EPG_DIR" || return 1
+
+    vault_free_gb="$(path_free_gb "$MEDIA_VAULT_ROOT")"
+    if [ "$vault_free_gb" -lt "$MEDIA_IMPORT_ABORT_FREE_GB" ]; then
+        log_warn "Vault free space ${vault_free_gb}GiB is below import abort floor ${MEDIA_IMPORT_ABORT_FREE_GB}GiB"
+        if [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
+            return 1
+        fi
+    fi
+
+    log_info "Tiered media layout ready"
+    log_info "  Compatibility root: $MEDIA_ROOT"
+    log_info "  Vault roots: $MEDIA_VAULT_ROOTS"
+    log_info "  Scratch roots: $MEDIA_SCRATCH_ROOTS"
+    log_info "  Primary vault root: $MEDIA_VAULT_ROOT"
+    log_info "  Primary scratch root: $MEDIA_SCRATCH_ROOT"
+
+    return 0
+}
+
+ensure_media_layout() {
+    if ! apply_storage_layout_exports; then
+        log_error "Tiered media layout preflight failed"
+        if [ "$MEDIA_LAYOUT_STRICT" = "true" ] || [ "$MEDIA_PREFLIGHT_FAIL_CLOSED" = "true" ]; then
+            return 1
+        fi
+        log_warn "Continuing startup with existing media paths because strict/fail-closed mode is disabled"
+        return 0
+    fi
 }
 
 stop_repo_sshd() {
@@ -428,6 +1035,8 @@ stop_managed_services() {
     stop_pidfile_process "prowlarr" "$PROWLARR_PID_PATH"
     stop_pidfile_process "bazarr" "$BAZARR_PID_PATH"
     stop_pidfile_process "jellyseerr" "$JELLYSEERR_PID_PATH"
+    stop_pidfile_process "llm" "$LLM_PID_PATH"
+    stop_pidfile_process "media-workflow" "$MEDIA_WORKFLOW_PID_PATH"
     stop_repo_nginx
 }
 
@@ -452,6 +1061,8 @@ stop_legacy_services() {
     stop_matching_process "prowlarr" "Prowlarr -nobrowser"
     stop_matching_process "bazarr" "bazarr.py"
     stop_matching_process "jellyseerr" "server/index.js"
+    stop_matching_process "llm" "llama-server"
+    stop_matching_process "media-workflow" "media-workflow-service.sh run-loop"
 }
 
 reload_launcher() {
@@ -504,6 +1115,97 @@ start_background_command() {
     wait_for_port "$port" "$name" "$pid_file" "$host"
 }
 
+start_llm_service() {
+    if [ "$LLM_AUTO_START" != "true" ]; then
+        log_info "Local LLM autostart disabled"
+        return 0
+    fi
+
+    if [ ! -x "$LLM_SERVICE_CMD" ]; then
+        log_warn "Skipping Local LLM (service helper not found: $LLM_SERVICE_CMD)"
+        return 0
+    fi
+
+    log_info "Starting Local LLM"
+    if ! "$LLM_SERVICE_CMD" start >/dev/null 2>&1; then
+        log_warn "Local LLM start failed (install llama-cpp and configure a GGUF model)"
+        return 0
+    fi
+
+    if ! wait_for_port "$LLM_PORT" "Local LLM" "$LLM_PID_PATH" "$LLM_BIND_HOST"; then
+        log_warn "Local LLM failed to listen on $LLM_BIND_HOST:$LLM_PORT (see $LOG_DIR/llm.log)"
+    fi
+}
+
+start_service_helper() {
+    local name="$1"
+    local script_path="$2"
+    local port="$3"
+    local pid_file="$4"
+    local host="$5"
+
+    if [ ! -x "$script_path" ]; then
+        log_warn "Skipping $name (helper not found: $script_path)"
+        return 0
+    fi
+
+    log_info "Starting $name"
+    if ! "$script_path" start >/dev/null 2>&1; then
+        log_warn "$name start failed (see logs for details)"
+        return 0
+    fi
+
+    if ! wait_for_port "$port" "$name" "$pid_file" "$host"; then
+        log_warn "$name failed to listen on $host:$port"
+        return 0
+    fi
+}
+
+start_worker_helper() {
+    local name="$1"
+    local script_path="$2"
+    local pid_file="$3"
+
+    if [ ! -x "$script_path" ]; then
+        log_warn "Skipping $name (helper not found: $script_path)"
+        return 0
+    fi
+
+    log_info "Starting $name"
+    if ! "$script_path" start >/dev/null 2>&1; then
+        log_warn "$name start failed (see logs for details)"
+        return 0
+    fi
+
+    if [ -f "$pid_file" ]; then
+        local pid=""
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    log_warn "$name did not report a running pid"
+    return 0
+}
+
+start_media_stack_services() {
+    start_service_helper "Redis" "$REDIS_SERVICE_CMD" 6379 "$REDIS_PID_PATH" "127.0.0.1"
+    start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
+    start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1"
+    start_service_helper "qBittorrent" "$QBITTORRENT_SERVICE_CMD" 8081 "$QBITTORRENT_PID_PATH" "127.0.0.1"
+    start_service_helper "Sonarr" "$SONARR_SERVICE_CMD" 8989 "$SONARR_PID_PATH" "127.0.0.1"
+    start_service_helper "Radarr" "$RADARR_SERVICE_CMD" 7878 "$RADARR_PID_PATH" "127.0.0.1"
+    start_service_helper "Prowlarr" "$PROWLARR_SERVICE_CMD" 9696 "$PROWLARR_PID_PATH" "127.0.0.1"
+    start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1"
+
+    if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
+        start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
+    fi
+
+    start_worker_helper "Media workflow sweeper" "$MEDIA_WORKFLOW_SERVICE_CMD" "$MEDIA_WORKFLOW_PID_PATH"
+}
+
 detect_host_ip() {
     local host_ip="${HOST_IP:-}"
 
@@ -534,15 +1236,17 @@ build_allowed_dev_origins() {
 
 HOST_IP="$(detect_host_ip)"
 ALLOWED_DEV_ORIGINS="${ALLOWED_DEV_ORIGINS:-$(build_allowed_dev_origins)}"
+acquire_start_lock
+trap 'release_start_lock' EXIT
 
 log_info "Starting Home Server"
 warn_conflicting_boot_scripts
 
 stop_drive_watcher
 prepare_drives_root
-ensure_media_layout
 run_drive_agent_scan
 sync_cloud_mount_links
+ensure_media_layout
 apply_loopback_lockdown
 
 if command -v termux-wake-lock >/dev/null 2>&1; then
@@ -552,8 +1256,15 @@ fi
 stop_managed_services
 stop_legacy_services
 
-ensure_node_dependencies "$PROJECT/server" "backend"
-ensure_node_dependencies "$PROJECT/dashboard" "dashboard"
+if ! ensure_node_dependencies "$PROJECT/server" "backend"; then
+    log_error "Backend dependencies check failed; aborting startup."
+    exit 1
+fi
+
+if ! ensure_node_dependencies "$PROJECT/dashboard" "dashboard"; then
+    log_error "Dashboard dependencies check failed; aborting startup."
+    exit 1
+fi
 
 log_info "Checking SSH"
 if [ "$ENABLE_SSHD" = "true" ] && command -v sshd >/dev/null 2>&1; then
@@ -575,6 +1286,9 @@ start_background_command \
     "$BACKEND_PID_PATH" \
     "mkdir -p '$LOG_DIR'; cd '$PROJECT/server' && export NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST' PORT='$BACKEND_PORT'; exec node '$PROJECT/server/index.js' > '$LOG_DIR/backend.log' 2>&1" \
     "$BACKEND_BIND_HOST"
+
+start_media_stack_services
+start_llm_service
 
 log_info "Starting nginx"
 if command -v nginx >/dev/null 2>&1; then
@@ -627,7 +1341,7 @@ if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
 fi
 
 trap 'reload_launcher' USR1
-trap 'stop_hotkey_listener' EXIT
+trap 'stop_hotkey_listener; release_start_lock' EXIT
 start_hotkey_listener
 
 wait

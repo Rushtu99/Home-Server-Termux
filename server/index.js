@@ -5,8 +5,9 @@ const express = require('express');
 const cors = require('cors');
 const os = require('os');
 const crypto = require('crypto');
-const { exec, execFileSync } = require('child_process');
+const { exec, execFileSync, spawn } = require('child_process');
 const net = require('net');
+const { Readable } = require('stream');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 const jwt = require('jsonwebtoken');
 const ftp = require('basic-ftp');
@@ -59,12 +60,68 @@ const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
 const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || FILEBROWSER_ROOT;
 const MEDIA_SHARE_NAME = process.env.MEDIA_SHARE_NAME || 'Media';
 const MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(FILEBROWSER_ROOT, MEDIA_SHARE_NAME);
-const MEDIA_MOVIES_DIR = process.env.MEDIA_MOVIES_DIR || path.join(MEDIA_ROOT, 'movies');
-const MEDIA_SERIES_DIR = process.env.MEDIA_SERIES_DIR || path.join(MEDIA_ROOT, 'series');
-const MEDIA_DOWNLOADS_DIR = process.env.MEDIA_DOWNLOADS_DIR || path.join(MEDIA_ROOT, 'downloads');
+const MEDIA_VAULT_ROOT = process.env.MEDIA_VAULT_ROOT || path.join(FILEBROWSER_ROOT, 'D', 'VAULT', 'Media');
+const MEDIA_SCRATCH_ROOT = process.env.MEDIA_SCRATCH_ROOT || path.join(FILEBROWSER_ROOT, 'E', 'SCRATCH', 'HmSTxScratch');
+const MEDIA_VAULT_ROOTS = String(process.env.MEDIA_VAULT_ROOTS || MEDIA_VAULT_ROOT)
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+const MEDIA_SCRATCH_ROOTS = String(process.env.MEDIA_SCRATCH_ROOTS || MEDIA_SCRATCH_ROOT)
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+const MEDIA_MOVIES_DIR = process.env.MEDIA_MOVIES_DIR || path.join(MEDIA_VAULT_ROOT, 'movies');
+const MEDIA_SERIES_DIR = process.env.MEDIA_SERIES_DIR || path.join(MEDIA_VAULT_ROOT, 'series');
+const MEDIA_MUSIC_DIR = process.env.MEDIA_MUSIC_DIR || path.join(MEDIA_VAULT_ROOT, 'music');
+const MEDIA_AUDIOBOOKS_DIR = process.env.MEDIA_AUDIOBOOKS_DIR || path.join(MEDIA_VAULT_ROOT, 'audiobooks');
+const MEDIA_DOWNLOADS_DIR = process.env.MEDIA_DOWNLOADS_DIR || path.join(MEDIA_SCRATCH_ROOT, 'downloads');
+const MEDIA_DOWNLOADS_MOVIES_DIR = process.env.MEDIA_DOWNLOADS_MOVIES_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'movies');
+const MEDIA_DOWNLOADS_SERIES_DIR = process.env.MEDIA_DOWNLOADS_SERIES_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'series');
 const MEDIA_DOWNLOADS_MANUAL_DIR = process.env.MEDIA_DOWNLOADS_MANUAL_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'manual');
-const MEDIA_IPTV_CACHE_DIR = process.env.MEDIA_IPTV_CACHE_DIR || path.join(MEDIA_ROOT, 'iptv-cache');
-const MEDIA_IPTV_EPG_DIR = process.env.MEDIA_IPTV_EPG_DIR || path.join(MEDIA_ROOT, 'iptv-epg');
+const MEDIA_IMPORT_REVIEW_DIR = process.env.MEDIA_IMPORT_REVIEW_DIR || path.join(MEDIA_SCRATCH_ROOT, 'review');
+const MEDIA_IMPORT_LOG_DIR = process.env.MEDIA_IMPORT_LOG_DIR || path.join(MEDIA_SCRATCH_ROOT, 'logs');
+const MEDIA_IMPORT_STATUS_FILE = process.env.MEDIA_IMPORT_STATUS_FILE || path.join(MEDIA_IMPORT_LOG_DIR, 'import-status.json');
+const MEDIA_CLEANUP_STATUS_FILE = process.env.MEDIA_CLEANUP_STATUS_FILE || path.join(MEDIA_IMPORT_LOG_DIR, 'cleanup-status.json');
+const MEDIA_IMPORTED_INDEX_FILE = process.env.MEDIA_IMPORTED_INDEX_FILE || path.join(MEDIA_IMPORT_LOG_DIR, 'imported-items.tsv');
+const MEDIA_IMPORT_EVENTS_FILE = process.env.MEDIA_IMPORT_EVENTS_FILE || path.join(MEDIA_IMPORT_LOG_DIR, 'import-events.tsv');
+const MEDIA_TRANSCODE_DIR = process.env.MEDIA_TRANSCODE_DIR || path.join(MEDIA_SCRATCH_ROOT, 'cache', 'jellyfin');
+const MEDIA_MISC_CACHE_DIR = process.env.MEDIA_MISC_CACHE_DIR || path.join(MEDIA_SCRATCH_ROOT, 'cache', 'misc');
+const MEDIA_IPTV_CACHE_DIR = process.env.MEDIA_IPTV_CACHE_DIR || path.join(MEDIA_SCRATCH_ROOT, 'iptv-cache');
+const MEDIA_IPTV_EPG_DIR = process.env.MEDIA_IPTV_EPG_DIR || path.join(MEDIA_SCRATCH_ROOT, 'iptv-epg');
+const MEDIA_QBIT_TMP_DIR = process.env.MEDIA_QBIT_TMP_DIR || path.join(MEDIA_SCRATCH_ROOT, 'tmp', 'qbittorrent');
+const parseDriveAvailableGiB = (target) => {
+  if (!target) {
+    return null;
+  }
+  try {
+    const output = execFileSync('df', ['-Pk', target], { encoding: 'utf8', maxBuffer: 32 * 1024 });
+    const lines = output.trim().split('\n');
+    if (lines.length < 2) {
+      return null;
+    }
+    const columns = lines[1].trim().split(/\s+/);
+    const availableKb = Number(columns[3]);
+    if (!Number.isFinite(availableKb)) {
+      return null;
+    }
+    return Number((availableKb / 1024 / 1024).toFixed(2));
+  } catch {
+    return null;
+  }
+};
+const buildDriveStats = (roots) => (
+  roots.filter(Boolean).map((root) => ({
+    path: root,
+    availableGiB: parseDriveAvailableGiB(root),
+  }))
+);
+const MEDIA_IMPORT_ABORT_FREE_GB = Math.max(1, Number(process.env.MEDIA_IMPORT_ABORT_FREE_GB || 200) || 200);
+const MEDIA_VAULT_WARN_FREE_GB = Math.max(1, Number(process.env.MEDIA_VAULT_WARN_FREE_GB || 250) || 250);
+const MEDIA_SCRATCH_WARN_FREE_GB = Math.max(1, Number(process.env.MEDIA_SCRATCH_WARN_FREE_GB || 150) || 150);
+const MEDIA_SCRATCH_WARN_USED_PERCENT = Math.max(1, Number(process.env.MEDIA_SCRATCH_WARN_USED_PERCENT || 85) || 85);
+const MEDIA_SCRATCH_RETENTION_DAYS = Math.max(1, Number(process.env.MEDIA_SCRATCH_RETENTION_DAYS || 30) || 30);
+const MEDIA_SCRATCH_MIN_FREE_GB = Math.max(1, Number(process.env.MEDIA_SCRATCH_MIN_FREE_GB || 200) || 200);
+const MEDIA_SCRATCH_CLEANUP_ENABLED = String(process.env.MEDIA_SCRATCH_CLEANUP_ENABLED || 'true').toLowerCase() === 'true';
 const JELLYFIN_LIVE_TV_M3U_URL = process.env.JELLYFIN_LIVE_TV_M3U_URL || process.env.MEDIA_IPTV_PLAYLIST_URL || '';
 const JELLYFIN_LIVE_TV_M3U_PATH = process.env.JELLYFIN_LIVE_TV_M3U_PATH || process.env.MEDIA_IPTV_PLAYLIST_PATH || path.join(MEDIA_IPTV_CACHE_DIR, 'playlist.m3u');
 const JELLYFIN_LIVE_TV_XMLTV_URL = process.env.JELLYFIN_LIVE_TV_XMLTV_URL || process.env.MEDIA_IPTV_GUIDE_URL || '';
@@ -165,6 +222,34 @@ const BAZARR_PYTHON_PATH = path.join(BAZARR_HOME, 'venv', 'bin', 'python');
 const BAZARR_APP_PATH = path.join(BAZARR_HOME, 'app', 'bazarr.py');
 const JELLYSEERR_HOME = process.env.JELLYSEERR_HOME || path.join(MEDIA_SERVICES_HOME, 'jellyseerr');
 const JELLYSEERR_DIST_PATH = path.join(JELLYSEERR_HOME, 'app', 'dist', 'index.js');
+const LLM_HOME = process.env.LLM_HOME || path.join(MEDIA_SERVICES_HOME, 'llm');
+const LLM_MODELS_DIR = process.env.LLM_MODELS_DIR || path.join(LLM_HOME, 'models');
+const LLM_BIND_HOST = process.env.LLM_BIND_HOST || '127.0.0.1';
+const LLM_PORT = Number(process.env.LLM_PORT || 11435);
+const LLM_CTX_SIZE = Math.max(512, Number(process.env.LLM_CTX_SIZE || 4096) || 4096);
+const LLM_THREADS = Math.max(1, Number(process.env.LLM_THREADS || 4) || 4);
+const LLM_BATCH_SIZE = Math.max(32, Number(process.env.LLM_BATCH_SIZE || 512) || 512);
+const LLM_GPU_LAYERS = Number(process.env.LLM_GPU_LAYERS || 0) || 0;
+const LLM_MAX_TOKENS = Math.max(16, Number(process.env.LLM_MAX_TOKENS || 1024) || 1024);
+const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE || 0.2);
+const LLM_DEFAULT_MODEL_ID = process.env.LLM_DEFAULT_MODEL_ID || 'qwen2.5-coder-1.5b-q4_k_m';
+const LLM_DEFAULT_MODEL_PATH = process.env.LLM_DEFAULT_MODEL_PATH || '';
+const LLM_API_KEY = String(process.env.LLM_API_KEY || '').trim();
+const ONLINE_LLM_BASE_URL = String(process.env.ONLINE_LLM_BASE_URL || '').trim().replace(/\/+$/, '');
+const ONLINE_LLM_API_KEY = String(process.env.ONLINE_LLM_API_KEY || '').trim();
+const ONLINE_LLM_DEFAULT_MODEL = String(process.env.ONLINE_LLM_DEFAULT_MODEL || '').trim();
+const ONLINE_LLM_TIMEOUT_MS = Math.max(2000, Number(process.env.ONLINE_LLM_TIMEOUT_MS || 15000) || 15000);
+const LLM_REQUEST_TIMEOUT_MS = Math.max(2000, Number(process.env.LLM_REQUEST_TIMEOUT_MS || 120000) || 120000);
+const LLM_SERVICE_CMD = process.env.LLM_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'llm-service.sh');
+const LLM_MODEL_PULL_CMD = process.env.LLM_MODEL_PULL_CMD || path.join(ROOT_DIR, 'scripts', 'llm-model-pull.sh');
+const LLM_ACTIVE_MODEL_FILE = process.env.LLM_ACTIVE_MODEL_FILE || path.join(RUNTIME_DIR, 'llm-active-model.txt');
+const LLM_PULL_STATE_DIR = process.env.LLM_PULL_STATE_DIR || path.join(RUNTIME_DIR, 'llm-pulls');
+const CODEX_REVAMPED_CMD = process.env.CODEX_REVAMPED_CMD || path.join(HOME_DIR, '.local', 'bin', 'codex-lb-start');
+const CODEX_REVAMPED_BIND_HOST = process.env.CODEX_REVAMPED_BIND_HOST || '127.0.0.1';
+const CODEX_REVAMPED_PORT = Number(process.env.CODEX_REVAMPED_PORT || 2455);
+const CODEX_REVAMPED_PID = process.env.CODEX_REVAMPED_PID_PATH || path.join(RUNTIME_DIR, 'codex-revamped.pid');
+const CODEX_REVAMPED_LOG = process.env.CODEX_REVAMPED_LOG_PATH || path.join(ROOT_DIR, 'logs', 'codex-revamped.log');
+const LLM_CHAT_SYSTEM_PROMPT = process.env.LLM_CHAT_SYSTEM_PROMPT || 'You are a precise assistant running inside a private home server dashboard.';
 const BOOTSTRAP_DASHBOARD_USER = normalizeUsername(process.env.DASHBOARD_USER || 'admin') || 'admin';
 const BOOTSTRAP_DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
 const ADMIN_ACTION_PASSWORD = process.env.ADMIN_ACTION_PASSWORD || BOOTSTRAP_DASHBOARD_PASS;
@@ -196,6 +281,48 @@ const checkPidfileProcess = (pidPath, fallback = '') =>
   `test -f "${pidPath}" && kill -0 "$(cat "${pidPath}")" >/dev/null 2>&1${fallback ? ` || ${fallback}` : ''}`;
 const detachCommand = (pidPath, command) => `nohup sh -c '${command}' >/dev/null 2>&1 & echo $! > "${pidPath}"`;
 const appDb = createAppDb({ dbPath: APP_DB_PATH });
+const STRICT_BOOTSTRAP = process.env.STRICT_BOOTSTRAP === 'true';
+const INSECURE_SECRET_VALUES = new Set([
+  '',
+  'change-this-in-production',
+  'replace-with-a-long-random-secret',
+  'replace-with-a-stable-long-random-secret',
+]);
+const INSECURE_PASSWORD_VALUES = new Set([
+  '',
+  'admin123',
+  'change-me',
+  'change-me-too',
+]);
+const assertSecureStartupConfig = ({ userCount }) => {
+  const failures = [];
+
+  if (INSECURE_SECRET_VALUES.has(String(JWT_SECRET || '').trim())) {
+    failures.push('Set JWT_SECRET in server/.env to a long random value before starting the server.');
+  }
+
+  if (INSECURE_SECRET_VALUES.has(String(process.env.APP_AUTH_SECRET || '').trim())) {
+    failures.push('Set APP_AUTH_SECRET in server/.env to a stable long random value before starting the server.');
+  }
+
+  if (userCount <= 0) {
+    if (INSECURE_PASSWORD_VALUES.has(String(BOOTSTRAP_DASHBOARD_PASS || '').trim())) {
+      failures.push('Set DASHBOARD_PASS in server/.env before first boot so the initial admin account is not created with a default password.');
+    }
+    if (INSECURE_PASSWORD_VALUES.has(String(ADMIN_ACTION_PASSWORD || '').trim())) {
+      failures.push('Set ADMIN_ACTION_PASSWORD in server/.env before first boot.');
+    }
+  }
+
+  if (failures.length > 0) {
+    const message = `Insecure bootstrap configuration detected:\n- ${failures.join('\n- ')}`;
+    console.warn(`[auth] ${message}`);
+    if (STRICT_BOOTSTRAP) {
+      throw new Error(`Refusing to start with insecure bootstrap configuration.\n- ${failures.join('\n- ')}`);
+    }
+  }
+};
+assertSecureStartupConfig({ userCount: appDb.countUsers() });
 const adminBootstrap = appDb.bootstrapAdmin({
   username: BOOTSTRAP_DASHBOARD_USER,
   password: BOOTSTRAP_DASHBOARD_PASS,
@@ -207,6 +334,8 @@ if (adminBootstrap.seeded) {
 }
 
 fs.mkdirSync(FTP_MOUNT_RUNTIME_DIR, { recursive: true });
+fs.mkdirSync(LLM_MODELS_DIR, { recursive: true });
+fs.mkdirSync(LLM_PULL_STATE_DIR, { recursive: true });
 
 if (CORS_ORIGIN) {
   const allowList = CORS_ORIGIN
@@ -393,6 +522,26 @@ const SERVICES = {
     binary: 'node',
     installCheckPaths: [JELLYSEERR_SERVICE_CMD, JELLYSEERR_DIST_PATH],
   },
+  llm: {
+    start: `"${LLM_SERVICE_CMD}" start`,
+    stop: `"${LLM_SERVICE_CMD}" stop`,
+    restart: `"${LLM_SERVICE_CMD}" restart`,
+    check: `"${LLM_SERVICE_CMD}" status`,
+    host: LLM_BIND_HOST,
+    port: LLM_PORT,
+    binary: 'llama-server',
+    installCheckPaths: [LLM_SERVICE_CMD],
+  },
+  codex_revamped: {
+    start: `mkdir -p "${ROOT_DIR}/logs" "${RUNTIME_DIR}" && if curl -fsS --max-time 2 "http://${CODEX_REVAMPED_BIND_HOST}:${CODEX_REVAMPED_PORT}/" >/dev/null 2>&1; then echo "codex-lb already reachable on ${CODEX_REVAMPED_BIND_HOST}:${CODEX_REVAMPED_PORT}"; elif [ -x "${CODEX_REVAMPED_CMD}" ]; then ${detachCommand(CODEX_REVAMPED_PID, `exec "${CODEX_REVAMPED_CMD}" > "${CODEX_REVAMPED_LOG}" 2>&1`)}; else echo "codex-lb launcher missing: ${CODEX_REVAMPED_CMD}"; exit 1; fi`,
+    stop: stopPidfileProcess(CODEX_REVAMPED_PID, `pkill -f '[/]codex-lb( |$)' >/dev/null 2>&1 || true`),
+    restart: `${stopPidfileProcess(CODEX_REVAMPED_PID, `pkill -f '[/]codex-lb( |$)' >/dev/null 2>&1 || true`)}; mkdir -p "${ROOT_DIR}/logs" "${RUNTIME_DIR}" && if [ -x "${CODEX_REVAMPED_CMD}" ]; then ${detachCommand(CODEX_REVAMPED_PID, `exec "${CODEX_REVAMPED_CMD}" > "${CODEX_REVAMPED_LOG}" 2>&1`)}; else echo "codex-lb launcher missing: ${CODEX_REVAMPED_CMD}"; exit 1; fi`,
+    check: `${checkPidfileProcess(CODEX_REVAMPED_PID)} || curl -fsS --max-time 2 "http://${CODEX_REVAMPED_BIND_HOST}:${CODEX_REVAMPED_PORT}/" >/dev/null 2>&1`,
+    host: CODEX_REVAMPED_BIND_HOST,
+    port: CODEX_REVAMPED_PORT,
+    binary: 'codex-lb',
+    installCheckPaths: [CODEX_REVAMPED_CMD],
+  },
 };
 
 // The dashboard renders service tabs from this catalog instead of inferring
@@ -518,6 +667,22 @@ const SERVICE_CATALOG_META = {
     route: '/requests/',
     surface: 'media',
   },
+  llm: {
+    controlMode: 'optional',
+    description: 'Local on-device inference using llama.cpp with selectable GGUF models.',
+    group: 'ai',
+    label: 'Local LLM',
+    route: '/llm/',
+    surface: 'ai',
+  },
+  codex_revamped: {
+    controlMode: 'optional',
+    description: 'Codex ReVamped dashboard and account-pool API surfaced through home-server.',
+    group: 'ai',
+    label: 'Codex ReVamped',
+    route: '/codex-revamped/',
+    surface: 'ai',
+  },
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -556,10 +721,12 @@ const OPTIONAL_SERVICE_NAMES = [
   'syncthing',
   'samba',
   'sshd',
+  'llm',
+  'codex_revamped',
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
 const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
-const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'downloads', 'filesystem', 'access'];
+const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'downloads', 'filesystem', 'access', 'ai'];
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SERVICE_HISTORY_LIMIT = 400;
@@ -788,19 +955,55 @@ const readIniValue = (content, key) => {
   return match ? match[1].trim() : null;
 };
 
+const readPathUsage = (targetPath) => {
+  try {
+    const stats = fs.statfsSync(targetPath);
+    const bytesTotal = Number(stats.blocks) * Number(stats.bsize);
+    const bytesFree = Number(stats.bavail) * Number(stats.bsize);
+    const bytesUsed = Math.max(bytesTotal - bytesFree, 0);
+    const usedPercent = bytesTotal > 0 ? (bytesUsed / bytesTotal) * 100 : 0;
+    return {
+      bytesFree,
+      bytesTotal,
+      bytesUsed,
+      freeGb: bytesFree / (1024 ** 3),
+      usedPercent,
+    };
+  } catch {
+    return null;
+  }
+};
+
 const probeQbittorrentConfig = () => withLocalProbeCache('qbittorrentConfig', 5000, () => {
   const fallbackPath = fs.existsSync(MEDIA_DOWNLOADS_MANUAL_DIR) ? MEDIA_DOWNLOADS_MANUAL_DIR : MEDIA_DOWNLOADS_DIR;
+  const fallbackTempPath = fs.existsSync(MEDIA_QBIT_TMP_DIR) ? MEDIA_QBIT_TMP_DIR : MEDIA_DOWNLOADS_DIR;
   if (!fs.existsSync(QBITTORRENT_CONFIG_PATH)) {
-    return { defaultSavePath: fallbackPath };
+    return {
+      defaultSavePath: fallbackPath,
+      tempPath: fallbackTempPath,
+      moviesCategoryPath: MEDIA_DOWNLOADS_MOVIES_DIR,
+      seriesCategoryPath: MEDIA_DOWNLOADS_SERIES_DIR,
+      manualCategoryPath: MEDIA_DOWNLOADS_MANUAL_DIR,
+    };
   }
 
   try {
     const configText = fs.readFileSync(QBITTORRENT_CONFIG_PATH, 'utf8');
     return {
       defaultSavePath: readIniValue(configText, 'Session\\DefaultSavePath') || fallbackPath,
+      tempPath: readIniValue(configText, 'Session\\TempPath') || fallbackTempPath,
+      moviesCategoryPath: readIniValue(configText, 'Categories\\movies\\SavePath') || MEDIA_DOWNLOADS_MOVIES_DIR,
+      seriesCategoryPath: readIniValue(configText, 'Categories\\series\\SavePath') || MEDIA_DOWNLOADS_SERIES_DIR,
+      manualCategoryPath: readIniValue(configText, 'Categories\\manual\\SavePath') || MEDIA_DOWNLOADS_MANUAL_DIR,
     };
   } catch {
-    return { defaultSavePath: fallbackPath };
+    return {
+      defaultSavePath: fallbackPath,
+      tempPath: fallbackTempPath,
+      moviesCategoryPath: MEDIA_DOWNLOADS_MOVIES_DIR,
+      seriesCategoryPath: MEDIA_DOWNLOADS_SERIES_DIR,
+      manualCategoryPath: MEDIA_DOWNLOADS_MANUAL_DIR,
+    };
   }
 });
 
@@ -1217,9 +1420,61 @@ const buildMediaWorkflowSnapshot = (catalog) => {
     .filter(Boolean);
   const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
   const primaryDownloadEntry = downloadEntries[0] || null;
-  const libraryRoots = [MEDIA_MOVIES_DIR, MEDIA_SERIES_DIR];
-  const downloadRoots = [MEDIA_DOWNLOADS_DIR, MEDIA_DOWNLOADS_MANUAL_DIR];
+  const libraryRoots = [MEDIA_MOVIES_DIR, MEDIA_SERIES_DIR, MEDIA_MUSIC_DIR, MEDIA_AUDIOBOOKS_DIR];
+  const downloadRoots = [MEDIA_DOWNLOADS_DIR, MEDIA_DOWNLOADS_MOVIES_DIR, MEDIA_DOWNLOADS_SERIES_DIR, MEDIA_DOWNLOADS_MANUAL_DIR];
   const qbittorrentConfig = probeQbittorrentConfig();
+  const importStatusRaw = readJsonFile(MEDIA_IMPORT_STATUS_FILE, null);
+  const cleanupStatusRaw = readJsonFile(MEDIA_CLEANUP_STATUS_FILE, null);
+  const importStatus = importStatusRaw && typeof importStatusRaw === 'object'
+    ? {
+      aborted: Boolean(importStatusRaw.aborted),
+      abortReason: typeof importStatusRaw.abortReason === 'string' ? importStatusRaw.abortReason : '',
+      ambiguousReview: Number(importStatusRaw.ambiguousReview || 0),
+      collisionCount: Number(importStatusRaw.collisionCount || 0),
+      failed: Number(importStatusRaw.failed || 0),
+      imported: Number(importStatusRaw.imported || 0),
+      lastRunAt: typeof importStatusRaw.lastRunAt === 'string' ? importStatusRaw.lastRunAt : null,
+      scannedItems: Number(importStatusRaw.scannedItems || 0),
+      skippedExisting: Number(importStatusRaw.skippedExisting || 0),
+      status: typeof importStatusRaw.status === 'string' ? importStatusRaw.status : 'unknown',
+      trigger: typeof importStatusRaw.trigger === 'string' ? importStatusRaw.trigger : 'unknown',
+    }
+    : null;
+  const cleanupStatus = cleanupStatusRaw && typeof cleanupStatusRaw === 'object'
+    ? {
+      cleanupMode: typeof cleanupStatusRaw.cleanupMode === 'string' ? cleanupStatusRaw.cleanupMode : 'hybrid_age_and_size',
+      deletedBytes: Number(cleanupStatusRaw.deletedBytes || 0),
+      deletedCacheItems: Number(cleanupStatusRaw.deletedCacheItems || 0),
+      deletedImportedItems: Number(cleanupStatusRaw.deletedImportedItems || 0),
+      deletedItems: Number(cleanupStatusRaw.deletedItems || 0),
+      lastRunAt: typeof cleanupStatusRaw.lastRunAt === 'string' ? cleanupStatusRaw.lastRunAt : null,
+      scratchPressureAfter: Boolean(cleanupStatusRaw.scratchPressureAfter),
+      scratchPressureBefore: Boolean(cleanupStatusRaw.scratchPressureBefore),
+      status: typeof cleanupStatusRaw.status === 'string' ? cleanupStatusRaw.status : 'unknown',
+      trigger: typeof cleanupStatusRaw.trigger === 'string' ? cleanupStatusRaw.trigger : 'unknown',
+    }
+    : null;
+  const reviewQueueCount = (() => {
+    try {
+      if (!fs.existsSync(MEDIA_IMPORT_REVIEW_DIR)) {
+        return 0;
+      }
+      return fs.readdirSync(MEDIA_IMPORT_REVIEW_DIR, { withFileTypes: true })
+        .filter((entry) => !entry.name.startsWith('.'))
+        .length;
+    } catch {
+      return 0;
+    }
+  })();
+  const vaultUsage = readPathUsage(MEDIA_VAULT_ROOT);
+  const scratchUsage = readPathUsage(MEDIA_SCRATCH_ROOT);
+  const vaultWarning = Boolean(vaultUsage && vaultUsage.freeGb <= MEDIA_VAULT_WARN_FREE_GB);
+  const scratchWarning = Boolean(
+    scratchUsage
+    && (scratchUsage.freeGb <= MEDIA_SCRATCH_WARN_FREE_GB || scratchUsage.usedPercent >= MEDIA_SCRATCH_WARN_USED_PERCENT)
+  );
+  const vaultRootsStats = buildDriveStats(MEDIA_VAULT_ROOTS);
+  const scratchRootsStats = buildDriveStats(MEDIA_SCRATCH_ROOTS);
   const liveTvProbe = probeJellyfinLiveTvState();
   const libraryRootReady = libraryRoots.every((candidate) => fs.existsSync(candidate));
   const playlistSource = resolveMediaSource(JELLYFIN_LIVE_TV_M3U_URL, JELLYFIN_LIVE_TV_M3U_PATH, MEDIA_IPTV_CACHE_DIR, ['.m3u', '.m3u8']);
@@ -1254,7 +1509,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
       status: watchEntry?.status || 'unavailable',
       summary: libraryRootReady
         ? `Library roots ready at ${libraryRoots.join(' and ')}`
-        : `Library roots missing under ${MEDIA_ROOT}`,
+        : `Library roots missing under ${MEDIA_VAULT_ROOT}`,
     },
     requests: {
       blocker: requestsBlocked ? requestEntry?.blocker || 'Request portal is not installed on this host yet.' : null,
@@ -1274,6 +1529,12 @@ const buildMediaWorkflowSnapshot = (catalog) => {
     downloads: {
       clientCount: downloadEntries.length,
       defaultSavePath: qbittorrentConfig.defaultSavePath,
+      tempPath: qbittorrentConfig.tempPath,
+      categoryPaths: {
+        manual: qbittorrentConfig.manualCategoryPath,
+        movies: qbittorrentConfig.moviesCategoryPath,
+        series: qbittorrentConfig.seriesCategoryPath,
+      },
       downloadRoots,
       primaryServiceKey: primaryDownloadEntry?.key || null,
       serviceKeys: downloadEntries.map((entry) => entry.key),
@@ -1282,6 +1543,59 @@ const buildMediaWorkflowSnapshot = (catalog) => {
         ? `${primaryDownloadEntry?.label || 'Download clients'} run in the Downloads tab. Save path: ${qbittorrentConfig.defaultSavePath || downloadRoots.join(' and ')}`
         : 'No download clients are configured yet.',
       workspaceTab: 'downloads',
+    },
+    storage: {
+      compatibilityRoot: MEDIA_ROOT,
+      vaultRoot: MEDIA_VAULT_ROOT,
+      vaultRoots: MEDIA_VAULT_ROOTS,
+      scratchRoot: MEDIA_SCRATCH_ROOT,
+      scratchRoots: MEDIA_SCRATCH_ROOTS,
+      vaultRootsStats,
+      scratchRootsStats,
+      importAbortFreeGb: MEDIA_IMPORT_ABORT_FREE_GB,
+      vaultWarnFreeGb: MEDIA_VAULT_WARN_FREE_GB,
+      scratchWarnFreeGb: MEDIA_SCRATCH_WARN_FREE_GB,
+      scratchWarnUsedPercent: MEDIA_SCRATCH_WARN_USED_PERCENT,
+      scratchRetentionDays: MEDIA_SCRATCH_RETENTION_DAYS,
+      scratchMinFreeGb: MEDIA_SCRATCH_MIN_FREE_GB,
+      scratchCleanupEnabled: MEDIA_SCRATCH_CLEANUP_ENABLED,
+      cleanupMode: 'hybrid_age_and_size',
+      importReviewDir: MEDIA_IMPORT_REVIEW_DIR,
+      importLogDir: MEDIA_IMPORT_LOG_DIR,
+      importStatusFile: MEDIA_IMPORT_STATUS_FILE,
+      cleanupStatusFile: MEDIA_CLEANUP_STATUS_FILE,
+      importIndexFile: MEDIA_IMPORTED_INDEX_FILE,
+      importEventsFile: MEDIA_IMPORT_EVENTS_FILE,
+      importStatus,
+      cleanupStatus,
+      reviewQueueCount,
+      lastImportRunAt: importStatus?.lastRunAt || null,
+      lastCleanupRunAt: cleanupStatus?.lastRunAt || null,
+      importStatusSummary: importStatus
+        ? `status=${importStatus.status}, imported=${importStatus.imported}, skipped=${importStatus.skippedExisting}, failed=${importStatus.failed}, review=${importStatus.ambiguousReview}`
+        : 'Importer has not produced status yet.',
+      cleanupStatusSummary: cleanupStatus
+        ? `status=${cleanupStatus.status}, deletedItems=${cleanupStatus.deletedItems}, deletedBytes=${cleanupStatus.deletedBytes}`
+        : 'Cleanup has not produced status yet.',
+      transcodeDir: MEDIA_TRANSCODE_DIR,
+      miscCacheDir: MEDIA_MISC_CACHE_DIR,
+      qbitTempDir: MEDIA_QBIT_TMP_DIR,
+      qbitDefaultSavePath: qbittorrentConfig.defaultSavePath,
+      qbitCategoryPaths: {
+        manual: qbittorrentConfig.manualCategoryPath,
+        movies: qbittorrentConfig.moviesCategoryPath,
+        series: qbittorrentConfig.seriesCategoryPath,
+      },
+      vault: vaultUsage ? {
+        freeGb: Number(vaultUsage.freeGb.toFixed(2)),
+        usedPercent: Number(vaultUsage.usedPercent.toFixed(2)),
+        warning: vaultWarning,
+      } : null,
+      scratch: scratchUsage ? {
+        freeGb: Number(scratchUsage.freeGb.toFixed(2)),
+        usedPercent: Number(scratchUsage.usedPercent.toFixed(2)),
+        warning: scratchWarning,
+      } : null,
     },
     subtitles: {
       blocker: !subtitleEntry || !subtitleEntry.available ? subtitleEntry?.blocker || 'Subtitle automation is not installed on this host.' : null,
@@ -1441,8 +1755,12 @@ const invalidateSession = (sessionId) => {
 };
 
 const invalidateSessionFromToken = (token) => {
+  if (!token) {
+    return;
+  }
+
   try {
-    const decoded = jwt.decode(token);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded && typeof decoded === 'object' && decoded.jti) {
       invalidateSession(decoded.jti);
     }
@@ -2451,7 +2769,15 @@ const listFilesystemDirectory = async (inputPath = '', req) => {
       const childAbsolute = path.join(absolutePath, name);
       const childRelative = relativePath ? path.join(relativePath, name) : name;
       const dirent = fs.lstatSync(childAbsolute);
-      const resolvedStat = dirent.isSymbolicLink() ? fs.statSync(childAbsolute) : dirent;
+      let resolvedStat = dirent;
+      if (dirent.isSymbolicLink()) {
+        try {
+          resolvedStat = fs.statSync(childAbsolute);
+        } catch {
+          // keep broken symlinks visible rather than failing the listing
+          resolvedStat = dirent;
+        }
+      }
       const type = describeFsType(dirent, resolvedStat);
       const childSegments = relativeSegments(childRelative);
       const protectedEntry = (childSegments.length === 1 && managedRoots.has(childSegments[0])) || shouldHideFsEntry(childRelative);
@@ -2983,6 +3309,414 @@ const clearAuthCookie = (res, req) => {
   res.clearCookie(AUTH_COOKIE_NAME, buildCookieOptions(req));
 };
 
+const LLM_MODEL_PRESETS = [
+  {
+    id: 'qwen2.5-coder-1.5b-q4_k_m',
+    label: 'Qwen2.5-Coder 1.5B Q4_K_M',
+    repo: 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF',
+    file: 'qwen2.5-coder-1.5b-instruct-q4_k_m.gguf',
+  },
+  {
+    id: 'qwen2.5-coder-3b-q4_k_m',
+    label: 'Qwen2.5-Coder 3B Q4_K_M',
+    repo: 'Qwen/Qwen2.5-Coder-3B-Instruct-GGUF',
+    file: 'qwen2.5-coder-3b-instruct-q4_k_m.gguf',
+  },
+  {
+    id: 'qwen2.5-coder-7b-q4_k_m',
+    label: 'Qwen2.5-Coder 7B Q4_K_M',
+    repo: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF',
+    file: 'qwen2.5-coder-7b-instruct-q4_k_m.gguf',
+  },
+  {
+    id: 'mistral-7b-instruct-v0.3-q4_k_m',
+    label: 'Mistral 7B Instruct v0.3 Q4_K_M',
+    repo: 'bartowski/Mistral-7B-Instruct-v0.3-GGUF',
+    file: 'Mistral-7B-Instruct-v0.3-Q4_K_M.gguf',
+  },
+  {
+    id: 'llama-3.2-3b-instruct-q4_k_m',
+    label: 'Llama 3.2 3B Instruct Q4_K_M',
+    repo: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
+    file: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+  },
+];
+
+const sanitizeModelId = (value, fallback = '') => {
+  const next = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  return next || fallback;
+};
+
+const listLocalGgufFiles = (rootDir) => {
+  const found = [];
+  const visit = (dirPath, depth) => {
+    if (depth > 3) {
+      return;
+    }
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath, depth + 1);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.gguf')) {
+        found.push(fullPath);
+      }
+    }
+  };
+  visit(rootDir, 0);
+  return found;
+};
+
+const readJsonFileSafe = (filePath, fallback = null) => {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+};
+
+const resolvePresetModelPath = (preset) => path.join(LLM_MODELS_DIR, preset.id, preset.file);
+
+const getCustomLlmModels = () => {
+  const raw = appDb.getSetting('llm.customModels', '[]');
+  try {
+    const value = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value
+      .map((entry) => ({
+        id: sanitizeModelId(entry?.id),
+        label: String(entry?.label || '').trim(),
+        path: String(entry?.path || '').trim(),
+      }))
+      .filter((entry) => entry.id && entry.path);
+  } catch {
+    return [];
+  }
+};
+
+const saveCustomLlmModels = (models) => {
+  appDb.setSetting('llm.customModels', JSON.stringify(models));
+};
+
+const resolveActiveModelId = () => sanitizeModelId(appDb.getSetting('llm.activeModelId', LLM_DEFAULT_MODEL_ID), LLM_DEFAULT_MODEL_ID);
+
+const setActiveModel = ({ modelId, modelPath }) => {
+  appDb.setSetting('llm.activeModelId', modelId);
+  fs.mkdirSync(path.dirname(LLM_ACTIVE_MODEL_FILE), { recursive: true });
+  fs.writeFileSync(LLM_ACTIVE_MODEL_FILE, `${modelPath}\n`, 'utf8');
+};
+
+const resolveOnlineModelPreference = () => sanitizeModelId(
+  appDb.getSetting('llm.onlineModelId', ONLINE_LLM_DEFAULT_MODEL),
+  sanitizeModelId(ONLINE_LLM_DEFAULT_MODEL),
+);
+
+const setOnlineModelPreference = (modelId) => {
+  appDb.setSetting('llm.onlineModelId', sanitizeModelId(modelId));
+};
+
+const buildLlmModelCatalog = () => {
+  const customModels = getCustomLlmModels();
+  const presetModels = LLM_MODEL_PRESETS.map((preset) => {
+    const modelPath = resolvePresetModelPath(preset);
+    return {
+      id: preset.id,
+      label: preset.label,
+      source: 'preset',
+      repo: preset.repo,
+      file: preset.file,
+      path: modelPath,
+      url: `https://huggingface.co/${preset.repo}/resolve/main/${preset.file}`,
+      installed: fs.existsSync(modelPath),
+    };
+  });
+  const customCatalog = customModels.map((entry) => ({
+    id: entry.id,
+    label: entry.label || entry.id,
+    source: 'custom',
+    path: entry.path,
+    installed: fs.existsSync(entry.path),
+  }));
+  const byId = new Map([...presetModels, ...customCatalog].map((entry) => [entry.id, entry]));
+  const localFiles = listLocalGgufFiles(LLM_MODELS_DIR);
+  for (const filePath of localFiles) {
+    if ([...byId.values()].some((entry) => entry.path === filePath)) {
+      continue;
+    }
+    const id = sanitizeModelId(`auto-${path.basename(filePath, '.gguf')}`, `auto-${crypto.randomUUID().slice(0, 8)}`);
+    byId.set(id, {
+      id,
+      label: path.basename(filePath),
+      source: 'auto',
+      path: filePath,
+      installed: true,
+    });
+  }
+  return [...byId.values()];
+};
+
+const readLlmPullJob = (jobId) => {
+  const normalizedId = sanitizeModelId(jobId);
+  if (!normalizedId) {
+    return null;
+  }
+  const jobPath = path.join(LLM_PULL_STATE_DIR, `${normalizedId}.json`);
+  const state = readJsonFileSafe(jobPath, null);
+  if (!state || typeof state !== 'object') {
+    return null;
+  }
+  return {
+    id: normalizedId,
+    ...state,
+  };
+};
+
+const listLlmPullJobs = () => {
+  let files = [];
+  try {
+    files = fs.readdirSync(LLM_PULL_STATE_DIR).filter((name) => name.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  return files
+    .map((name) => readLlmPullJob(name.replace(/\.json$/, '')))
+    .filter(Boolean)
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+};
+
+const startLlmPullJob = (presetModel) => {
+  if (!fs.existsSync(LLM_MODEL_PULL_CMD)) {
+    throw new Error(`Model pull helper not found at ${LLM_MODEL_PULL_CMD}`);
+  }
+
+  const jobId = sanitizeModelId(`pull-${presetModel.id}-${Date.now()}`, `pull-${Date.now()}`);
+  const jobPath = path.join(LLM_PULL_STATE_DIR, `${jobId}.json`);
+  fs.mkdirSync(path.dirname(jobPath), { recursive: true });
+  fs.writeFileSync(jobPath, JSON.stringify({
+    status: 'queued',
+    message: 'Queued',
+    modelId: presetModel.id,
+    targetPath: presetModel.path,
+    updatedAt: new Date().toISOString(),
+    url: presetModel.url,
+  }), 'utf8');
+  fs.mkdirSync(path.dirname(presetModel.path), { recursive: true });
+
+  const child = spawn(EXEC_SHELL, [
+    LLM_MODEL_PULL_CMD,
+    jobPath,
+    presetModel.url,
+    presetModel.path,
+  ], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+
+  return { id: jobId };
+};
+
+const findModelById = (modelId) => buildLlmModelCatalog().find((entry) => entry.id === sanitizeModelId(modelId));
+
+const ONLINE_MODEL_CACHE_TTL_MS = 60 * 1000;
+let onlineModelCache = {
+  expiresAt: 0,
+  payload: {
+    activeModelId: '',
+    available: false,
+    configured: false,
+    error: '',
+    models: [],
+  },
+};
+
+const buildOnlineLlmUrl = (pathname) => {
+  if (!ONLINE_LLM_BASE_URL) {
+    return '';
+  }
+  const suffix = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  if (ONLINE_LLM_BASE_URL.toLowerCase().endsWith('/v1')) {
+    return `${ONLINE_LLM_BASE_URL}${suffix}`;
+  }
+  return `${ONLINE_LLM_BASE_URL}/v1${suffix}`;
+};
+
+const withTimeoutSignal = (timeoutMs) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timer),
+  };
+};
+
+const fetchOnlineModels = async ({ force = false } = {}) => {
+  const configured = Boolean(ONLINE_LLM_BASE_URL && ONLINE_LLM_API_KEY);
+  if (!configured) {
+    return {
+      activeModelId: '',
+      available: false,
+      configured: false,
+      error: 'Online provider is not configured in server/.env',
+      models: [],
+    };
+  }
+
+  if (!force && Date.now() < onlineModelCache.expiresAt) {
+    return onlineModelCache.payload;
+  }
+
+  const timeout = withTimeoutSignal(ONLINE_LLM_TIMEOUT_MS);
+  try {
+    const response = await fetch(buildOnlineLlmUrl('/models'), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${ONLINE_LLM_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      signal: timeout.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const failedPayload = {
+        activeModelId: '',
+        available: false,
+        configured: true,
+        error: String(body?.error?.message || body?.error || `Online provider returned ${response.status}`),
+        models: [],
+      };
+      onlineModelCache = {
+        expiresAt: Date.now() + 15000,
+        payload: failedPayload,
+      };
+      return failedPayload;
+    }
+
+    const models = Array.isArray(body?.data)
+      ? body.data
+        .map((entry) => ({
+          id: String(entry?.id || '').trim(),
+          label: String(entry?.id || '').trim(),
+        }))
+        .filter((entry) => entry.id)
+      : [];
+    const preferredModelId = resolveOnlineModelPreference();
+    const activeModelId = preferredModelId && models.some((entry) => entry.id === preferredModelId)
+      ? preferredModelId
+      : (models[0]?.id || preferredModelId || '');
+
+    const successPayload = {
+      activeModelId,
+      available: true,
+      configured: true,
+      error: '',
+      models,
+    };
+    onlineModelCache = {
+      expiresAt: Date.now() + ONLINE_MODEL_CACHE_TTL_MS,
+      payload: successPayload,
+    };
+    return successPayload;
+  } catch (err) {
+    const failedPayload = {
+      activeModelId: '',
+      available: false,
+      configured: true,
+      error: String(err?.message || err || 'Online provider request failed'),
+      models: [],
+    };
+    onlineModelCache = {
+      expiresAt: Date.now() + 15000,
+      payload: failedPayload,
+    };
+    return failedPayload;
+  } finally {
+    timeout.clear();
+  }
+};
+
+const callOnlineChatCompletion = async (payload) => {
+  const timeout = withTimeoutSignal(ONLINE_LLM_TIMEOUT_MS);
+  try {
+    const response = await fetch(buildOnlineLlmUrl('/chat/completions'), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ONLINE_LLM_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: timeout.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    return { response, body };
+  } finally {
+    timeout.clear();
+  }
+};
+
+const buildLlmState = async () => {
+  const service = SERVICES.llm;
+  const install = await resolveServiceInstall('llm', service);
+  const running = install.available ? await checkService(service) : false;
+  const catalog = buildLlmModelCatalog();
+  const activeModelId = resolveActiveModelId();
+  const activeModel = catalog.find((entry) => entry.id === activeModelId) || null;
+  const online = await fetchOnlineModels();
+  return {
+    activeModel,
+    activeModelId,
+    apiKeyConfigured: Boolean(LLM_API_KEY),
+    available: install.available,
+    blocker: install.available ? null : `Requires ${install.label}.`,
+    models: catalog,
+    online,
+    pullJobs: listLlmPullJobs().slice(0, 20),
+    running,
+  };
+};
+
+const requireAdminOrLlmKey = (req, res, next) => {
+  const authorization = String(req.headers.authorization || '');
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
+  if (LLM_API_KEY && bearerMatch && secureCompare(String(bearerMatch[1] || '').trim(), LLM_API_KEY)) {
+    req.llmApiKeyAuth = true;
+    return next();
+  }
+  return requireAuth(req, res, () => requireAdmin(req, res, next));
+};
+
+const buildLlmServerUrl = (pathname) => `http://${LLM_BIND_HOST}:${LLM_PORT}${pathname}`;
+
+const callLlmChatCompletion = async (payload, { stream = false } = {}) => {
+  const timeout = withTimeoutSignal(LLM_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(buildLlmServerUrl('/v1/chat/completions'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: timeout.signal,
+    });
+
+    if (stream) {
+      return response;
+    }
+
+    const body = await response.json().catch(() => ({}));
+    return { response, body };
+  } finally {
+    timeout.clear();
+  }
+};
+
 /* ---------------- ROUTES ---------------- */
 
 const loginHandler = (req, res) => {
@@ -3074,6 +3808,360 @@ const statusHandler = (req, res) => {
   res.json({
     uptime: `${(os.uptime() / 3600).toFixed(1)} hrs`,
   });
+};
+
+const llmStateHandler = async (req, res) => {
+  try {
+    const payload = await buildLlmState();
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: String(err || 'Unable to load LLM state') });
+  }
+};
+
+const llmModelSelectHandler = async (req, res) => {
+  const modelId = sanitizeModelId(req.body?.modelId);
+  if (!modelId) {
+    return res.status(400).json({ error: 'modelId is required' });
+  }
+  const model = findModelById(modelId);
+  if (!model) {
+    return res.status(404).json({ error: 'Model not found' });
+  }
+  if (!model.installed || !fs.existsSync(model.path)) {
+    return res.status(409).json({ error: 'Model is not installed locally' });
+  }
+  setActiveModel({ modelId: model.id, modelPath: model.path });
+  const running = await checkService(SERVICES.llm).catch(() => false);
+  return res.json({
+    success: true,
+    model,
+    restartRequired: running,
+  });
+};
+
+const llmModelAddLocalHandler = (req, res) => {
+  const label = String(req.body?.label || '').trim();
+  const modelPath = String(req.body?.path || '').trim();
+  if (!modelPath) {
+    return res.status(400).json({ error: 'path is required' });
+  }
+  if (!path.isAbsolute(modelPath)) {
+    return res.status(400).json({ error: 'path must be absolute' });
+  }
+  if (!fs.existsSync(modelPath) || !fs.statSync(modelPath).isFile()) {
+    return res.status(400).json({ error: 'path must point to an existing file' });
+  }
+  if (!modelPath.toLowerCase().endsWith('.gguf')) {
+    return res.status(400).json({ error: 'path must point to a .gguf model file' });
+  }
+
+  const modelId = sanitizeModelId(`local-${label || path.basename(modelPath, '.gguf')}-${crypto.randomUUID().slice(0, 6)}`);
+  const current = getCustomLlmModels();
+  current.push({
+    id: modelId,
+    label: label || path.basename(modelPath, '.gguf'),
+    path: modelPath,
+  });
+  saveCustomLlmModels(current);
+  return res.json({
+    success: true,
+    model: findModelById(modelId),
+  });
+};
+
+const llmModelPullHandler = (req, res) => {
+  const modelId = sanitizeModelId(req.body?.modelId);
+  if (!modelId) {
+    return res.status(400).json({ error: 'modelId is required' });
+  }
+  const model = findModelById(modelId);
+  if (!model || model.source !== 'preset') {
+    return res.status(404).json({ error: 'Preset model not found' });
+  }
+  if (model.installed && fs.existsSync(model.path)) {
+    return res.json({ success: true, alreadyInstalled: true, model });
+  }
+  try {
+    const job = startLlmPullJob(model);
+    return res.json({
+      success: true,
+      jobId: job.id,
+      modelId: model.id,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: String(err || 'Unable to start pull job') });
+  }
+};
+
+const llmModelPullStatusHandler = (req, res) => {
+  const job = readLlmPullJob(req.params.jobId || '');
+  if (!job) {
+    return res.status(404).json({ error: 'Pull job not found' });
+  }
+  return res.json(job);
+};
+
+const llmOnlineModelsRefreshHandler = async (req, res) => {
+  try {
+    const online = await fetchOnlineModels({ force: true });
+    return res.json({ success: true, online });
+  } catch (err) {
+    return res.status(500).json({ error: String(err || 'Unable to refresh online models') });
+  }
+};
+
+const llmOnlineModelSelectHandler = async (req, res) => {
+  const modelId = String(req.body?.modelId || '').trim();
+  if (!modelId) {
+    return res.status(400).json({ error: 'modelId is required' });
+  }
+  const online = await fetchOnlineModels({ force: true });
+  if (!online.configured) {
+    return res.status(409).json({ error: 'Online provider is not configured.' });
+  }
+  if (!online.available) {
+    return res.status(409).json({ error: online.error || 'Online provider is unavailable.' });
+  }
+  const model = online.models.find((entry) => entry.id === modelId);
+  if (!model) {
+    return res.status(400).json({ error: 'A valid online model is required.' });
+  }
+  setOnlineModelPreference(model.id);
+  onlineModelCache = {
+    expiresAt: Date.now() + ONLINE_MODEL_CACHE_TTL_MS,
+    payload: {
+      ...online,
+      activeModelId: model.id,
+    },
+  };
+  return res.json({
+    success: true,
+    model,
+  });
+};
+
+const llmConversationsHandler = (req, res) => {
+  try {
+    const conversations = appDb.listLlmConversations(req.session?.userId);
+    return res.json({ conversations });
+  } catch (err) {
+    return res.status(500).json({ error: String(err || 'Unable to list conversations') });
+  }
+};
+
+const llmConversationMessagesHandler = (req, res) => {
+  const conversationId = Number(req.params.id || 0);
+  if (!Number.isInteger(conversationId) || conversationId <= 0) {
+    return res.status(400).json({ error: 'Valid conversation id is required' });
+  }
+  const conversation = appDb.getLlmConversation(conversationId);
+  if (!conversation || conversation.userId !== req.session?.userId) {
+    return res.status(404).json({ error: 'Conversation not found' });
+  }
+  return res.json({
+    conversation,
+    messages: appDb.listLlmMessages(conversationId),
+  });
+};
+
+const llmConversationDeleteHandler = (req, res) => {
+  const conversationId = Number(req.params.id || 0);
+  if (!Number.isInteger(conversationId) || conversationId <= 0) {
+    return res.status(400).json({ error: 'Valid conversation id is required' });
+  }
+  const conversation = appDb.getLlmConversation(conversationId);
+  if (!conversation || conversation.userId !== req.session?.userId) {
+    return res.status(404).json({ error: 'Conversation not found' });
+  }
+  appDb.deleteLlmConversation(conversationId);
+  return res.json({ success: true, id: conversationId });
+};
+
+const llmChatHandler = async (req, res) => {
+  const text = String(req.body?.message || '').trim();
+  if (!text) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  const mode = String(req.body?.mode || 'local').trim().toLowerCase() === 'online' ? 'online' : 'local';
+  const llmState = await buildLlmState();
+  let selectedModelId = '';
+  if (mode === 'local') {
+    if (!llmState.available) {
+      return res.status(409).json({ error: llmState.blocker || 'LLM service is unavailable' });
+    }
+    if (!llmState.running) {
+      return res.status(409).json({ error: 'LLM service is stopped. Start Local LLM first.' });
+    }
+    if (!llmState.activeModel || !llmState.activeModel.installed) {
+      return res.status(409).json({ error: 'No active model is installed. Select and install a model first.' });
+    }
+    selectedModelId = llmState.activeModel.id;
+  } else {
+    const online = llmState.online || {};
+    if (!online.configured) {
+      return res.status(409).json({ error: 'Online provider is not configured.' });
+    }
+    if (!online.available) {
+      return res.status(409).json({ error: online.error || 'Online provider is unavailable.' });
+    }
+    const requestedOnlineModelId = String(req.body?.onlineModelId || req.body?.modelId || '').trim();
+    selectedModelId = requestedOnlineModelId || String(online.activeModelId || '');
+    if (!selectedModelId || !Array.isArray(online.models) || !online.models.some((entry) => entry.id === selectedModelId)) {
+      return res.status(400).json({ error: 'A valid online model is required.' });
+    }
+  }
+
+  let conversation = null;
+  const requestedConversationId = Number(req.body?.conversationId || 0);
+  if (Number.isInteger(requestedConversationId) && requestedConversationId > 0) {
+    const existing = appDb.getLlmConversation(requestedConversationId);
+    if (!existing || existing.userId !== req.session?.userId) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    conversation = existing;
+  } else {
+    conversation = appDb.createLlmConversation({
+      userId: req.session?.userId,
+      title: text.slice(0, 80),
+    });
+  }
+
+  appDb.appendLlmMessage({
+    conversationId: conversation.id,
+    role: 'user',
+    content: text,
+    modelId: selectedModelId,
+  });
+
+  const history = appDb.listLlmMessages(conversation.id);
+  const messages = [
+    { role: 'system', content: LLM_CHAT_SYSTEM_PROMPT },
+    ...history.map((entry) => ({ role: entry.role, content: entry.content })),
+  ];
+
+  const chatPayload = {
+    model: selectedModelId,
+    messages,
+    stream: false,
+    max_tokens: LLM_MAX_TOKENS,
+    temperature: LLM_TEMPERATURE,
+  };
+  const { response, body } = mode === 'online'
+    ? await callOnlineChatCompletion(chatPayload)
+    : await callLlmChatCompletion(chatPayload);
+  if (!response.ok) {
+    return res.status(502).json({
+      error: body?.error?.message || body?.error || 'LLM request failed',
+    });
+  }
+
+  const assistantText = String(body?.choices?.[0]?.message?.content || '').trim();
+  if (!assistantText) {
+    return res.status(502).json({ error: 'LLM returned an empty response' });
+  }
+
+  const assistantMessage = appDb.appendLlmMessage({
+    conversationId: conversation.id,
+    role: 'assistant',
+    content: assistantText,
+    modelId: selectedModelId,
+  });
+
+  return res.json({
+    success: true,
+    conversationId: conversation.id,
+    mode,
+    assistantMessage,
+  });
+};
+
+const openAiModelsHandler = async (req, res) => {
+  const state = await buildLlmState();
+  const models = state.models
+    .filter((entry) => entry.installed)
+    .map((entry) => ({
+      id: entry.id,
+      object: 'model',
+      owned_by: entry.source || 'local',
+      created: 0,
+    }));
+  return res.json({
+    object: 'list',
+    data: models,
+    active_model: state.activeModelId,
+  });
+};
+
+const openAiChatCompletionsHandler = async (req, res) => {
+  const state = await buildLlmState();
+  if (!state.available) {
+    return res.status(409).json({ error: { message: state.blocker || 'LLM service unavailable', type: 'service_unavailable' } });
+  }
+  if (!state.running) {
+    return res.status(409).json({ error: { message: 'LLM service is stopped', type: 'service_unavailable' } });
+  }
+
+  const requestedModelId = sanitizeModelId(req.body?.model || state.activeModelId);
+  if (requestedModelId !== state.activeModelId) {
+    return res.status(409).json({
+      error: {
+        message: `Model '${requestedModelId}' is not active. Switch active model to continue.`,
+        type: 'model_mismatch',
+      },
+    });
+  }
+
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  if (messages.length === 0) {
+    return res.status(400).json({ error: { message: 'messages are required', type: 'invalid_request_error' } });
+  }
+
+  const stream = Boolean(req.body?.stream);
+  const payload = {
+    ...req.body,
+    model: state.activeModelId,
+    max_tokens: req.body?.max_tokens || LLM_MAX_TOKENS,
+    temperature: Number.isFinite(Number(req.body?.temperature)) ? Number(req.body.temperature) : LLM_TEMPERATURE,
+    stream,
+  };
+  if (!Array.isArray(payload.messages) || payload.messages.length === 0 || payload.messages[0]?.role !== 'system') {
+    payload.messages = [{ role: 'system', content: LLM_CHAT_SYSTEM_PROMPT }, ...messages];
+  }
+
+  if (stream) {
+    const upstream = await callLlmChatCompletion(payload, { stream: true });
+    if (!upstream.ok) {
+      const errorBody = await upstream.json().catch(() => ({}));
+      return res.status(502).json({
+        error: {
+          message: errorBody?.error?.message || errorBody?.error || 'Upstream LLM stream failed',
+          type: 'upstream_error',
+        },
+      });
+    }
+    res.status(200);
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    if (!upstream.body) {
+      return res.end();
+    }
+    Readable.fromWeb(upstream.body).pipe(res);
+    return;
+  }
+
+  const { response, body } = await callLlmChatCompletion(payload);
+  if (!response.ok) {
+    return res.status(502).json({
+      error: {
+        message: body?.error?.message || body?.error || 'Upstream LLM request failed',
+        type: 'upstream_error',
+      },
+    });
+  }
+  return res.json(body);
 };
 
 const servicesHandler = async (req, res) => {
@@ -3836,7 +4924,6 @@ const ftpDefaultsHandler = (req, res) => {
   res.json({
     defaultName: DEFAULT_PS4_FTP_NAME,
     host: process.env.FTP_CLIENT_HOST || DEFAULT_PS4_HOST,
-    password: process.env.FTP_CLIENT_PASSWORD || DEFAULT_PS4_PASSWORD,
     port: Number(process.env.FTP_CLIENT_PORT || DEFAULT_PS4_PORT),
     user: process.env.FTP_CLIENT_USER || DEFAULT_PS4_USER,
     secure: process.env.FTP_CLIENT_SECURE === 'true',
@@ -4099,6 +5186,19 @@ registerDualRoute('post', '/ftp/list', requireAuth, requireAdmin, ftpListHandler
 registerDualRoute('post', '/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
 registerDualRoute('post', '/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
 registerDualRoute('post', '/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
+registerDualRoute('get', '/llm/state', requireAuth, requireAdmin, llmStateHandler);
+registerDualRoute('post', '/llm/models/select', requireAuth, requireAdmin, llmModelSelectHandler);
+registerDualRoute('post', '/llm/models/add-local', requireAuth, requireAdmin, llmModelAddLocalHandler);
+registerDualRoute('post', '/llm/models/pull', requireAuth, requireAdmin, llmModelPullHandler);
+registerDualRoute('get', '/llm/models/pull/:jobId', requireAuth, requireAdmin, llmModelPullStatusHandler);
+registerDualRoute('post', '/llm/online/models/refresh', requireAuth, requireAdmin, llmOnlineModelsRefreshHandler);
+registerDualRoute('post', '/llm/online/models/select', requireAuth, requireAdmin, llmOnlineModelSelectHandler);
+registerDualRoute('get', '/llm/conversations', requireAuth, requireAdmin, llmConversationsHandler);
+registerDualRoute('get', '/llm/conversations/:id/messages', requireAuth, requireAdmin, llmConversationMessagesHandler);
+registerDualRoute('delete', '/llm/conversations/:id', requireAuth, requireAdmin, llmConversationDeleteHandler);
+registerDualRoute('post', '/llm/chat', requireAuth, requireAdmin, llmChatHandler);
+registerDualRoute('get', '/openai/v1/models', requireAdminOrLlmKey, openAiModelsHandler);
+registerDualRoute('post', '/openai/v1/chat/completions', requireAdminOrLlmKey, openAiChatCompletionsHandler);
 
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {

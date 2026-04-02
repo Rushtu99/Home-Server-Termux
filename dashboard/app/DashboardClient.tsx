@@ -28,10 +28,10 @@ const THEME = {
   border: 'var(--border)',
 };
 
-type TabKey = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'settings';
+type TabKey = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'filesystem' | 'ftp' | 'ai' | 'settings';
 type Services = Record<string, boolean>;
-type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads';
-type ServiceSurface = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem';
+type ServiceGroupKey = 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads' | 'ai';
+type ServiceSurface = 'home' | 'media' | 'downloads' | 'arr' | 'terminal' | 'settings' | 'ftp' | 'filesystem' | 'ai';
 
 type ServiceCatalogEntry = {
   available: boolean;
@@ -162,7 +162,6 @@ type FtpFavouriteDraft = {
 type FtpDefaults = {
   defaultName: string;
   host: string;
-  password: string;
   port: number;
   user: string;
   secure: boolean;
@@ -297,6 +296,52 @@ type BatteryManagerLike = {
   removeEventListener: (event: 'chargingchange' | 'levelchange', listener: () => void) => void;
 };
 
+type LlmModel = {
+  id: string;
+  label: string;
+  source: 'preset' | 'custom' | 'auto' | string;
+  path: string;
+  installed: boolean;
+  repo?: string;
+  file?: string;
+  url?: string;
+};
+
+type LlmOnlineModel = {
+  id: string;
+  label: string;
+};
+
+type LlmPullJob = {
+  id: string;
+  status: 'queued' | 'running' | 'success' | 'failed' | string;
+  message?: string;
+  modelId?: string;
+  updatedAt?: string;
+};
+
+type LlmConversation = {
+  id: number;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type LlmMessage = {
+  id: number;
+  conversationId: number;
+  role: 'system' | 'user' | 'assistant' | 'tool' | string;
+  content: string;
+  modelId?: string;
+  createdAt: string;
+};
+
+type LlmSubview = 'chat' | 'manage';
+
+type LlmMessageSegment =
+  | { type: 'text'; content: string }
+  | { type: 'code'; content: string; language: string };
+
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'home', label: 'Home' },
   { key: 'media', label: 'Media' },
@@ -304,6 +349,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'terminal', label: 'Terminal' },
   { key: 'filesystem', label: 'Filesystem' },
   { key: 'ftp', label: 'FTP' },
+  { key: 'ai', label: 'LLM' },
   { key: 'settings', label: 'Settings' },
 ];
 
@@ -338,6 +384,10 @@ const TAB_ICONS: Record<TabKey, { path: string; viewBox: string }> = {
     viewBox: '0 0 20 20',
     path: 'M4.25 15.5A4.25 4.25 0 0 1 5 7.06 5.75 5.75 0 0 1 15.66 8.5 3.5 3.5 0 0 1 15.25 15.5H4.25Zm5.25-6.5-2.5 2.5h1.65V14h1.7v-2.5H12l-2.5-2.5Z',
   },
+  ai: {
+    viewBox: '0 0 20 20',
+    path: 'M10 2.5a2.25 2.25 0 0 1 2.25 2.25V5.5h1.5A2.25 2.25 0 0 1 16 7.75v1.5h.75a2.25 2.25 0 0 1 0 4.5H16v1.5a2.25 2.25 0 0 1-2.25 2.25h-1.5v.75a2.25 2.25 0 0 1-4.5 0v-.75h-1.5A2.25 2.25 0 0 1 4 15.25v-1.5h-.75a2.25 2.25 0 0 1 0-4.5H4v-1.5A2.25 2.25 0 0 1 6.25 5.5h1.5v-.75A2.25 2.25 0 0 1 10 2.5Zm-1.75 6.25a.75.75 0 0 0-.75.75v1h1.5v-1a.75.75 0 0 0-.75-.75Zm3.5 0a.75.75 0 0 0-.75.75v1h1.5v-1a.75.75 0 0 0-.75-.75Zm-3.5 3.25a.75.75 0 0 0-.75.75v1h1.5v-1a.75.75 0 0 0-.75-.75Zm3.5 0a.75.75 0 0 0-.75.75v1h1.5v-1a.75.75 0 0 0-.75-.75Z',
+  },
   settings: {
     viewBox: '0 0 20 20',
     path: 'M8.25 2.75h3.5l.45 1.7c.38.13.74.31 1.08.53l1.67-.55 1.75 3.03-1.31 1.18c.04.19.06.39.06.59s-.02.4-.06.59l1.31 1.18-1.75 3.03-1.67-.55c-.34.22-.7.4-1.08.53l-.45 1.7h-3.5l-.45-1.7a5.7 5.7 0 0 1-1.08-.53l-1.67.55-1.75-3.03 1.31-1.18a4.2 4.2 0 0 1 0-1.18L3.3 7.46l1.75-3.03 1.67.55c.34-.22.7-.4 1.08-.53l.45-1.7Zm1.75 4A2.25 2.25 0 1 0 10 11.25 2.25 2.25 0 0 0 10 6.75Z',
@@ -346,6 +396,7 @@ const TAB_ICONS: Record<TabKey, { path: string; viewBox: string }> = {
 
 const SERVICE_GROUP_LABELS: Record<ServiceGroupKey, string> = {
   access: 'Access',
+  ai: 'LLM',
   arr: 'Automation',
   data: 'Data',
   downloads: 'Downloads',
@@ -397,6 +448,7 @@ const SERVICE_PROFILES: Record<string, ServiceProfile> = {
   syncthing: { focusLabel: 'Devices', quickLabels: ['Folders', 'Peers', 'Versions'] },
   samba: { focusLabel: 'Shares', quickLabels: ['Clients', 'Exports', 'Auth'] },
   sshd: { focusLabel: 'Sessions', quickLabels: ['Keys', 'Hosts', 'Users'] },
+  llm: { focusLabel: 'Inference', quickLabels: ['Models', 'Chat', 'Tokens'] },
 };
 
 const getServiceProfile = (entry: ServiceCatalogEntry): ServiceProfile => SERVICE_PROFILES[entry.key] || {
@@ -532,6 +584,38 @@ const createUserDraft = (): UserDraft => ({
   username: '',
 });
 
+const parseLlmMessageSegments = (content: string): LlmMessageSegment[] => {
+  const input = String(content || '');
+  if (!input.includes('```')) {
+    return [{ type: 'text', content: input }];
+  }
+
+  const segments: LlmMessageSegment[] = [];
+  const fence = /```([a-zA-Z0-9._+-]*)\n?([\s\S]*?)```/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = fence.exec(input)) !== null) {
+    const [full, languageRaw, codeRaw] = match;
+    if (match.index > cursor) {
+      segments.push({ type: 'text', content: input.slice(cursor, match.index) });
+    }
+
+    segments.push({
+      type: 'code',
+      content: String(codeRaw || '').replace(/\n$/, ''),
+      language: String(languageRaw || '').trim(),
+    });
+    cursor = match.index + full.length;
+  }
+
+  if (cursor < input.length) {
+    segments.push({ type: 'text', content: input.slice(cursor) });
+  }
+
+  return segments.length > 0 ? segments : [{ type: 'text', content: input }];
+};
+
 const createFtpFavouriteDraftFromFavourite = (favourite: FtpFavourite): FtpFavouriteDraft =>
   createFtpFavouriteDraft({
     name: favourite.name,
@@ -647,6 +731,28 @@ export default function Dashboard() {
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectedUser | null>(null);
   const [mediaWorkflow, setMediaWorkflow] = useState<MediaWorkflowPayload | null>(null);
   const [pendingMediaSection, setPendingMediaSection] = useState<MediaSectionKey | null>(null);
+  const [llmModels, setLlmModels] = useState<LlmModel[]>([]);
+  const [llmPullJobs, setLlmPullJobs] = useState<LlmPullJob[]>([]);
+  const [llmActiveModelId, setLlmActiveModelId] = useState('');
+  const [llmApiKeyConfigured, setLlmApiKeyConfigured] = useState(false);
+  const [llmRunning, setLlmRunning] = useState(false);
+  const [llmStatus, setLlmStatus] = useState('');
+  const [llmConversations, setLlmConversations] = useState<LlmConversation[]>([]);
+  const [llmConversationId, setLlmConversationId] = useState<number | null>(null);
+  const [llmMessages, setLlmMessages] = useState<LlmMessage[]>([]);
+  const [llmPrompt, setLlmPrompt] = useState('');
+  const [llmBusy, setLlmBusy] = useState(false);
+  const [llmModelBusyId, setLlmModelBusyId] = useState('');
+  const [llmLocalModelLabel, setLlmLocalModelLabel] = useState('');
+  const [llmLocalModelPath, setLlmLocalModelPath] = useState('');
+  const [llmMode, setLlmMode] = useState<'local' | 'online'>('local');
+  const [llmOnlineConfigured, setLlmOnlineConfigured] = useState(false);
+  const [llmOnlineAvailable, setLlmOnlineAvailable] = useState(false);
+  const [llmOnlineError, setLlmOnlineError] = useState('');
+  const [llmOnlineModels, setLlmOnlineModels] = useState<LlmOnlineModel[]>([]);
+  const [llmOnlineModelId, setLlmOnlineModelId] = useState('');
+  const [llmSubview, setLlmSubview] = useState<LlmSubview>('chat');
+  const [llmHistoryOpen, setLlmHistoryOpen] = useState(false);
 
   const cpuCanvas = useRef<HTMLCanvasElement>(null);
   const ramCanvas = useRef<HTMLCanvasElement>(null);
@@ -733,6 +839,28 @@ export default function Dashboard() {
     setShowDriveLog(false);
     setDashboardShares([]);
     setMediaWorkflow(null);
+    setLlmModels([]);
+    setLlmPullJobs([]);
+    setLlmActiveModelId('');
+    setLlmApiKeyConfigured(false);
+    setLlmRunning(false);
+    setLlmStatus('');
+    setLlmConversations([]);
+    setLlmConversationId(null);
+    setLlmMessages([]);
+    setLlmPrompt('');
+    setLlmBusy(false);
+    setLlmModelBusyId('');
+    setLlmLocalModelLabel('');
+    setLlmLocalModelPath('');
+    setLlmMode('local');
+    setLlmOnlineConfigured(false);
+    setLlmOnlineAvailable(false);
+    setLlmOnlineError('');
+    setLlmOnlineModels([]);
+    setLlmOnlineModelId('');
+    setLlmSubview('chat');
+    setLlmHistoryOpen(false);
     setCommandPaletteOpen(false);
     setCommandQuery('');
     setSearchHasFocus(false);
@@ -946,7 +1074,7 @@ export default function Dashboard() {
           setFtpHost(nextDefaults.host || '');
           setFtpPort(String(nextDefaults.port || 2121));
           setFtpUser(nextDefaults.user || 'anonymous');
-          setFtpPassword(nextDefaults.password || 'anonymous@');
+          setFtpPassword('');
           setFtpSecure(Boolean(nextDefaults.secure));
           setFtpDownloadRoot(nextDefaults.downloadRoot || '');
           setFtpFavouriteDraft(createFtpFavouriteDraft({
@@ -954,7 +1082,7 @@ export default function Dashboard() {
             host: nextDefaults.host || '',
             port: String(nextDefaults.port || 2121),
             username: nextDefaults.user || 'anonymous',
-            password: nextDefaults.password || 'anonymous@',
+            password: '',
             secure: Boolean(nextDefaults.secure),
             remotePath: '/',
             mountName: nextDefaults.defaultName || 'PS4',
@@ -1289,6 +1417,285 @@ export default function Dashboard() {
     }
   };
 
+  const loadLlmState = async () => {
+    if (sessionUser?.role !== 'admin') {
+      return;
+    }
+    try {
+      const res = await authFetch(`${API}/llm/state`);
+      if (res.status === 401) {
+        clearSession('Session expired. Please login again.');
+        return;
+      }
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to load LLM state'));
+        return;
+      }
+      setLlmModels(Array.isArray(payload?.models) ? payload.models : []);
+      setLlmPullJobs(Array.isArray(payload?.pullJobs) ? payload.pullJobs : []);
+      setLlmActiveModelId(String(payload?.activeModelId || ''));
+      setLlmApiKeyConfigured(Boolean(payload?.apiKeyConfigured));
+      setLlmRunning(Boolean(payload?.running));
+      const online = payload?.online || {};
+      const nextOnlineModels = Array.isArray(online?.models)
+        ? online.models
+          .map((entry: unknown) => ({
+            id: String((entry as { id?: string })?.id || '').trim(),
+            label: String((entry as { label?: string; id?: string })?.label || (entry as { id?: string })?.id || '').trim(),
+          }))
+          .filter((entry: LlmOnlineModel) => entry.id)
+        : [];
+      setLlmOnlineConfigured(Boolean(online?.configured));
+      setLlmOnlineAvailable(Boolean(online?.available));
+      setLlmOnlineError(String(online?.error || ''));
+      setLlmOnlineModels(nextOnlineModels);
+      setLlmOnlineModelId(String(online?.activeModelId || nextOnlineModels[0]?.id || ''));
+      if (payload?.blocker) {
+        setLlmStatus(String(payload.blocker));
+      }
+    } catch (err) {
+      setLlmStatus(`Unable to load LLM state: ${String(err)}`);
+    }
+  };
+
+  const loadLlmConversations = async () => {
+    if (sessionUser?.role !== 'admin') {
+      return;
+    }
+    try {
+      const res = await authFetch(`${API}/llm/conversations`);
+      if (!res.ok) {
+        return;
+      }
+      const payload = await res.json().catch(() => ({}));
+      const nextConversations = Array.isArray(payload?.conversations) ? payload.conversations : [];
+      setLlmConversations(nextConversations);
+      if (llmConversationId == null && nextConversations.length > 0) {
+        setLlmConversationId(Number(nextConversations[0].id));
+      }
+    } catch {
+      // Ignore LLM conversation fetch errors in background polling.
+    }
+  };
+
+  const loadLlmMessages = async (conversationId: number) => {
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      setLlmMessages([]);
+      return;
+    }
+    try {
+      const res = await authFetch(`${API}/llm/conversations/${conversationId}/messages`);
+      if (!res.ok) {
+        return;
+      }
+      const payload = await res.json().catch(() => ({}));
+      setLlmMessages(Array.isArray(payload?.messages) ? payload.messages : []);
+    } catch {
+      // Ignore LLM message fetch errors in background polling.
+    }
+  };
+
+  const selectLlmModel = async (modelId: string) => {
+    setLlmModelBusyId(modelId);
+    try {
+      const res = await authFetch(`${API}/llm/models/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to select model'));
+        return;
+      }
+      setLlmStatus(payload?.restartRequired ? 'Model selected. Restart Local LLM service to apply.' : 'Model selected.');
+      await loadLlmState();
+    } catch (err) {
+      setLlmStatus(`Unable to select model: ${String(err)}`);
+    } finally {
+      setLlmModelBusyId('');
+    }
+  };
+
+  const refreshOnlineLlmModels = async () => {
+    setLlmModelBusyId('online-refresh');
+    try {
+      const res = await authFetch(`${API}/llm/online/models/refresh`, {
+        method: 'POST',
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to refresh online models'));
+        return;
+      }
+      const online = payload?.online || {};
+      const nextOnlineModels = Array.isArray(online?.models)
+        ? online.models
+          .map((entry: unknown) => ({
+            id: String((entry as { id?: string })?.id || '').trim(),
+            label: String((entry as { label?: string; id?: string })?.label || (entry as { id?: string })?.id || '').trim(),
+          }))
+          .filter((entry: LlmOnlineModel) => entry.id)
+        : [];
+      setLlmOnlineConfigured(Boolean(online?.configured));
+      setLlmOnlineAvailable(Boolean(online?.available));
+      setLlmOnlineError(String(online?.error || ''));
+      setLlmOnlineModels(nextOnlineModels);
+      setLlmOnlineModelId(String(online?.activeModelId || nextOnlineModels[0]?.id || ''));
+      setLlmStatus('Online models refreshed.');
+    } catch (err) {
+      setLlmStatus(`Unable to refresh online models: ${String(err)}`);
+    } finally {
+      setLlmModelBusyId('');
+    }
+  };
+
+  const selectOnlineLlmModel = async () => {
+    if (!llmOnlineModelId) {
+      setLlmStatus('Select an online model first.');
+      return;
+    }
+    setLlmModelBusyId('online-select');
+    try {
+      const res = await authFetch(`${API}/llm/online/models/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: llmOnlineModelId }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to set online model'));
+        return;
+      }
+      setLlmStatus('Online model saved.');
+      await loadLlmState();
+    } catch (err) {
+      setLlmStatus(`Unable to set online model: ${String(err)}`);
+    } finally {
+      setLlmModelBusyId('');
+    }
+  };
+
+  const pullLlmModel = async (modelId: string) => {
+    setLlmModelBusyId(modelId);
+    try {
+      const res = await authFetch(`${API}/llm/models/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to start model pull'));
+        return;
+      }
+      setLlmStatus(payload?.alreadyInstalled ? 'Model already installed.' : `Model pull job started: ${payload?.jobId || 'pending'}`);
+      await loadLlmState();
+    } catch (err) {
+      setLlmStatus(`Unable to pull model: ${String(err)}`);
+    } finally {
+      setLlmModelBusyId('');
+    }
+  };
+
+  const addLocalLlmModel = async () => {
+    const modelPath = llmLocalModelPath.trim();
+    if (!modelPath) {
+      setLlmStatus('Local model path is required');
+      return;
+    }
+    setLlmModelBusyId('add-local');
+    try {
+      const res = await authFetch(`${API}/llm/models/add-local`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: llmLocalModelLabel.trim(),
+          path: modelPath,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to add local model'));
+        return;
+      }
+      setLlmLocalModelLabel('');
+      setLlmLocalModelPath('');
+      setLlmStatus('Local model added.');
+      await loadLlmState();
+    } catch (err) {
+      setLlmStatus(`Unable to add local model: ${String(err)}`);
+    } finally {
+      setLlmModelBusyId('');
+    }
+  };
+
+  const sendLlmPrompt = async (promptOverride?: string) => {
+    const text = String(promptOverride ?? llmPrompt).trim();
+    if (!text || llmBusy) {
+      return;
+    }
+    setLlmBusy(true);
+    try {
+      const res = await authFetch(`${API}/llm/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: llmConversationId || undefined,
+          message: text,
+          mode: llmMode,
+          onlineModelId: llmMode === 'online' ? llmOnlineModelId : undefined,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLlmStatus(String(payload?.error || 'Unable to send prompt'));
+        return;
+      }
+      if (!promptOverride) {
+        setLlmPrompt('');
+      }
+      setLlmStatus('');
+      const nextConversationId = Number(payload?.conversationId || llmConversationId || 0) || null;
+      if (nextConversationId) {
+        setLlmConversationId(nextConversationId);
+        await loadLlmConversations();
+        await loadLlmMessages(nextConversationId);
+      }
+    } catch (err) {
+      setLlmStatus(`Unable to send prompt: ${String(err)}`);
+    } finally {
+      setLlmBusy(false);
+    }
+  };
+
+  const copyLlmMessage = async (content: string) => {
+    const text = String(content || '').trim();
+    if (!text) {
+      return;
+    }
+    if (!navigator?.clipboard?.writeText) {
+      setLlmStatus('Clipboard is unavailable in this browser context.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setLlmStatus('Assistant message copied.');
+    } catch {
+      setLlmStatus('Unable to copy assistant message.');
+    }
+  };
+
+  const retryLastLlmPrompt = async () => {
+    const latestUserMessage = [...llmMessages].reverse().find((entry) => entry.role === 'user');
+    if (!latestUserMessage) {
+      setLlmStatus('No user prompt found to retry.');
+      return;
+    }
+    await sendLlmPrompt(latestUserMessage.content);
+  };
+
   useEffect(() => {
     if (!isAuthed || sessionUser?.role !== 'admin') {
       return;
@@ -1322,6 +1729,51 @@ export default function Dashboard() {
       }
     }
   );
+
+  useEffect(() => {
+    if (!isAuthed || sessionUser?.role !== 'admin') {
+      return;
+    }
+    if (activeTab !== 'ai') {
+      return;
+    }
+    void loadLlmState();
+    void loadLlmConversations();
+  }, [activeTab, isAuthed, sessionUser?.role]);
+
+  useEffect(() => {
+    if (!isAuthed || sessionUser?.role !== 'admin') {
+      return;
+    }
+    if (activeTab !== 'ai') {
+      return;
+    }
+    if (!llmConversationId) {
+      setLlmMessages([]);
+      return;
+    }
+    void loadLlmMessages(llmConversationId);
+  }, [activeTab, isAuthed, llmConversationId, sessionUser?.role]);
+
+  useEffect(() => {
+    if (!isPhone || activeTab !== 'ai') {
+      setLlmHistoryOpen(false);
+    }
+  }, [activeTab, isPhone]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai' || llmMode !== 'online') {
+      return;
+    }
+    if (!llmOnlineConfigured) {
+      setLlmStatus('Online provider is not configured in server/.env.');
+      return;
+    }
+    if (!llmOnlineAvailable) {
+      setLlmStatus(llmOnlineError || 'Online provider is currently unavailable.');
+      return;
+    }
+  }, [activeTab, llmMode, llmOnlineAvailable, llmOnlineConfigured, llmOnlineError]);
 
   usePolling(
     isAuthed && sessionUser?.role === 'admin',
@@ -1758,6 +2210,20 @@ export default function Dashboard() {
   const activeFtpFavourite = ftpFavourites.find((favourite) => favourite.id === ftpActiveFavouriteId) || null;
   const mountedFtpFavouriteCount = mountedFtpEntries.length;
   const terminalService = serviceCatalogByKey.get('ttyd') || null;
+  const llmService = serviceCatalogByKey.get('llm') || null;
+  const codexRevampedService = serviceCatalogByKey.get('codex_revamped') || null;
+  const llmApiBaseUrl = `${gatewayBase.replace(/\/$/, '')}/api/openai/v1`;
+  const llmLastUserMessage = [...llmMessages].reverse().find((entry) => entry.role === 'user') || null;
+  const llmCanSend = llmMode === 'online'
+    ? llmOnlineConfigured && llmOnlineAvailable && Boolean(llmOnlineModelId)
+    : llmRunning && Boolean(llmActiveModelId);
+  const llmStatusTone = !llmStatus
+    ? THEME.muted
+    : llmStatus.toLowerCase().includes('unable')
+      || llmStatus.toLowerCase().includes('error')
+      || llmStatus.toLowerCase().includes('not configured')
+      ? THEME.crimsonRed
+      : THEME.muted;
   const jellyfinService = serviceCatalogByKey.get('jellyfin') || null;
   const qbittorrentService = serviceCatalogByKey.get('qbittorrent') || null;
   const jellyfinHref = buildServiceHref(jellyfinService?.route);
@@ -1951,6 +2417,13 @@ export default function Dashboard() {
       run: () => openTab('settings'),
     },
     {
+      id: 'action:ai',
+      kind: 'action' as const,
+      label: 'Open LLM',
+      subtitle: 'Action',
+      run: () => openTab('ai'),
+    },
+    {
       id: 'action:telemetry',
       kind: 'action' as const,
       label: 'Refresh telemetry',
@@ -2087,6 +2560,8 @@ export default function Dashboard() {
         return 'Files';
       case 'ftp':
         return 'FTP';
+      case 'ai':
+        return 'LLM';
       case 'settings':
         return 'Prefs';
       default:
@@ -2258,7 +2733,7 @@ export default function Dashboard() {
       host: ftpHost.trim() || ftpDefaults?.host || '',
       port: ftpPort || String(ftpDefaults?.port || 2121),
       username: ftpUser.trim() || ftpDefaults?.user || 'anonymous',
-      password: ftpDefaults?.password || ftpPassword || 'anonymous@',
+      password: '',
       secure: ftpSecure || Boolean(ftpDefaults?.secure),
       remotePath: ftpPath || '/',
       mountName: ftpDefaults?.defaultName || ftpHost.trim() || 'PS4',
@@ -3867,6 +4342,426 @@ export default function Dashboard() {
           </Panel>
         )}
 
+        {activeTab === 'ai' && (
+          <Panel
+            title="LLM"
+            subtitle="Chat-first local LLM workspace with a separate management view."
+            meta={[
+              llmActiveModelId ? `Active model: ${llmActiveModelId}` : 'No active model',
+              llmRunning ? 'Service running' : 'Service stopped',
+            ]}
+          >
+            <div style={styles.surfaceStack}>
+              <div style={styles.llmSubnav}>
+                <button
+                  className="ui-button"
+                  type="button"
+                  style={{ ...styles.llmSubnavBtn, ...(llmSubview === 'chat' ? styles.llmSubnavBtnActive : {}) }}
+                  onClick={() => setLlmSubview('chat')}
+                >
+                  Chat
+                </button>
+                <button
+                  className="ui-button"
+                  type="button"
+                  style={{ ...styles.llmSubnavBtn, ...(llmSubview === 'manage' ? styles.llmSubnavBtnActive : {}) }}
+                  onClick={() => setLlmSubview('manage')}
+                >
+                  Manage
+                </button>
+              </div>
+
+              {llmSubview === 'chat' ? (
+                <div style={styles.card}>
+                  <div style={styles.llmChatHead}>
+                    <div>
+                      <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Chat</h3>
+                      <p style={styles.smallLabel}>History is persisted per admin user session.</p>
+                    </div>
+                    <div style={styles.actionWrap}>
+                      <button
+                        className="ui-button"
+                        style={{ ...styles.actionBtn, ...(llmMode === 'local' ? styles.llmModeBtnActive : {}) }}
+                        type="button"
+                        onClick={() => setLlmMode('local')}
+                      >
+                        Local
+                      </button>
+                      <button
+                        className="ui-button"
+                        style={{ ...styles.actionBtn, ...(llmMode === 'online' ? styles.llmModeBtnActive : {}) }}
+                        type="button"
+                        onClick={() => setLlmMode('online')}
+                      >
+                        Online
+                      </button>
+                      {llmMode === 'online' ? (
+                        <select
+                          className="ui-input"
+                          style={styles.llmModelSelect}
+                          value={llmOnlineModelId}
+                          onChange={(event) => setLlmOnlineModelId(event.target.value)}
+                        >
+                          {llmOnlineModels.length === 0 ? (
+                            <option value="">No online models</option>
+                          ) : llmOnlineModels.map((model) => (
+                            <option key={`online:${model.id}`} value={model.id}>{model.label || model.id}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {isPhone ? (
+                        <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setLlmHistoryOpen(true)}>
+                          History
+                        </button>
+                      ) : null}
+                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => { setLlmConversationId(null); setLlmMessages([]); }}>
+                        New Chat
+                      </button>
+                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => void loadLlmConversations()}>
+                        Refresh
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ ...styles.llmWorkspace, ...(isCompact ? styles.llmWorkspaceCompact : {}) }}>
+                    {!isPhone ? (
+                      <aside style={styles.llmRail}>
+                        {llmConversations.length === 0 ? (
+                          <p style={styles.smallLabel}>No saved conversations yet.</p>
+                        ) : (
+                          <div style={styles.llmConversationList}>
+                            {llmConversations.map((conversation) => (
+                              <button
+                                key={conversation.id}
+                                className="ui-button"
+                                style={{ ...styles.llmConversationItem, ...(llmConversationId === conversation.id ? styles.llmConversationItemActive : {}) }}
+                                type="button"
+                                onClick={() => setLlmConversationId(conversation.id)}
+                              >
+                                <strong>{conversation.title || `Conversation ${conversation.id}`}</strong>
+                                <span style={styles.mountMeta}>{fmtTime(conversation.updatedAt)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </aside>
+                    ) : null}
+
+                    <div style={styles.llmChatShell}>
+                      <div style={styles.llmThread}>
+                        {llmMessages.length === 0 ? (
+                          <p style={styles.llmThreadEmpty}>No messages yet. Send a prompt to start.</p>
+                        ) : llmMessages.map((entry) => (
+                          <article
+                            key={entry.id}
+                            style={{
+                              ...styles.llmMessageRow,
+                              ...(entry.role === 'user' ? styles.llmMessageRowUser : {}),
+                            }}
+                          >
+                            <div
+                              style={{
+                                ...styles.llmMessageBubble,
+                                ...(entry.role === 'user' ? styles.llmMessageBubbleUser : styles.llmMessageBubbleAssistant),
+                              }}
+                            >
+                              <div style={styles.llmMessageMeta}>
+                                <strong>{entry.role === 'assistant' ? 'Assistant' : entry.role === 'user' ? 'You' : entry.role}</strong>
+                                <span style={styles.mountMeta}>{fmtTime(entry.createdAt)}</span>
+                              </div>
+                              <div style={styles.llmMessageBody}>
+                                {parseLlmMessageSegments(entry.content).map((segment, idx) => (
+                                  segment.type === 'code' ? (
+                                    <div key={`${entry.id}:code:${idx}`} style={styles.llmCodeBlock}>
+                                      <div style={styles.llmCodeHead}>
+                                        <span style={styles.llmCodeLanguage}>{segment.language || 'code'}</span>
+                                      </div>
+                                      <pre style={styles.llmCodeBody}>
+                                        <code>{segment.content}</code>
+                                      </pre>
+                                    </div>
+                                  ) : (
+                                    <p key={`${entry.id}:text:${idx}`} style={styles.llmMessageText}>{segment.content}</p>
+                                  )
+                                ))}
+                              </div>
+                              {entry.role === 'assistant' ? (
+                                <div style={styles.llmMessageActions}>
+                                  <button className="ui-button" style={styles.llmTinyBtn} type="button" onClick={() => void copyLlmMessage(entry.content)}>
+                                    Copy
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+
+                      <div style={styles.llmComposer}>
+                        <textarea
+                          className="ui-input"
+                          style={styles.llmComposerInput}
+                          value={llmPrompt}
+                          placeholder={llmMode === 'online' ? 'Ask your online model...' : 'Ask your local model...'}
+                          onChange={(event) => setLlmPrompt(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                              event.preventDefault();
+                              if (llmCanSend) {
+                                void sendLlmPrompt();
+                              }
+                            }
+                          }}
+                        />
+                        <div style={styles.llmComposerActions}>
+                          <button
+                            className="ui-button"
+                            style={styles.actionBtn}
+                            type="button"
+                            disabled={llmBusy || !llmLastUserMessage}
+                            onClick={() => void retryLastLlmPrompt()}
+                          >
+                            Retry Last
+                          </button>
+                          <button
+                            className="ui-button ui-button--primary"
+                            style={styles.actionBtn}
+                            type="button"
+                            disabled={llmBusy || !llmPrompt.trim() || !llmCanSend}
+                            onClick={() => void sendLlmPrompt()}
+                          >
+                            {llmBusy ? 'Sending…' : 'Send'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {llmStatus ? (
+                    <p style={{ ...styles.smallLabel, marginTop: 10, color: llmStatusTone }}>
+                      {llmStatus}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  {llmService ? renderServiceCard(llmService) : (
+                    <div style={styles.card}>
+                      <p style={styles.smallLabel}>Local LLM service is not present in the service catalog.</p>
+                    </div>
+                  )}
+                  {codexRevampedService ? renderServiceCard(codexRevampedService) : (
+                    <div style={styles.card}>
+                      <p style={styles.smallLabel}>Codex ReVamped service is not present in the service catalog.</p>
+                    </div>
+                  )}
+
+                  <div style={styles.card}>
+                    <div style={styles.sectionHeader}>
+                      <div>
+                        <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Access Settings</h3>
+                        <p style={styles.smallLabel}>Use OpenAI-compatible endpoints behind the gateway with your configured LLM API key.</p>
+                      </div>
+                    </div>
+                    <div style={styles.mountList}>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>API Base</strong>
+                          <p style={styles.mountMeta}>{llmApiBaseUrl}</p>
+                        </div>
+                      </div>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>Models Endpoint</strong>
+                          <p style={styles.mountMeta}>GET {llmApiBaseUrl}/models</p>
+                        </div>
+                      </div>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>Chat Endpoint</strong>
+                          <p style={styles.mountMeta}>POST {llmApiBaseUrl}/chat/completions</p>
+                        </div>
+                      </div>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>Authorization</strong>
+                          <p style={styles.mountMeta}>Bearer token required. Key status: {llmApiKeyConfigured ? 'Configured' : 'Not configured in server/.env'}</p>
+                        </div>
+                        <div style={styles.mountRight}>
+                          <span style={llmApiKeyConfigured ? styles.storageMetricOk : styles.storageMetricWarn}>{llmApiKeyConfigured ? 'ready' : 'pending'}</span>
+                        </div>
+                      </div>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>Online Provider</strong>
+                          <p style={styles.mountMeta}>{llmOnlineConfigured ? 'Configured in server/.env' : 'Not configured'}</p>
+                        </div>
+                        <div style={styles.mountRight}>
+                          <span style={llmOnlineConfigured ? styles.storageMetricOk : styles.storageMetricWarn}>{llmOnlineConfigured ? 'ready' : 'pending'}</span>
+                        </div>
+                      </div>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>Online Models</strong>
+                          <p style={styles.mountMeta}>
+                            {llmOnlineAvailable
+                              ? `${llmOnlineModels.length} model${llmOnlineModels.length === 1 ? '' : 's'} discovered`
+                              : (llmOnlineError || 'Online models unavailable')}
+                          </p>
+                        </div>
+                        <div style={styles.mountRight}>
+                          <span style={llmOnlineAvailable ? styles.storageMetricOk : styles.storageMetricWarn}>{llmOnlineAvailable ? 'ok' : 'issue'}</span>
+                        </div>
+                      </div>
+                      <div style={styles.mountRow}>
+                        <div style={styles.mountLeft}>
+                          <strong>Online Active Model</strong>
+                          <p style={styles.mountMeta}>Choose the default online model used for new chats.</p>
+                          <select
+                            className="ui-input"
+                            style={{ ...styles.llmModelSelect, marginTop: 8, minWidth: 240 }}
+                            value={llmOnlineModelId}
+                            onChange={(event) => setLlmOnlineModelId(event.target.value)}
+                            disabled={!llmOnlineConfigured || llmOnlineModels.length === 0}
+                          >
+                            {llmOnlineModels.length === 0 ? (
+                              <option value="">No online models</option>
+                            ) : llmOnlineModels.map((model) => (
+                              <option key={`online-manage:${model.id}`} value={model.id}>{model.label || model.id}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={styles.mountRight}>
+                          <div style={styles.actionWrap}>
+                            <button
+                              className="ui-button"
+                              style={styles.actionBtn}
+                              type="button"
+                              disabled={llmModelBusyId === 'online-refresh'}
+                              onClick={() => void refreshOnlineLlmModels()}
+                            >
+                              {llmModelBusyId === 'online-refresh' ? 'Refreshing…' : 'Refresh'}
+                            </button>
+                            <button
+                              className="ui-button ui-button--primary"
+                              style={styles.actionBtn}
+                              type="button"
+                              disabled={!llmOnlineConfigured || !llmOnlineAvailable || !llmOnlineModelId || llmModelBusyId === 'online-select'}
+                              onClick={() => void selectOnlineLlmModel()}
+                            >
+                              {llmModelBusyId === 'online-select' ? 'Saving…' : 'Save'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={styles.card}>
+                    <div style={styles.sectionHeader}>
+                      <div>
+                        <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Models</h3>
+                        <p style={styles.smallLabel}>Install curated presets or attach a local GGUF path. Only installed models can be selected.</p>
+                      </div>
+                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => void loadLlmState()}>
+                        Refresh
+                      </button>
+                    </div>
+                    <div style={{ ...styles.serviceCardGrid, marginTop: 10 }}>
+                      {llmModels.length === 0 ? (
+                        <p style={styles.smallLabel}>No models discovered yet.</p>
+                      ) : llmModels.map((model) => (
+                        <article key={model.id} style={styles.serviceCard}>
+                          <div style={styles.serviceCardShell}>
+                            <div style={styles.serviceCardCopy}>
+                              <div style={styles.serviceCardHead}>
+                                <div style={styles.serviceCardTitleBlock}>
+                                  <h3 style={styles.serviceCardTitle}>{model.label}</h3>
+                                  <p style={styles.serviceCardDescription}>{model.path}</p>
+                                </div>
+                                <div style={styles.serviceBadgeRow}>
+                                  {renderServiceBadge(model.source, styles.serviceMiniBadgeMuted, `${model.id}:source`)}
+                                  {renderServiceBadge(model.installed ? 'Installed' : 'Not installed', model.installed ? styles.serviceStatusOk : styles.serviceStatusWarn, `${model.id}:installed`)}
+                                  {renderServiceBadge(llmActiveModelId === model.id ? 'Active' : 'Inactive', llmActiveModelId === model.id ? styles.serviceStatusOk : styles.serviceStatusIdle, `${model.id}:active`)}
+                                </div>
+                              </div>
+                            </div>
+                            <div style={styles.serviceCardRail}>
+                              <button
+                                className="ui-button"
+                                style={styles.serviceActionBtn}
+                                type="button"
+                                disabled={llmModelBusyId === model.id || !model.installed || llmActiveModelId === model.id}
+                                onClick={() => void selectLlmModel(model.id)}
+                              >
+                                {llmModelBusyId === model.id ? 'Applying…' : 'Use'}
+                              </button>
+                              <button
+                                className="ui-button"
+                                style={styles.serviceActionBtn}
+                                type="button"
+                                disabled={llmModelBusyId === model.id || model.installed}
+                                onClick={() => void pullLlmModel(model.id)}
+                              >
+                                {llmModelBusyId === model.id ? 'Pulling…' : model.installed ? 'Installed' : 'Pull'}
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    <div style={{ ...styles.ftpActionGroup, marginTop: 14 }}>
+                      <TextField
+                        id="llm-local-model-label"
+                        label="Local Model Label"
+                        name="llmLocalModelLabel"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={llmLocalModelLabel}
+                        onChange={setLlmLocalModelLabel}
+                      />
+                      <TextField
+                        id="llm-local-model-path"
+                        label="Local GGUF Path"
+                        name="llmLocalModelPath"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={llmLocalModelPath}
+                        onChange={setLlmLocalModelPath}
+                        placeholder="/data/data/com.termux/files/home/services/llm/models/custom.gguf"
+                      />
+                      <div style={styles.actionWrap}>
+                        <button className="ui-button" style={styles.actionBtn} type="button" disabled={llmModelBusyId === 'add-local'} onClick={() => void addLocalLlmModel()}>
+                          {llmModelBusyId === 'add-local' ? 'Adding…' : 'Add Local Model'}
+                        </button>
+                      </div>
+                    </div>
+                    {llmPullJobs.length > 0 ? (
+                      <div style={{ ...styles.mountList, marginTop: 12 }}>
+                        {llmPullJobs.slice(0, 5).map((job) => (
+                          <div key={job.id} style={styles.mountRow}>
+                            <div style={styles.mountLeft}>
+                              <strong>{job.modelId || job.id}</strong>
+                              <p style={styles.mountMeta}>{job.message || 'No status message'}{job.updatedAt ? ` · ${fmtTime(job.updatedAt)}` : ''}</p>
+                            </div>
+                            <div style={styles.mountRight}>
+                              <span style={job.status === 'success' ? styles.storageMetricOk : job.status === 'failed' ? styles.storageMetricDanger : styles.storageMetricWarn}>{job.status}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </Panel>
+        )}
+
         {activeTab === 'settings' && (
           <Panel
             title="Settings"
@@ -4045,6 +4940,39 @@ export default function Dashboard() {
           ))}
         </nav>
       )}
+
+      <DialogSurface
+        open={activeTab === 'ai' && isPhone && llmHistoryOpen}
+        onClose={() => setLlmHistoryOpen(false)}
+        overlayStyle={styles.modalOverlay}
+        panelStyle={styles.llmHistoryDrawer}
+        labelledBy="llm-history-title"
+        describedBy="llm-history-help"
+      >
+        <div style={styles.llmDrawerHead}>
+          <h3 id="llm-history-title" style={{ ...styles.cardTitle, marginBottom: 4 }}>Conversation History</h3>
+          <p id="llm-history-help" style={styles.smallLabel}>Pick a conversation to load it into chat.</p>
+        </div>
+        <div style={styles.llmConversationList}>
+          {llmConversations.length === 0 ? (
+            <p style={styles.smallLabel}>No saved conversations yet.</p>
+          ) : llmConversations.map((conversation) => (
+            <button
+              key={`drawer:${conversation.id}`}
+              className="ui-button"
+              style={{ ...styles.llmConversationItem, ...(llmConversationId === conversation.id ? styles.llmConversationItemActive : {}) }}
+              type="button"
+              onClick={() => {
+                setLlmConversationId(conversation.id);
+                setLlmHistoryOpen(false);
+              }}
+            >
+              <strong>{conversation.title || `Conversation ${conversation.id}`}</strong>
+              <span style={styles.mountMeta}>{fmtTime(conversation.updatedAt)}</span>
+            </button>
+          ))}
+        </div>
+      </DialogSurface>
 
       <DialogSurface
         open={showOnboarding}
@@ -4900,9 +5828,222 @@ const styles: Record<string, CSSProperties> = {
     padding: '7px 10px',
     fontSize: 12,
   },
+  llmModeBtnActive: {
+    borderColor: THEME.accent,
+    background: 'rgba(111, 159, 112, 0.14)',
+    color: THEME.text,
+  },
+  llmModelSelect: {
+    minHeight: 36,
+    minWidth: 200,
+    maxWidth: 320,
+    padding: '6px 10px',
+    fontSize: 12,
+  },
   surfaceStack: {
     display: 'grid',
     gap: 16,
+  },
+  llmSubnav: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  llmSubnavBtn: {
+    minHeight: 38,
+    padding: '6px 12px',
+    fontSize: 12,
+  },
+  llmSubnavBtnActive: {
+    borderColor: THEME.accent,
+    background: 'rgba(111, 159, 112, 0.14)',
+    color: THEME.text,
+  },
+  llmChatHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  llmWorkspace: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)',
+    gap: 12,
+    alignItems: 'stretch',
+  },
+  llmWorkspaceCompact: {
+    gridTemplateColumns: '1fr',
+  },
+  llmRail: {
+    display: 'grid',
+    gap: 8,
+    alignContent: 'start',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    background: '#13171b',
+    padding: 10,
+    maxHeight: '68dvh',
+    overflowY: 'auto',
+  },
+  llmConversationList: {
+    display: 'grid',
+    gap: 8,
+    alignContent: 'start',
+  },
+  llmConversationItem: {
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    textAlign: 'left',
+    display: 'grid',
+    gap: 4,
+    width: '100%',
+    padding: '10px 12px',
+    minHeight: 0,
+  },
+  llmConversationItemActive: {
+    borderColor: THEME.accent,
+    background: 'rgba(111, 159, 112, 0.14)',
+  },
+  llmChatShell: {
+    display: 'grid',
+    gridTemplateRows: 'minmax(0, 1fr) auto',
+    gap: 10,
+    minHeight: 460,
+  },
+  llmThread: {
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    background: '#111418',
+    padding: 12,
+    display: 'grid',
+    alignContent: 'start',
+    gap: 10,
+    maxHeight: '68dvh',
+    overflowY: 'auto',
+  },
+  llmThreadEmpty: {
+    margin: 0,
+    color: THEME.muted,
+    fontSize: 13,
+  },
+  llmMessageRow: {
+    display: 'flex',
+    justifyContent: 'flex-start',
+  },
+  llmMessageRowUser: {
+    justifyContent: 'flex-end',
+  },
+  llmMessageBubble: {
+    width: 'min(760px, 100%)',
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 12,
+    padding: '10px 12px',
+    display: 'grid',
+    gap: 8,
+  },
+  llmMessageBubbleAssistant: {
+    background: '#161b20',
+  },
+  llmMessageBubbleUser: {
+    background: 'rgba(111, 159, 112, 0.12)',
+    borderColor: 'rgba(111, 159, 112, 0.38)',
+  },
+  llmMessageMeta: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  llmMessageBody: {
+    display: 'grid',
+    gap: 8,
+  },
+  llmMessageText: {
+    margin: 0,
+    color: THEME.text,
+    fontSize: 13,
+    lineHeight: 1.55,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+  llmCodeBlock: {
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    overflow: 'hidden',
+    background: '#0f1216',
+  },
+  llmCodeHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '6px 10px',
+    borderBottom: `1px solid ${THEME.border}`,
+    background: '#141920',
+  },
+  llmCodeLanguage: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontFamily: 'var(--font-geist-mono), monospace',
+    textTransform: 'uppercase',
+    letterSpacing: '0.02em',
+  },
+  llmCodeBody: {
+    margin: 0,
+    padding: '10px 12px',
+    color: '#d8e0d0',
+    fontSize: 12,
+    lineHeight: 1.55,
+    overflowX: 'auto',
+    fontFamily: 'var(--font-geist-mono), monospace',
+    whiteSpace: 'pre',
+  },
+  llmMessageActions: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+  },
+  llmTinyBtn: {
+    minHeight: 30,
+    minWidth: 0,
+    padding: '5px 10px',
+    fontSize: 11,
+  },
+  llmComposer: {
+    display: 'grid',
+    gap: 8,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    background: '#14181d',
+    padding: 10,
+    position: 'sticky',
+    bottom: 0,
+  },
+  llmComposerInput: {
+    minHeight: 102,
+    resize: 'vertical',
+  },
+  llmComposerActions: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  llmHistoryDrawer: {
+    width: '100%',
+    maxWidth: 420,
+    background: THEME.panel,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: 10,
+    padding: 14,
+    display: 'grid',
+    gap: 10,
+    maxHeight: '70dvh',
+    overflowY: 'auto',
+  },
+  llmDrawerHead: {
+    display: 'grid',
+    gap: 2,
   },
   mediaWorkflowGrid: {
     display: 'grid',
