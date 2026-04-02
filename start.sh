@@ -143,10 +143,17 @@ MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-}"
 MEDIA_SERIES_DIR="${MEDIA_SERIES_DIR:-}"
 MEDIA_MUSIC_DIR="${MEDIA_MUSIC_DIR:-}"
 MEDIA_AUDIOBOOKS_DIR="${MEDIA_AUDIOBOOKS_DIR:-}"
+MEDIA_SCRATCH_LIBRARY_ROOT="${MEDIA_SCRATCH_LIBRARY_ROOT:-}"
+MEDIA_SCRATCH_MOVIES_DIR="${MEDIA_SCRATCH_MOVIES_DIR:-}"
+MEDIA_SCRATCH_SERIES_DIR="${MEDIA_SCRATCH_SERIES_DIR:-}"
+MEDIA_SCRATCH_MUSIC_DIR="${MEDIA_SCRATCH_MUSIC_DIR:-}"
+MEDIA_SCRATCH_AUDIOBOOKS_DIR="${MEDIA_SCRATCH_AUDIOBOOKS_DIR:-}"
 MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-}"
 MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-}"
 MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-}"
 MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-}"
+MEDIA_SMALL_DOWNLOADS_DIR="${MEDIA_SMALL_DOWNLOADS_DIR:-}"
+MEDIA_SMALL_DOWNLOADS_MAX_MB="${MEDIA_SMALL_DOWNLOADS_MAX_MB:-256}"
 MEDIA_IMPORT_REVIEW_DIR="${MEDIA_IMPORT_REVIEW_DIR:-}"
 MEDIA_IMPORT_LOG_DIR="${MEDIA_IMPORT_LOG_DIR:-}"
 MEDIA_TRANSCODE_DIR="${MEDIA_TRANSCODE_DIR:-}"
@@ -687,7 +694,7 @@ assert_drive_ready() {
         ensure_drive_role_marker "$drive_dir" "$role"
     fi
 
-    if ! grep -Fq " $drive_dir " /proc/mounts 2>/dev/null; then
+    if ! path_is_direct_mount_in_proc "$drive_dir"; then
         log_warn "Drive path $drive_dir is not a direct mountpoint in /proc/mounts"
     fi
 
@@ -704,6 +711,7 @@ build_pool_roots() {
     local marker_drives=()
     local configured_drives=()
     local all_drives=()
+    local direct_mount_drives=()
     local drive_dir=""
     local role_root=""
     local -n out_roots_ref="$out_roots_name"
@@ -724,6 +732,16 @@ build_pool_roots() {
     if [ "${#all_drives[@]}" -eq 0 ]; then
         log_error "No drives resolved for role '$role' (candidates: $candidates_csv)"
         return 1
+    fi
+
+    for drive_dir in "${all_drives[@]}"; do
+        if path_is_direct_mount_in_proc "$drive_dir"; then
+            direct_mount_drives+=("$drive_dir")
+        fi
+    done
+
+    if [ "${#direct_mount_drives[@]}" -gt 0 ]; then
+        all_drives=("${direct_mount_drives[@]}")
     fi
 
     for drive_dir in "${all_drives[@]}"; do
@@ -799,30 +817,66 @@ ensure_compat_link() {
     return 0
 }
 
-path_free_gb() {
+directory_has_payload() {
     local target="$1"
-    local kb_free=""
 
-    kb_free="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
-    if [ -z "$kb_free" ] || ! [[ "$kb_free" =~ ^[0-9]+$ ]]; then
-        printf '0\n'
+    [ -d "$target" ] || return 1
+
+    if find "$target" -mindepth 1 \( -type f -o -type l -o -type s -o -type b -o -type c -o -type p \) -print -quit 2>/dev/null | grep -q .; then
         return 0
     fi
 
-    printf '%s\n' "$((kb_free / 1024 / 1024))"
+    if find "$target" -mindepth 1 -type d ! -empty -print -quit 2>/dev/null | grep -q .; then
+        return 0
+    fi
+
+    return 1
+}
+
+path_free_gb() {
+    local target="$1"
+    local kb_free=""
+    local stat_free=""
+    local stat_block=""
+
+    kb_free="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+    if [ -n "$kb_free" ] && [[ "$kb_free" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$((kb_free / 1024 / 1024))"
+        return 0
+    fi
+
+    read -r stat_free stat_block <<EOF
+$(stat -f -c '%a %S' "$target" 2>/dev/null || true)
+EOF
+    if [[ "${stat_free:-}" =~ ^[0-9]+$ ]] && [[ "${stat_block:-}" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$((stat_free * stat_block / 1024 / 1024 / 1024))"
+        return 0
+    fi
+
+    printf '0\n'
 }
 
 path_total_gb() {
     local target="$1"
     local kb_total=""
+    local stat_total=""
+    local stat_block=""
 
     kb_total="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $2}' || true)"
-    if [ -z "$kb_total" ] || ! [[ "$kb_total" =~ ^[0-9]+$ ]]; then
-        printf '0\n'
+    if [ -n "$kb_total" ] && [[ "$kb_total" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$((kb_total / 1024 / 1024))"
         return 0
     fi
 
-    printf '%s\n' "$((kb_total / 1024 / 1024))"
+    read -r stat_total stat_block <<EOF
+$(stat -f -c '%b %S' "$target" 2>/dev/null || true)
+EOF
+    if [[ "${stat_total:-}" =~ ^[0-9]+$ ]] && [[ "${stat_block:-}" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$((stat_total * stat_block / 1024 / 1024 / 1024))"
+        return 0
+    fi
+
+    printf '0\n'
 }
 
 path_mount_device() {
@@ -930,10 +984,17 @@ apply_storage_layout_exports() {
     MEDIA_MUSIC_DIR="$MEDIA_VAULT_ROOT/music"
     MEDIA_AUDIOBOOKS_DIR="$MEDIA_VAULT_ROOT/audiobooks"
 
+    MEDIA_SCRATCH_LIBRARY_ROOT="${MEDIA_SCRATCH_LIBRARY_ROOT:-$MEDIA_SCRATCH_ROOT/media}"
+    MEDIA_SCRATCH_MOVIES_DIR="$MEDIA_SCRATCH_LIBRARY_ROOT/movies"
+    MEDIA_SCRATCH_SERIES_DIR="$MEDIA_SCRATCH_LIBRARY_ROOT/series"
+    MEDIA_SCRATCH_MUSIC_DIR="$MEDIA_SCRATCH_LIBRARY_ROOT/music"
+    MEDIA_SCRATCH_AUDIOBOOKS_DIR="$MEDIA_SCRATCH_LIBRARY_ROOT/audiobooks"
+
     MEDIA_DOWNLOADS_DIR="$MEDIA_SCRATCH_ROOT/downloads"
     MEDIA_DOWNLOADS_MOVIES_DIR="$MEDIA_DOWNLOADS_DIR/movies"
     MEDIA_DOWNLOADS_SERIES_DIR="$MEDIA_DOWNLOADS_DIR/series"
     MEDIA_DOWNLOADS_MANUAL_DIR="$MEDIA_DOWNLOADS_DIR/manual"
+    MEDIA_SMALL_DOWNLOADS_DIR="${MEDIA_SMALL_DOWNLOADS_DIR:-$DRIVES_C_DIR/Download/Home-Server/small}"
     MEDIA_IMPORT_REVIEW_DIR="$MEDIA_SCRATCH_ROOT/review"
     MEDIA_IMPORT_LOG_DIR="$MEDIA_SCRATCH_ROOT/logs"
     MEDIA_TRANSCODE_DIR="$MEDIA_SCRATCH_ROOT/cache/jellyfin"
@@ -944,7 +1005,10 @@ apply_storage_layout_exports() {
 
     export MEDIA_VAULT_ROOTS MEDIA_SCRATCH_ROOTS MEDIA_VAULT_ROOT MEDIA_SCRATCH_ROOT
     export MEDIA_MOVIES_DIR MEDIA_SERIES_DIR MEDIA_MUSIC_DIR MEDIA_AUDIOBOOKS_DIR
+    export MEDIA_SCRATCH_LIBRARY_ROOT MEDIA_SCRATCH_MOVIES_DIR MEDIA_SCRATCH_SERIES_DIR
+    export MEDIA_SCRATCH_MUSIC_DIR MEDIA_SCRATCH_AUDIOBOOKS_DIR
     export MEDIA_DOWNLOADS_DIR MEDIA_DOWNLOADS_MOVIES_DIR MEDIA_DOWNLOADS_SERIES_DIR MEDIA_DOWNLOADS_MANUAL_DIR
+    export MEDIA_SMALL_DOWNLOADS_DIR MEDIA_SMALL_DOWNLOADS_MAX_MB
     export MEDIA_IMPORT_REVIEW_DIR MEDIA_IMPORT_LOG_DIR MEDIA_TRANSCODE_DIR MEDIA_MISC_CACHE_DIR
     export MEDIA_IPTV_CACHE_DIR MEDIA_IPTV_EPG_DIR MEDIA_QBIT_TMP_DIR
     export MEDIA_IMPORT_ABORT_FREE_GB MEDIA_VAULT_WARN_FREE_GB MEDIA_SCRATCH_WARN_FREE_GB
@@ -957,10 +1021,16 @@ apply_storage_layout_exports() {
         "$MEDIA_SERIES_DIR" \
         "$MEDIA_MUSIC_DIR" \
         "$MEDIA_AUDIOBOOKS_DIR" \
+        "$MEDIA_SCRATCH_LIBRARY_ROOT" \
+        "$MEDIA_SCRATCH_MOVIES_DIR" \
+        "$MEDIA_SCRATCH_SERIES_DIR" \
+        "$MEDIA_SCRATCH_MUSIC_DIR" \
+        "$MEDIA_SCRATCH_AUDIOBOOKS_DIR" \
         "$MEDIA_DOWNLOADS_DIR" \
         "$MEDIA_DOWNLOADS_MOVIES_DIR" \
         "$MEDIA_DOWNLOADS_SERIES_DIR" \
         "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+        "$MEDIA_SMALL_DOWNLOADS_DIR" \
         "$MEDIA_IMPORT_REVIEW_DIR" \
         "$MEDIA_IMPORT_LOG_DIR" \
         "$MEDIA_TRANSCODE_DIR" \
@@ -977,6 +1047,11 @@ apply_storage_layout_exports() {
     ensure_compat_link "iptv-cache" "$MEDIA_IPTV_CACHE_DIR" || return 1
     ensure_compat_link "iptv-epg" "$MEDIA_IPTV_EPG_DIR" || return 1
 
+    if [ -d "$MEDIA_ROOT/downloads" ] && [ ! -L "$MEDIA_ROOT/downloads" ] && [ "$MEDIA_LAYOUT_AUTO_ADOPT_EMPTY" = "true" ] && ! directory_has_payload "$MEDIA_ROOT/downloads"; then
+        rm -rf "$MEDIA_ROOT/downloads"
+        ln -sfn "$MEDIA_DOWNLOADS_DIR" "$MEDIA_ROOT/downloads"
+    fi
+
     vault_free_gb="$(path_free_gb "$MEDIA_VAULT_ROOT")"
     if [ "$vault_free_gb" -lt "$MEDIA_IMPORT_ABORT_FREE_GB" ]; then
         log_warn "Vault free space ${vault_free_gb}GiB is below import abort floor ${MEDIA_IMPORT_ABORT_FREE_GB}GiB"
@@ -991,6 +1066,8 @@ apply_storage_layout_exports() {
     log_info "  Scratch roots: $MEDIA_SCRATCH_ROOTS"
     log_info "  Primary vault root: $MEDIA_VAULT_ROOT"
     log_info "  Primary scratch root: $MEDIA_SCRATCH_ROOT"
+    log_info "  Scratch library root: $MEDIA_SCRATCH_LIBRARY_ROOT"
+    log_info "  Small downloads dir: $MEDIA_SMALL_DOWNLOADS_DIR"
 
     return 0
 }

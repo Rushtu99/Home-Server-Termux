@@ -15,6 +15,10 @@ Default vault directories:
 - `audiobooks`
 
 Default scratch directories:
+- `media/movies`
+- `media/series`
+- `media/music`
+- `media/audiobooks`
 - `downloads/movies`
 - `downloads/series`
 - `downloads/manual`
@@ -25,6 +29,9 @@ Default scratch directories:
 - `iptv-cache`
 - `iptv-epg`
 - `tmp/qbittorrent`
+
+Small downloads directory:
+- `~/Drives/C/Download/Home-Server/small`
 
 ## qBittorrent
 
@@ -52,11 +59,27 @@ scripts/media-importer.sh status --json
 Current behavior:
 - copies movies into the vault `movies` library
 - copies series into the vault `series` library
+- copies very small manual downloads into the managed C small-downloads directory
 - classifies manual entries heuristically
 - routes ambiguous manual items into the review queue
 - never overwrites an existing vault destination
 - records status files and TSV event/index artifacts
 - runs scratch cleanup for imported non-manual items and cache roots
+
+Manual routing details:
+- qBittorrent still downloads into the scratch workspace first
+- media imports land in vault
+- tiny manual items can be offloaded into `~/Drives/C/Download/Home-Server/small`
+
+## Jellyfin Libraries
+
+[scripts/jellyfin-library-sync.sh](../scripts/jellyfin-library-sync.sh) keeps Jellyfin pointed at both the vault and scratch media trees for:
+- Movies
+- Series
+- Music
+- Audiobooks
+
+The sync helper runs before Jellyfin starts and manages the virtual folder metadata under Jellyfin's data root.
 
 Status artifacts:
 - `import-status.json`

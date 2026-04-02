@@ -530,13 +530,13 @@ const MEDIA_SECTION_BY_SERVICE: Partial<Record<string, MediaSectionKey>> = {
   postgres: 'support',
 };
 
-const MEDIA_WORKFLOW_ORDER: Array<{ id: MediaSectionKey; label: string; description: string }> = [
-  { id: 'watch', label: 'Watch', description: 'Jellyfin library and playback' },
-  { id: 'requests', label: 'Requests', description: 'Request intake for new movies and series' },
-  { id: 'automation', label: 'Automation', description: 'Indexer and grab automation for movies and shows' },
-  { id: 'downloads', label: 'Downloads', description: 'Queue and transfer clients live in Downloads' },
-  { id: 'subtitles', label: 'Subtitles', description: 'Post-import subtitle management' },
-  { id: 'live-tv', label: 'Live TV', description: 'Jellyfin M3U and XMLTV setup flow' },
+const MEDIA_WORKFLOW_ORDER: Array<{ id: MediaSectionKey; label: string; summary: string; bullets: string[] }> = [
+  { id: 'watch', label: 'Watch', summary: 'Primary viewing surface', bullets: ['Jellyfin library', 'Playback surface', 'Final destination'] },
+  { id: 'requests', label: 'Requests', summary: 'Collect new content demand', bullets: ['Intake portal', 'Movies and series', 'Feeds automation'] },
+  { id: 'automation', label: 'Automation', summary: 'Turn requests into imports', bullets: ['Indexer pipeline', 'ARR orchestration', 'Import handoff'] },
+  { id: 'downloads', label: 'Downloads', summary: 'Transfer operations workspace', bullets: ['Queue workspace', 'Transfer clients', 'Separate tab'] },
+  { id: 'subtitles', label: 'Subtitles', summary: 'Post-import language workflow', bullets: ['Post-import sync', 'Language profiles', 'Quality upgrades'] },
+  { id: 'live-tv', label: 'Live TV', summary: 'Guide and channel setup path', bullets: ['M3U source', 'XMLTV guide', 'Channel mapping'] },
 ];
 
 const MEDIA_AUTOMATION_SERVICE_ORDER = ['prowlarr', 'sonarr', 'radarr'];
@@ -582,6 +582,32 @@ const fmtDateTime = (iso?: string | null) => {
     month: 'short',
     day: 'numeric',
   });
+};
+
+const compactPathLabel = (value: string) => {
+  const normalized = value.replace(/\\/g, '/');
+  const slashParts = normalized.split('/').filter(Boolean);
+  if (slashParts.length <= 3) {
+    return value;
+  }
+  const prefix = normalized.startsWith('~/')
+    ? '~/'
+    : normalized.startsWith('/')
+      ? '/'
+      : '';
+  return `${prefix}.../${slashParts.slice(-2).join('/')}`;
+};
+
+const compactMediaMeta = (value: string, maxLen = 78) => {
+  if (!value) {
+    return value;
+  }
+  const pathLikePattern = /(~?\/[^\s,;:]+(?:\/[^\s,;:]+){2,})/g;
+  const compacted = value.replace(pathLikePattern, (match) => compactPathLabel(match));
+  if (compacted.length <= maxLen) {
+    return compacted;
+  }
+  return `${compacted.slice(0, maxLen - 3).trimEnd()}...`;
 };
 
 const storageTone = (usePercent: number) => {
@@ -3990,20 +4016,33 @@ export default function Dashboard() {
                   <span style={styles.headerPill}>ARR merged here</span>
                 </div>
                 <div style={{ ...styles.mediaWorkflowGrid, ...(isCompact ? styles.mediaWorkflowGridCompact : {}) }}>
-                  {mediaWorkflowSteps.map((step) => (
+                  {mediaWorkflowSteps.map((step, index) => (
                     <button
                       key={step.id}
                       className="ui-button hmstx-hover-lift"
                       type="button"
-                      style={{ ...styles.mediaWorkflowStep, ...(step.status === 'working' ? styles.mediaWorkflowStepActive : {}) }}
+                      style={{
+                        ...styles.mediaWorkflowStep,
+                        ...(step.status === 'working' ? styles.mediaWorkflowStepActive : {}),
+                        ...(index > 0 ? styles.mediaWorkflowStepOverlap : {}),
+                        ...(index % 2 === 0 ? styles.mediaWorkflowStepCascadeEven : styles.mediaWorkflowStepCascadeOdd),
+                        ...(isCompact ? styles.mediaWorkflowStepTallCompact : styles.mediaWorkflowStepTall),
+                        animationDelay: `${index * 60}ms`,
+                        zIndex: mediaWorkflowSteps.length - index,
+                      }}
                       onClick={step.onClick}
                     >
                       <div style={styles.mediaWorkflowStepHead}>
                         <span style={styles.mediaWorkflowStepLabel}>{step.label}</span>
                         <span style={{ ...styles.serviceStatusBadge, ...workflowToneStyle(step.status) }}>{step.statusLabel}</span>
                       </div>
-                      <p style={styles.mediaWorkflowStepBody}>{step.description}</p>
-                      <span style={styles.mediaWorkflowStepMeta}>{step.meta}</span>
+                      <p style={styles.mediaWorkflowStepSummary}>{step.summary}</p>
+                      <ul style={styles.mediaWorkflowStepList}>
+                        {step.bullets.map((item) => (
+                          <li key={`${step.id}-${item}`} style={styles.mediaWorkflowStepListItem}>{item}</li>
+                        ))}
+                      </ul>
+                      <span style={styles.mediaWorkflowStepMeta}>{compactMediaMeta(step.meta)}</span>
                     </button>
                   ))}
                 </div>
@@ -6280,21 +6319,49 @@ const styles: Record<string, CSSProperties> = {
     gap: 2,
   },
   mediaWorkflowGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: 10,
+    display: 'flex',
+    alignItems: 'stretch',
+    overflowX: 'auto',
+    gap: 0,
+    padding: '2px 8px 8px 2px',
+    scrollSnapType: 'x mandatory',
+    WebkitOverflowScrolling: 'touch',
+    scrollbarWidth: 'thin',
   },
   mediaWorkflowGridCompact: {
-    gridTemplateColumns: '1fr',
+    paddingBottom: 6,
   },
   mediaWorkflowStep: {
     display: 'grid',
     gap: 8,
     padding: '12px 14px',
+    minWidth: 294,
+    maxWidth: 364,
+    flex: '0 0 min(364px, 90vw)',
     textAlign: 'left',
     background: THEME.panelRaised,
     border: `1px solid ${THEME.border}`,
     borderRadius: 10,
+    scrollSnapAlign: 'start',
+    position: 'relative',
+    animation: 'hmstx-rise 220ms ease both',
+  },
+  mediaWorkflowStepTall: {
+    height: 640,
+    alignContent: 'start',
+  },
+  mediaWorkflowStepTallCompact: {
+    height: 600,
+    alignContent: 'start',
+  },
+  mediaWorkflowStepOverlap: {
+    marginLeft: -12,
+  },
+  mediaWorkflowStepCascadeEven: {
+    marginTop: 0,
+  },
+  mediaWorkflowStepCascadeOdd: {
+    marginTop: 6,
   },
   mediaWorkflowStepActive: {
     borderColor: 'rgba(111, 159, 112, 0.42)',
@@ -6313,16 +6380,30 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
     fontWeight: 700,
   },
-  mediaWorkflowStepBody: {
+  mediaWorkflowStepSummary: {
     margin: 0,
+    color: THEME.muted,
+    fontSize: 12,
+    lineHeight: 1.35,
+  },
+  mediaWorkflowStepList: {
+    margin: 0,
+    paddingLeft: 18,
+    display: 'grid',
+    gap: 4,
+  },
+  mediaWorkflowStepListItem: {
     color: THEME.text,
-    fontSize: 13,
-    lineHeight: 1.45,
+    fontSize: 12,
+    lineHeight: 1.35,
   },
   mediaWorkflowStepMeta: {
     color: THEME.muted,
     fontSize: 11,
     fontFamily: 'var(--font-geist-mono), monospace',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   mediaWorkspaceGrid: {
     display: 'grid',

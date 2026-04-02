@@ -4,6 +4,39 @@ set -euo pipefail
 
 USER_HOME="${HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
+SERVER_ENV_FILE="${SERVER_ENV_FILE:-$PROJECT/server/.env}"
+
+load_shell_env_file() {
+    local env_file="$1"
+    local line="" key="" value=""
+
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            continue
+        fi
+
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+
+        export "$key=$value"
+    done < "$env_file"
+}
+
+load_shell_env_file "$SERVER_ENV_FILE"
+
 if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
     . "$PROJECT/scripts/drive-common.sh"
 fi
@@ -32,6 +65,7 @@ JELLYFIN_WEB_DIR="${JELLYFIN_WEB_DIR:-/data/data/com.termux/files/usr/lib/jellyf
 JELLYFIN_FFMPEG_BIN="${JELLYFIN_FFMPEG_BIN:-/data/data/com.termux/files/usr/opt/jellyfin/bin/ffmpeg}"
 JELLYFIN_CACHE_DIR="${JELLYFIN_CACHE_DIR:-${MEDIA_TRANSCODE_DIR:-$JELLYFIN_HOME/cache}}"
 JELLYFIN_MISC_CACHE_DIR="${JELLYFIN_MISC_CACHE_DIR:-${MEDIA_MISC_CACHE_DIR:-$JELLYFIN_HOME/cache}}"
+JELLYFIN_LIBRARY_SYNC_CMD="${JELLYFIN_LIBRARY_SYNC_CMD:-$PROJECT/scripts/jellyfin-library-sync.sh}"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYFIN_CACHE_DIR" "$JELLYFIN_MISC_CACHE_DIR" "$JELLYFIN_HOME/config" "$JELLYFIN_HOME/data"
 
@@ -50,6 +84,10 @@ start_service() {
 
     if is_running; then
         return 0
+    fi
+
+    if [ -x "$JELLYFIN_LIBRARY_SYNC_CMD" ]; then
+        "$JELLYFIN_LIBRARY_SYNC_CMD" sync >> "$JELLYFIN_LOG_PATH" 2>&1 || true
     fi
 
     if command -v setsid >/dev/null 2>&1; then

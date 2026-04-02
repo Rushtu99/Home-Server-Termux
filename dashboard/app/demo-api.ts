@@ -46,6 +46,25 @@ type DemoFsNode = {
   type: 'directory' | 'file';
 };
 
+type DemoFsOperation = {
+  createdAt: string;
+  destinationPath: string;
+  failureCount: number;
+  failures: Array<{ error: string; path: string }>;
+  id: string;
+  kind: 'upload' | 'copy' | 'move' | 'delete';
+  manifest: Array<{ lastModified: number; relativePath: string; size: number }>;
+  message: string;
+  processedBytes: number;
+  processedItems: number;
+  sourcePaths: string[];
+  status: 'queued' | 'receiving' | 'running' | 'success' | 'partial' | 'failed';
+  totalBytes: number;
+  totalItems: number;
+  updatedAt: string;
+  uploadedFiles: string[];
+};
+
 type DemoFtpMountState = {
   error?: string;
   mountName: string;
@@ -296,6 +315,7 @@ type DemoState = {
     user: string;
   };
   ftpFavourites: DemoFtpFavourite[];
+  fsOperations: DemoFsOperation[];
   llmActiveModelId: string;
   llmApiKeyConfigured: boolean;
   llmOnline: {
@@ -485,6 +505,7 @@ const seedState = (): DemoState => {
       user: 'anonymous',
     },
     ftpFavourites,
+    fsOperations: [],
     llmActiveModelId: 'qwen2.5-coder-1.5b-q4_k_m',
     llmApiKeyConfigured: true,
     llmOnline: {
@@ -1075,6 +1096,75 @@ const createDownloadResponse = (relativePath = '') => {
   return URL.createObjectURL(blob);
 };
 
+const measureRequestBody = (body: RequestInit['body']) => {
+  if (typeof body === 'string') {
+    return body.length;
+  }
+  if (body instanceof ArrayBuffer) {
+    return body.byteLength;
+  }
+  if (ArrayBuffer.isView(body as ArrayBufferView)) {
+    return (body as ArrayBufferView).byteLength;
+  }
+  return 0;
+};
+
+const createDemoFsOperation = (
+  state: DemoState,
+  kind: DemoFsOperation['kind'],
+  payload: Partial<DemoFsOperation> = {}
+): DemoFsOperation => {
+  const createdAt = nowIso();
+  const operation: DemoFsOperation = {
+    createdAt,
+    destinationPath: String(payload.destinationPath || ''),
+    failureCount: Math.max(0, Number(payload.failureCount || 0) || 0),
+    failures: Array.isArray(payload.failures)
+      ? payload.failures.map((entry) => ({
+          error: String(entry?.error || 'Operation failed'),
+          path: String(entry?.path || ''),
+        }))
+      : [],
+    id: `fs-op-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    kind,
+    manifest: Array.isArray(payload.manifest)
+      ? payload.manifest.map((entry) => ({
+          lastModified: Math.max(0, Number(entry?.lastModified || 0) || 0),
+          relativePath: normalizeFsPath(String(entry?.relativePath || '')),
+          size: Math.max(0, Number(entry?.size || 0) || 0),
+        })).filter((entry) => entry.relativePath)
+      : [],
+    message: String(payload.message || 'Queued'),
+    processedBytes: Math.max(0, Number(payload.processedBytes || 0) || 0),
+    processedItems: Math.max(0, Number(payload.processedItems || 0) || 0),
+    sourcePaths: Array.isArray(payload.sourcePaths) ? payload.sourcePaths.map((entry) => normalizeFsPath(String(entry))).filter(Boolean) : [],
+    status: payload.status || 'queued',
+    totalBytes: Math.max(0, Number(payload.totalBytes || 0) || 0),
+    totalItems: Math.max(0, Number(payload.totalItems || 0) || 0),
+    updatedAt: createdAt,
+    uploadedFiles: Array.isArray(payload.uploadedFiles) ? payload.uploadedFiles.map((entry) => normalizeFsPath(String(entry))).filter(Boolean) : [],
+  };
+  state.fsOperations.unshift(operation);
+  state.fsOperations = state.fsOperations
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 24);
+  return operation;
+};
+
+const updateDemoFsOperation = (state: DemoState, operationId: string, updater: (current: DemoFsOperation) => DemoFsOperation) => {
+  const index = state.fsOperations.findIndex((entry) => entry.id === operationId);
+  if (index === -1) {
+    return null;
+  }
+  const next = updater(clone(state.fsOperations[index]));
+  next.updatedAt = nowIso();
+  state.fsOperations[index] = next;
+  state.fsOperations = state.fsOperations
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 24);
+  return next;
+};
+
 const requireSession = (state: DemoState) => {
   if (!state.sessionUser) {
     return jsonResponse({ error: 'Login required' }, 401);
@@ -1101,15 +1191,7 @@ const handleFsUpload = async (state: DemoState, url: URL, init?: RequestInit) =>
   const parentPath = normalizeFsPath(url.searchParams.get('path') || '');
   const fileName = String(url.searchParams.get('name') || 'upload.bin').trim() || 'upload.bin';
   const targetPath = normalizeFsPath(parentPath ? `${parentPath}/${fileName}` : fileName);
-  let size = 0;
-
-  if (typeof init?.body === 'string') {
-    size = init.body.length;
-  } else if (init?.body instanceof ArrayBuffer) {
-    size = init.body.byteLength;
-  } else if (ArrayBuffer.isView(init?.body as ArrayBufferView)) {
-    size = (init?.body as ArrayBufferView).byteLength;
-  }
+  const size = measureRequestBody(init?.body);
 
   state.nodes.set(targetPath, {
     modifiedAt: nowIso(),
@@ -1545,6 +1627,136 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
     renameNodeTree(demoState.nodes, sourcePath, targetPath);
     pushLog(demoState, 'info', 'Demo entry renamed', { from: sourcePath, to: targetPath });
     return jsonResponse({ path: targetPath, success: true });
+  }
+  if (pathname === '/api/fs/operations' && method === 'GET') {
+    return jsonResponse({ operations: clone(demoState.fsOperations) });
+  }
+  if (pathname.startsWith('/api/fs/operations/') && method === 'GET') {
+    const operationId = pathname.split('/').pop() || '';
+    const operation = demoState.fsOperations.find((entry) => entry.id === operationId) || null;
+    if (!operation) {
+      return jsonResponse({ error: 'Filesystem operation not found' }, 404);
+    }
+    return jsonResponse(clone(operation));
+  }
+  if (pathname === '/api/fs/operations/delete' && method === 'POST') {
+    const sourcePaths = Array.isArray(body.paths)
+      ? (body.paths as unknown[]).map((entry) => normalizeFsPath(String(entry))).filter(Boolean)
+      : body.path
+        ? [normalizeFsPath(String(body.path))]
+        : [];
+    sourcePaths.forEach((entryPath) => removeNodeTree(demoState.nodes, entryPath));
+    const operation = createDemoFsOperation(demoState, 'delete', {
+      message: 'Recycle complete (demo)',
+      processedItems: sourcePaths.length,
+      sourcePaths,
+      status: 'success',
+      totalItems: sourcePaths.length,
+    });
+    pushLog(demoState, 'info', 'Demo recycle operation completed', { count: sourcePaths.length, operationId: operation.id });
+    return jsonResponse({ operation, operationId: operation.id, success: true }, 202);
+  }
+  if (pathname === '/api/fs/operations/transfer' && method === 'POST') {
+    const destinationPath = normalizeFsPath(String(body.destinationPath || ''));
+    const mode = body.mode === 'move' ? 'move' : 'copy';
+    const sourcePaths = Array.isArray(body.sourcePaths)
+      ? (body.sourcePaths as unknown[]).map((entry) => normalizeFsPath(String(entry))).filter(Boolean)
+      : body.sourcePath
+        ? [normalizeFsPath(String(body.sourcePath))]
+        : [];
+
+    sourcePaths.forEach((sourcePath) => {
+      const targetPath = normalizeFsPath(`${destinationPath}/${sourcePath.split('/').pop() || sourcePath}`);
+      cloneNodeTree(demoState.nodes, sourcePath, targetPath);
+      if (mode === 'move') {
+        removeNodeTree(demoState.nodes, sourcePath);
+      }
+    });
+    const operation = createDemoFsOperation(demoState, mode, {
+      destinationPath,
+      message: `${mode === 'move' ? 'Move' : 'Copy'} complete (demo)`,
+      processedItems: sourcePaths.length,
+      sourcePaths,
+      status: 'success',
+      totalItems: sourcePaths.length,
+    });
+    pushLog(demoState, 'info', 'Demo transfer operation completed', { destinationPath, mode, operationId: operation.id, sourcePaths });
+    return jsonResponse({ operation, operationId: operation.id, success: true }, 202);
+  }
+  if (pathname === '/api/fs/operations/upload' && method === 'POST') {
+    const destinationPath = normalizeFsPath(String(body.destinationPath || ''));
+    const manifest = Array.isArray(body.manifest)
+      ? (body.manifest as Array<Record<string, unknown>>).map((entry) => ({
+          lastModified: Math.max(0, Number(entry.lastModified || 0) || 0),
+          relativePath: normalizeFsPath(String(entry.relativePath || '')),
+          size: Math.max(0, Number(entry.size || 0) || 0),
+        })).filter((entry) => entry.relativePath)
+      : [];
+    const totalBytes = manifest.reduce((sum, entry) => sum + entry.size, 0);
+    const operation = createDemoFsOperation(demoState, 'upload', {
+      destinationPath,
+      manifest,
+      message: 'Waiting for file data (demo)',
+      status: 'receiving',
+      totalBytes,
+      totalItems: manifest.length,
+      uploadedFiles: [],
+    });
+    return jsonResponse({ operation, operationId: operation.id, success: true }, 202);
+  }
+  if (pathname.match(/^\/api\/fs\/operations\/[^/]+\/file$/) && method === 'POST') {
+    const operationId = pathname.split('/')[4] || '';
+    const relativePath = normalizeFsPath(url.searchParams.get('relativePath') || '');
+    const operation = updateDemoFsOperation(demoState, operationId, (current) => {
+      const uploadedFiles = [...new Set([...current.uploadedFiles, relativePath])];
+      const uploadedBytes = current.manifest
+        .filter((entry) => uploadedFiles.includes(entry.relativePath))
+        .reduce((sum, entry) => sum + entry.size, 0);
+      return {
+        ...current,
+        message: `Received ${uploadedFiles.length}/${current.totalItems} files (demo)`,
+        processedBytes: uploadedBytes,
+        processedItems: uploadedFiles.length,
+        uploadedFiles,
+      };
+    });
+    if (!operation) {
+      return jsonResponse({ error: 'Filesystem operation not found' }, 404);
+    }
+    return jsonResponse({ operation, success: true });
+  }
+  if (pathname.match(/^\/api\/fs\/operations\/[^/]+\/finalize$/) && method === 'POST') {
+    const operationId = pathname.split('/')[4] || '';
+    const operation = updateDemoFsOperation(demoState, operationId, (current) => {
+      current.manifest.forEach((entry) => {
+        const targetPath = normalizeFsPath(`${current.destinationPath}/${entry.relativePath}`);
+        const parentPath = parentFsPath(targetPath);
+        const segments = targetPath.split('/').filter(Boolean);
+        let cursor = '';
+        segments.slice(0, -1).forEach((segment) => {
+          cursor = normalizeFsPath(cursor ? `${cursor}/${segment}` : segment);
+          if (!demoState.nodes.has(cursor)) {
+            demoState.nodes.set(cursor, makeNode(cursor, 'directory'));
+          }
+        });
+        if (parentPath && !demoState.nodes.has(parentPath)) {
+          demoState.nodes.set(parentPath, makeNode(parentPath, 'directory'));
+        }
+        demoState.nodes.set(targetPath, makeNode(targetPath, 'file', entry.size || 2048));
+      });
+      return {
+        ...current,
+        message: 'Upload complete (demo)',
+        processedBytes: current.totalBytes,
+        processedItems: current.totalItems,
+        status: 'success',
+      };
+    });
+    if (!operation) {
+      return jsonResponse({ error: 'Filesystem operation not found' }, 404);
+    }
+    pushLog(demoState, 'info', 'Demo upload operation finalized', { destinationPath: operation.destinationPath, operationId });
+    return jsonResponse({ operation, operationId, success: true }, 202);
   }
   if (pathname === '/api/fs/delete' && method === 'POST') {
     const paths = Array.isArray(body.paths)

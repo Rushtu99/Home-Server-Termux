@@ -74,10 +74,17 @@ const MEDIA_MOVIES_DIR = process.env.MEDIA_MOVIES_DIR || path.join(MEDIA_VAULT_R
 const MEDIA_SERIES_DIR = process.env.MEDIA_SERIES_DIR || path.join(MEDIA_VAULT_ROOT, 'series');
 const MEDIA_MUSIC_DIR = process.env.MEDIA_MUSIC_DIR || path.join(MEDIA_VAULT_ROOT, 'music');
 const MEDIA_AUDIOBOOKS_DIR = process.env.MEDIA_AUDIOBOOKS_DIR || path.join(MEDIA_VAULT_ROOT, 'audiobooks');
+const MEDIA_SCRATCH_LIBRARY_ROOT = process.env.MEDIA_SCRATCH_LIBRARY_ROOT || path.join(MEDIA_SCRATCH_ROOT, 'media');
+const MEDIA_SCRATCH_MOVIES_DIR = process.env.MEDIA_SCRATCH_MOVIES_DIR || path.join(MEDIA_SCRATCH_LIBRARY_ROOT, 'movies');
+const MEDIA_SCRATCH_SERIES_DIR = process.env.MEDIA_SCRATCH_SERIES_DIR || path.join(MEDIA_SCRATCH_LIBRARY_ROOT, 'series');
+const MEDIA_SCRATCH_MUSIC_DIR = process.env.MEDIA_SCRATCH_MUSIC_DIR || path.join(MEDIA_SCRATCH_LIBRARY_ROOT, 'music');
+const MEDIA_SCRATCH_AUDIOBOOKS_DIR = process.env.MEDIA_SCRATCH_AUDIOBOOKS_DIR || path.join(MEDIA_SCRATCH_LIBRARY_ROOT, 'audiobooks');
 const MEDIA_DOWNLOADS_DIR = process.env.MEDIA_DOWNLOADS_DIR || path.join(MEDIA_SCRATCH_ROOT, 'downloads');
 const MEDIA_DOWNLOADS_MOVIES_DIR = process.env.MEDIA_DOWNLOADS_MOVIES_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'movies');
 const MEDIA_DOWNLOADS_SERIES_DIR = process.env.MEDIA_DOWNLOADS_SERIES_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'series');
 const MEDIA_DOWNLOADS_MANUAL_DIR = process.env.MEDIA_DOWNLOADS_MANUAL_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'manual');
+const MEDIA_SMALL_DOWNLOADS_DIR = process.env.MEDIA_SMALL_DOWNLOADS_DIR || path.join(FILEBROWSER_ROOT, 'C', 'Download', 'Home-Server', 'small');
+const MEDIA_SMALL_DOWNLOADS_MAX_MB = Math.max(1, Number(process.env.MEDIA_SMALL_DOWNLOADS_MAX_MB || 256) || 256);
 const MEDIA_IMPORT_REVIEW_DIR = process.env.MEDIA_IMPORT_REVIEW_DIR || path.join(MEDIA_SCRATCH_ROOT, 'review');
 const MEDIA_IMPORT_LOG_DIR = process.env.MEDIA_IMPORT_LOG_DIR || path.join(MEDIA_SCRATCH_ROOT, 'logs');
 const MEDIA_IMPORT_STATUS_FILE = process.env.MEDIA_IMPORT_STATUS_FILE || path.join(MEDIA_IMPORT_LOG_DIR, 'import-status.json');
@@ -135,6 +142,8 @@ const QBITTORRENT_CONFIG_PATH = process.env.QBITTORRENT_CONFIG_PATH || path.join
 const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(ROOT_DIR, 'runtime');
 const APP_DB_PATH = process.env.APP_DB_PATH || path.join(RUNTIME_DIR, 'app.db');
 const FTP_MOUNT_RUNTIME_DIR = process.env.FTP_MOUNT_RUNTIME_DIR || path.join(RUNTIME_DIR, 'ftp-mounts');
+const FS_OPERATIONS_STATE_DIR = process.env.FS_OPERATIONS_STATE_DIR || path.join(RUNTIME_DIR, 'fs-operations');
+const FS_OPERATIONS_STAGING_DIR = process.env.FS_OPERATIONS_STAGING_DIR || path.join(FS_OPERATIONS_STATE_DIR, 'staging');
 const TERMUX_CLOUD_MOUNT_CMD = process.env.TERMUX_CLOUD_MOUNT_CMD || '/data/data/com.termux/files/usr/bin/termux-cloud-mount';
 const TERMUX_CLOUD_MOUNT_ROOT = process.env.TERMUX_CLOUD_MOUNT_ROOT || '/mnt/cloud/home-server';
 const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pid');
@@ -338,6 +347,8 @@ if (adminBootstrap.seeded) {
 }
 
 fs.mkdirSync(FTP_MOUNT_RUNTIME_DIR, { recursive: true });
+fs.mkdirSync(FS_OPERATIONS_STATE_DIR, { recursive: true });
+fs.mkdirSync(FS_OPERATIONS_STAGING_DIR, { recursive: true });
 fs.mkdirSync(LLM_MODELS_DIR, { recursive: true });
 fs.mkdirSync(LLM_PULL_STATE_DIR, { recursive: true });
 
@@ -1441,7 +1452,16 @@ const buildMediaWorkflowSnapshot = (catalog) => {
     .filter(Boolean);
   const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
   const primaryDownloadEntry = downloadEntries[0] || null;
-  const libraryRoots = [MEDIA_MOVIES_DIR, MEDIA_SERIES_DIR, MEDIA_MUSIC_DIR, MEDIA_AUDIOBOOKS_DIR];
+  const libraryRoots = [
+    MEDIA_MOVIES_DIR,
+    MEDIA_SERIES_DIR,
+    MEDIA_MUSIC_DIR,
+    MEDIA_AUDIOBOOKS_DIR,
+    MEDIA_SCRATCH_MOVIES_DIR,
+    MEDIA_SCRATCH_SERIES_DIR,
+    MEDIA_SCRATCH_MUSIC_DIR,
+    MEDIA_SCRATCH_AUDIOBOOKS_DIR,
+  ];
   const downloadRoots = [MEDIA_DOWNLOADS_DIR, MEDIA_DOWNLOADS_MOVIES_DIR, MEDIA_DOWNLOADS_SERIES_DIR, MEDIA_DOWNLOADS_MANUAL_DIR];
   const qbittorrentConfig = probeQbittorrentConfig();
   const importStatusRaw = readJsonFile(MEDIA_IMPORT_STATUS_FILE, null);
@@ -1558,6 +1578,8 @@ const buildMediaWorkflowSnapshot = (catalog) => {
     downloads: {
       clientCount: downloadEntries.length,
       defaultSavePath: qbittorrentConfig.defaultSavePath,
+      smallDownloadsDir: MEDIA_SMALL_DOWNLOADS_DIR,
+      smallDownloadsMaxMb: MEDIA_SMALL_DOWNLOADS_MAX_MB,
       tempPath: qbittorrentConfig.tempPath,
       categoryPaths: {
         manual: qbittorrentConfig.manualCategoryPath,
@@ -1577,6 +1599,9 @@ const buildMediaWorkflowSnapshot = (catalog) => {
       vaultRoots: MEDIA_VAULT_ROOTS,
       scratchRoot: MEDIA_SCRATCH_ROOT,
       scratchRoots: MEDIA_SCRATCH_ROOTS,
+      scratchLibraryRoot: MEDIA_SCRATCH_LIBRARY_ROOT,
+      smallDownloadsDir: MEDIA_SMALL_DOWNLOADS_DIR,
+      smallDownloadsMaxMb: MEDIA_SMALL_DOWNLOADS_MAX_MB,
       vaultRootsStats,
       scratchRootsStats,
       importAbortFreeGb: MEDIA_IMPORT_ABORT_FREE_GB,
@@ -3051,6 +3076,376 @@ const moveFsEntry = (sourcePath, targetPath) => {
     copyFsEntry(sourcePath, targetPath);
     fs.rmSync(sourcePath, { recursive: true, force: true });
   }
+};
+
+const FS_OPERATION_ACTIVE_STATUSES = new Set(['queued', 'receiving', 'running']);
+const FS_OPERATION_TERMINAL_STATUSES = new Set(['success', 'partial', 'failed']);
+
+const sanitizeFsOperationId = (value = '', fallback = '') => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  return normalized || fallback;
+};
+
+const normalizeFsUploadRelativePath = (value = '') =>
+  String(value || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment && segment !== '.' && segment !== '..')
+    .join('/');
+
+const getFsOperationStatePath = (operationId = '') => path.join(FS_OPERATIONS_STATE_DIR, `${operationId}.json`);
+const getFsOperationStagingRoot = (operationId = '') => path.join(FS_OPERATIONS_STAGING_DIR, operationId);
+
+const normalizeFsOperationFailure = (entry) => ({
+  error: String(entry?.error || 'Operation failed'),
+  path: String(entry?.path || ''),
+});
+
+const normalizeFsOperationManifestEntry = (entry) => {
+  const relativePath = normalizeFsUploadRelativePath(entry?.relativePath || entry?.path || '');
+  const size = Math.max(0, Number(entry?.size || 0) || 0);
+  const lastModified = Math.max(0, Number(entry?.lastModified || 0) || 0);
+  if (!relativePath) {
+    return null;
+  }
+  return {
+    lastModified,
+    relativePath,
+    size,
+  };
+};
+
+const normalizeFsOperationState = (operationId, raw) => {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const uploadedFiles = Array.isArray(raw.uploadedFiles)
+    ? raw.uploadedFiles
+      .map((entry) => normalizeFsUploadRelativePath(entry))
+      .filter(Boolean)
+    : [];
+  const manifest = Array.isArray(raw.manifest)
+    ? raw.manifest.map((entry) => normalizeFsOperationManifestEntry(entry)).filter(Boolean)
+    : [];
+
+  return {
+    id: operationId,
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    destinationPath: normalizeLocalRelativePath(raw.destinationPath || ''),
+    failureCount: Math.max(0, Number(raw.failureCount || 0) || 0),
+    failures: Array.isArray(raw.failures) ? raw.failures.map((entry) => normalizeFsOperationFailure(entry)) : [],
+    kind: String(raw.kind || ''),
+    manifest,
+    message: String(raw.message || ''),
+    processedBytes: Math.max(0, Number(raw.processedBytes || 0) || 0),
+    processedItems: Math.max(0, Number(raw.processedItems || 0) || 0),
+    sourcePaths: Array.isArray(raw.sourcePaths)
+      ? raw.sourcePaths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
+      : [],
+    stagingPath: String(raw.stagingPath || getFsOperationStagingRoot(operationId)),
+    status: String(raw.status || 'failed'),
+    totalBytes: Math.max(0, Number(raw.totalBytes || 0) || 0),
+    totalItems: Math.max(0, Number(raw.totalItems || 0) || 0),
+    updatedAt: String(raw.updatedAt || raw.createdAt || new Date().toISOString()),
+    uploadedFiles: [...new Set(uploadedFiles)],
+  };
+};
+
+const readFsOperation = (operationId = '') => {
+  const normalizedId = sanitizeFsOperationId(operationId);
+  if (!normalizedId) {
+    return null;
+  }
+  return normalizeFsOperationState(
+    normalizedId,
+    readJsonFileSafe(getFsOperationStatePath(normalizedId), null),
+  );
+};
+
+const writeFsOperation = (job) => {
+  const normalizedJob = normalizeFsOperationState(
+    sanitizeFsOperationId(job?.id || '', `fs-op-${Date.now()}`),
+    job,
+  );
+  if (!normalizedJob) {
+    throw new Error('Invalid filesystem operation');
+  }
+  writeJsonFileAtomic(getFsOperationStatePath(normalizedJob.id), normalizedJob);
+  return normalizedJob;
+};
+
+const updateFsOperation = (operationId, updater) => {
+  const current = readFsOperation(operationId);
+  if (!current) {
+    throw new Error('Filesystem operation not found');
+  }
+  const next = typeof updater === 'function' ? updater({ ...current }) : { ...current, ...(updater || {}) };
+  return writeFsOperation({
+    ...current,
+    ...(next || {}),
+    id: current.id,
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+const serializeFsOperation = (job, detail = false) => {
+  if (!job) {
+    return null;
+  }
+  return {
+    createdAt: job.createdAt,
+    destinationPath: job.destinationPath,
+    failureCount: job.failureCount,
+    failures: detail ? job.failures : job.failures.slice(0, 5),
+    id: job.id,
+    kind: job.kind,
+    manifest: detail ? job.manifest : undefined,
+    message: job.message,
+    processedBytes: job.processedBytes,
+    processedItems: job.processedItems,
+    sourcePaths: job.sourcePaths,
+    status: job.status,
+    totalBytes: job.totalBytes,
+    totalItems: job.totalItems,
+    updatedAt: job.updatedAt,
+    uploadedFiles: detail ? job.uploadedFiles : undefined,
+  };
+};
+
+const listFsOperations = (limit = 25) => {
+  let files = [];
+  try {
+    files = fs.readdirSync(FS_OPERATIONS_STATE_DIR).filter((name) => name.endsWith('.json'));
+  } catch {
+    return [];
+  }
+
+  return files
+    .map((name) => readFsOperation(name.replace(/\.json$/, '')))
+    .filter(Boolean)
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, limit);
+};
+
+const createFsOperationTracker = (job) => {
+  let current = { ...job };
+  let lastWriteAt = 0;
+
+  const persist = (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastWriteAt < 200) {
+      return current;
+    }
+    lastWriteAt = now;
+    current.updatedAt = new Date(now).toISOString();
+    current = writeFsOperation(current);
+    return current;
+  };
+
+  return {
+    get job() {
+      return current;
+    },
+    fail(pathValue, error) {
+      current.failures = [...current.failures, {
+        error: String(error instanceof Error ? error.message : error || 'Operation failed'),
+        path: String(pathValue || ''),
+      }];
+      current.failureCount = current.failures.length;
+      persist(false);
+    },
+    mark(status, message = current.message || '') {
+      current.status = status;
+      current.message = String(message || current.message || '');
+      return persist(true);
+    },
+    refresh() {
+      current = readFsOperation(current.id) || current;
+      return current;
+    },
+    set(values = {}, force = false) {
+      current = {
+        ...current,
+        ...values,
+      };
+      current.processedBytes = Math.min(current.totalBytes, Math.max(0, Number(current.processedBytes || 0) || 0));
+      current.processedItems = Math.min(current.totalItems, Math.max(0, Number(current.processedItems || 0) || 0));
+      return persist(force);
+    },
+    tick(delta = {}, force = false) {
+      current.processedBytes = Math.min(current.totalBytes, current.processedBytes + Math.max(0, Number(delta.bytes || 0) || 0));
+      current.processedItems = Math.min(current.totalItems, current.processedItems + Math.max(0, Number(delta.items || 0) || 0));
+      if (delta.message) {
+        current.message = String(delta.message);
+      }
+      return persist(force);
+    },
+  };
+};
+
+const collectFsEntryStats = (absolutePath) => {
+  const lstat = fs.lstatSync(absolutePath);
+  if (lstat.isSymbolicLink()) {
+    return { totalBytes: 0, totalItems: 1 };
+  }
+  if (lstat.isFile()) {
+    return { totalBytes: lstat.size, totalItems: 1 };
+  }
+  if (!lstat.isDirectory()) {
+    return { totalBytes: 0, totalItems: 1 };
+  }
+
+  let totalBytes = 0;
+  let totalItems = 1;
+  const children = fs.readdirSync(absolutePath, { withFileTypes: true });
+  for (const child of children) {
+    const childStats = collectFsEntryStats(path.join(absolutePath, child.name));
+    totalBytes += childStats.totalBytes;
+    totalItems += childStats.totalItems;
+  }
+  return { totalBytes, totalItems };
+};
+
+const sumFsStats = (statsList = []) => statsList.reduce((acc, entry) => ({
+  totalBytes: acc.totalBytes + Math.max(0, Number(entry?.totalBytes || 0) || 0),
+  totalItems: acc.totalItems + Math.max(0, Number(entry?.totalItems || 0) || 0),
+}), { totalBytes: 0, totalItems: 0 });
+
+const copyFileWithProgress = async (sourcePath, targetPath, onProgress) => {
+  const sourceStat = fs.statSync(sourcePath);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const readStream = fs.createReadStream(sourcePath);
+    const writeStream = fs.createWriteStream(targetPath, { flags: 'wx' });
+
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      readStream.destroy();
+      writeStream.destroy();
+      try {
+        fs.rmSync(targetPath, { force: true });
+      } catch {
+        // best effort cleanup
+      }
+      reject(error);
+    };
+
+    readStream.on('data', (chunk) => {
+      onProgress?.({
+        bytes: Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk),
+        items: 0,
+      });
+    });
+    readStream.on('error', fail);
+    writeStream.on('error', fail);
+    writeStream.on('close', () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        fs.utimesSync(targetPath, sourceStat.atime, sourceStat.mtime);
+      } catch {
+        // preserve timestamps on best effort
+      }
+      resolve();
+    });
+
+    readStream.pipe(writeStream);
+  });
+};
+
+const copyFsEntryWithProgress = async (sourcePath, targetPath, tracker, mode, knownStats = null) => {
+  const sourceLstat = fs.lstatSync(sourcePath);
+  const sourceStats = knownStats || collectFsEntryStats(sourcePath);
+
+  if (mode === 'move') {
+    try {
+      fs.renameSync(sourcePath, targetPath);
+      tracker.tick({
+        bytes: sourceStats.totalBytes,
+        items: sourceStats.totalItems,
+      }, true);
+      return;
+    } catch (error) {
+      if (error?.code !== 'EXDEV') {
+        throw error;
+      }
+    }
+  }
+
+  if (sourceLstat.isSymbolicLink()) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
+    if (mode === 'move') {
+      fs.unlinkSync(sourcePath);
+    }
+    tracker.tick({ items: 1 }, true);
+    return;
+  }
+
+  if (sourceLstat.isFile()) {
+    await copyFileWithProgress(sourcePath, targetPath, (delta) => tracker.tick(delta, false));
+    tracker.tick({ items: 1 }, true);
+    if (mode === 'move') {
+      fs.unlinkSync(sourcePath);
+    }
+    return;
+  }
+
+  if (!sourceLstat.isDirectory()) {
+    tracker.tick({ items: 1 }, true);
+    return;
+  }
+
+  fs.mkdirSync(targetPath, { recursive: true });
+  tracker.tick({ items: 1 }, false);
+  const children = fs.readdirSync(sourcePath, { withFileTypes: true });
+  for (const child of children) {
+    const sourceChildPath = path.join(sourcePath, child.name);
+    const targetChildPath = path.join(targetPath, child.name);
+    await copyFsEntryWithProgress(sourceChildPath, targetChildPath, tracker, mode, null);
+  }
+  try {
+    const sourceStat = fs.statSync(sourcePath);
+    fs.utimesSync(targetPath, sourceStat.atime, sourceStat.mtime);
+  } catch {
+    // best effort preserve timestamps for directories
+  }
+  if (mode === 'move') {
+    fs.rmdirSync(sourcePath);
+  }
+};
+
+let fsOperationQueue = Promise.resolve();
+
+const enqueueFsOperation = (operationId, worker) => {
+  fsOperationQueue = fsOperationQueue
+    .catch(() => null)
+    .then(async () => {
+      const current = readFsOperation(operationId);
+      if (!current || FS_OPERATION_TERMINAL_STATUSES.has(current.status)) {
+        return;
+      }
+      try {
+        await worker();
+      } catch (error) {
+        updateFsOperation(operationId, (job) => ({
+          ...job,
+          failureCount: Math.max(1, job.failureCount || 0),
+          failures: job.failures.length > 0 ? job.failures : [{ error: String(error instanceof Error ? error.message : error || 'Operation failed'), path: '' }],
+          message: String(error instanceof Error ? error.message : error || 'Operation failed'),
+          status: 'failed',
+        }));
+      }
+    });
+  return fsOperationQueue;
 };
 
 const sanitizeHostLabel = (host = '') => String(host).trim().replace(/[^a-zA-Z0-9._-]+/g, '_') || 'remote';
@@ -5025,6 +5420,530 @@ const filesystemRenameHandler = async (req, res) => {
   }
 };
 
+const createFsOperationJob = (kind, payload = {}) => writeFsOperation({
+  createdAt: new Date().toISOString(),
+  destinationPath: normalizeLocalRelativePath(payload.destinationPath || ''),
+  failureCount: 0,
+  failures: [],
+  id: sanitizeFsOperationId(`${kind}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`),
+  kind,
+  manifest: Array.isArray(payload.manifest) ? payload.manifest.map((entry) => normalizeFsOperationManifestEntry(entry)).filter(Boolean) : [],
+  message: String(payload.message || 'Queued'),
+  processedBytes: Math.max(0, Number(payload.processedBytes || 0) || 0),
+  processedItems: Math.max(0, Number(payload.processedItems || 0) || 0),
+  sourcePaths: Array.isArray(payload.sourcePaths)
+    ? payload.sourcePaths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
+    : [],
+  stagingPath: String(payload.stagingPath || ''),
+  status: String(payload.status || 'queued'),
+  totalBytes: Math.max(0, Number(payload.totalBytes || 0) || 0),
+  totalItems: Math.max(0, Number(payload.totalItems || 0) || 0),
+  updatedAt: new Date().toISOString(),
+  uploadedFiles: Array.isArray(payload.uploadedFiles)
+    ? payload.uploadedFiles.map((entry) => normalizeFsUploadRelativePath(entry || '')).filter(Boolean)
+    : [],
+});
+
+const processFsTransferJob = async (operationId, req) => {
+  const tracker = createFsOperationTracker(updateFsOperation(operationId, {
+    message: 'Preparing transfer',
+    status: 'running',
+  }));
+  const job = tracker.job;
+  const sourceStatsByPath = new Map();
+
+  for (const sourceRelative of job.sourcePaths) {
+    const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
+    if (!fs.existsSync(sourceAbsolute)) {
+      tracker.fail(sourceRelative, 'Source path not found');
+      continue;
+    }
+    sourceStatsByPath.set(sourceRelative, collectFsEntryStats(sourceAbsolute));
+  }
+
+  for (const sourceRelative of job.sourcePaths) {
+    const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
+    const targetRelative = normalizeLocalRelativePath(path.join(job.destinationPath, path.basename(sourceRelative)));
+    const targetAbsolute = resolveFsPath(targetRelative).absolutePath;
+    const knownStats = sourceStatsByPath.get(sourceRelative) || { totalBytes: 0, totalItems: 0 };
+
+    try {
+      if (!fs.existsSync(sourceAbsolute)) {
+        throw new Error('Source path not found');
+      }
+      if (await isProtectedFsPath(sourceRelative)) {
+        throw new Error(`This path cannot be ${job.kind === 'move' ? 'moved' : 'copied'}`);
+      }
+      if (await isProtectedFsPath(targetRelative)) {
+        throw new Error('This destination is protected');
+      }
+      if (fs.existsSync(targetAbsolute)) {
+        throw new Error('A file or folder with that name already exists in the destination');
+      }
+      if (targetAbsolute === sourceAbsolute || targetAbsolute.startsWith(`${sourceAbsolute}${path.sep}`)) {
+        throw new Error('Cannot paste a folder into itself');
+      }
+
+      tracker.set({ message: `${job.kind === 'move' ? 'Moving' : 'Copying'} ${path.basename(sourceRelative)}` }, false);
+      await copyFsEntryWithProgress(sourceAbsolute, targetAbsolute, tracker, job.kind, knownStats);
+    } catch (error) {
+      tracker.fail(sourceRelative, error);
+    }
+  }
+
+  const completed = tracker.refresh();
+  const status = completed.failureCount > 0
+    ? completed.processedItems > 0
+      ? 'partial'
+      : 'failed'
+    : 'success';
+  const message = completed.failureCount > 0
+    ? `${job.kind === 'move' ? 'Move' : 'Copy'} completed with ${completed.failureCount} failure${completed.failureCount === 1 ? '' : 's'}`
+    : `${job.kind === 'move' ? 'Move' : 'Copy'} complete`;
+  tracker.set({
+    message,
+    status,
+  }, true);
+
+  pushAuditEvent(req, status === 'success' ? 'info' : 'warn', `Filesystem entr${job.sourcePaths.length === 1 ? 'y' : 'ies'} ${job.kind}d`, {
+    destination: job.destinationPath,
+    failureCount: completed.failureCount,
+    items: job.sourcePaths,
+    operationId,
+  });
+};
+
+const processFsDeleteJob = async (operationId, req) => {
+  const tracker = createFsOperationTracker(updateFsOperation(operationId, {
+    message: 'Recycling entries',
+    status: 'running',
+  }));
+  const job = tracker.job;
+  const sourceStatsByPath = new Map();
+
+  for (const sourceRelative of job.sourcePaths) {
+    const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
+    if (!fs.existsSync(sourceAbsolute)) {
+      tracker.fail(sourceRelative, 'Path not found');
+      continue;
+    }
+    sourceStatsByPath.set(sourceRelative, collectFsEntryStats(sourceAbsolute));
+  }
+
+  for (const sourceRelative of job.sourcePaths) {
+    try {
+      if (await isProtectedFsPath(sourceRelative)) {
+        throw new Error('This path cannot be deleted');
+      }
+      const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
+      if (!fs.existsSync(sourceAbsolute)) {
+        throw new Error('Path not found');
+      }
+      const recycled = moveFsEntryToRecycleBin(sourceRelative);
+      const stats = sourceStatsByPath.get(sourceRelative) || { totalBytes: 0, totalItems: 0 };
+      tracker.tick({
+        bytes: stats.totalBytes,
+        items: stats.totalItems,
+        message: `Recycled ${path.basename(sourceRelative)}`,
+      }, true);
+      pushAuditEvent(req, 'info', 'Filesystem entry recycled', {
+        from: sourceRelative,
+        operationId,
+        recycledAt: recycled.recycledAt,
+        to: recycled.path,
+      });
+    } catch (error) {
+      tracker.fail(sourceRelative, error);
+    }
+  }
+
+  const completed = tracker.refresh();
+  const status = completed.failureCount > 0
+    ? completed.processedItems > 0
+      ? 'partial'
+      : 'failed'
+    : 'success';
+  tracker.set({
+    message: completed.failureCount > 0
+      ? `Recycle completed with ${completed.failureCount} failure${completed.failureCount === 1 ? '' : 's'}`
+      : 'Recycle complete',
+    status,
+  }, true);
+};
+
+const processFsUploadFinalizeJob = async (operationId, req) => {
+  const tracker = createFsOperationTracker(updateFsOperation(operationId, {
+    message: 'Finalizing upload',
+    status: 'running',
+  }));
+  const job = tracker.job;
+  const uploadedSet = new Set(job.uploadedFiles);
+  const manifest = job.manifest;
+
+  for (const entry of manifest) {
+    if (!uploadedSet.has(entry.relativePath)) {
+      tracker.fail(entry.relativePath, 'File data was not uploaded');
+      continue;
+    }
+
+    const stagedAbsolute = path.join(job.stagingPath, entry.relativePath);
+    const targetRelative = normalizeLocalRelativePath(path.join(job.destinationPath, entry.relativePath));
+    const targetAbsolute = resolveFsPath(targetRelative).absolutePath;
+
+    try {
+      if (!fs.existsSync(stagedAbsolute)) {
+        throw new Error('Staged file not found');
+      }
+      if (await isProtectedFsPath(targetRelative)) {
+        throw new Error('This destination is protected');
+      }
+      if (fs.existsSync(targetAbsolute)) {
+        throw new Error('A file or folder with that name already exists in the destination');
+      }
+
+      fs.mkdirSync(path.dirname(targetAbsolute), { recursive: true });
+      moveFsEntry(stagedAbsolute, targetAbsolute);
+      if (entry.lastModified > 0) {
+        const modifiedAt = new Date(entry.lastModified);
+        if (!Number.isNaN(modifiedAt.getTime())) {
+          try {
+            fs.utimesSync(targetAbsolute, modifiedAt, modifiedAt);
+          } catch {
+            // best effort preserve original modified timestamp
+          }
+        }
+      }
+    } catch (error) {
+      tracker.fail(entry.relativePath, error);
+    }
+  }
+
+  try {
+    fs.rmSync(job.stagingPath, { force: true, recursive: true });
+  } catch {
+    // best effort cleanup
+  }
+
+  const completed = tracker.refresh();
+  const successfulCount = manifest.length - completed.failureCount;
+  tracker.set({
+    message: completed.failureCount > 0
+      ? `Upload finalized with ${completed.failureCount} failure${completed.failureCount === 1 ? '' : 's'}`
+      : 'Upload complete',
+    processedBytes: completed.totalBytes,
+    processedItems: Math.max(completed.processedItems, successfulCount),
+    status: completed.failureCount > 0
+      ? successfulCount > 0
+        ? 'partial'
+        : 'failed'
+      : 'success',
+  }, true);
+
+  pushAuditEvent(req, completed.failureCount > 0 ? 'warn' : 'info', 'Filesystem upload finalized', {
+    destination: job.destinationPath,
+    failureCount: completed.failureCount,
+    itemCount: manifest.length,
+    operationId,
+  });
+};
+
+const filesystemOperationsListHandler = async (req, res) => {
+  try {
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 25) || 25));
+    return res.json({
+      operations: listFsOperations(limit).map((job) => serializeFsOperation(job, false)),
+    });
+  } catch (error) {
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to list filesystem operations') });
+  }
+};
+
+const filesystemOperationDetailHandler = async (req, res) => {
+  const job = readFsOperation(req.params.id || '');
+  if (!job) {
+    return res.status(404).json({ error: 'Filesystem operation not found' });
+  }
+  return res.json(serializeFsOperation(job, true));
+};
+
+const filesystemOperationTransferHandler = async (req, res) => {
+  try {
+    const sourceRelatives = Array.isArray(req.body?.sourcePaths)
+      ? req.body.sourcePaths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
+      : [];
+    const singleRelative = normalizeLocalRelativePath(req.body?.sourcePath || '');
+    const destinationRelative = normalizeLocalRelativePath(req.body?.destinationPath || '');
+    const mode = String(req.body?.mode || 'copy').toLowerCase() === 'move' ? 'move' : 'copy';
+    const sourcePaths = sourceRelatives.length > 0 ? [...new Set(sourceRelatives)] : singleRelative ? [singleRelative] : [];
+
+    if (sourcePaths.length === 0 || !destinationRelative) {
+      return res.status(400).json({ error: 'Source paths and destination path are required' });
+    }
+
+    await ensureShareAccess(destinationRelative, req, 'write');
+    ensureFsTargetAllowed(destinationRelative);
+
+    const destinationAbsolute = resolveFsPath(destinationRelative).absolutePath;
+    if (!fs.existsSync(destinationAbsolute) || !fs.statSync(destinationAbsolute).isDirectory()) {
+      return res.status(400).json({ error: 'Destination must be an existing folder' });
+    }
+
+    const stats = [];
+    for (const sourceRelative of sourcePaths) {
+      await ensureShareAccess(sourceRelative, req, mode === 'move' ? 'write' : 'read');
+      if (await isProtectedFsPath(sourceRelative)) {
+        return res.status(403).json({ error: `This path cannot be ${mode === 'move' ? 'moved' : 'copied'}` });
+      }
+      const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
+      if (!fs.existsSync(sourceAbsolute)) {
+        return res.status(404).json({ error: `Source path not found: ${sourceRelative}` });
+      }
+      stats.push(collectFsEntryStats(sourceAbsolute));
+    }
+
+    const totals = sumFsStats(stats);
+    const job = createFsOperationJob(mode, {
+      destinationPath: destinationRelative,
+      message: 'Queued',
+      sourcePaths,
+      totalBytes: totals.totalBytes,
+      totalItems: totals.totalItems,
+    });
+    enqueueFsOperation(job.id, () => processFsTransferJob(job.id, req));
+    return res.status(202).json({
+      operationId: job.id,
+      operation: serializeFsOperation(job, true),
+      success: true,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to start transfer') });
+  }
+};
+
+const filesystemOperationDeleteHandler = async (req, res) => {
+  try {
+    const sourceRelatives = Array.isArray(req.body?.paths)
+      ? req.body.paths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
+      : [];
+    const singleRelative = normalizeLocalRelativePath(req.body?.path || '');
+    const sourcePaths = sourceRelatives.length > 0 ? [...new Set(sourceRelatives)] : singleRelative ? [singleRelative] : [];
+
+    if (sourcePaths.length === 0) {
+      return res.status(400).json({ error: 'At least one path is required' });
+    }
+
+    const stats = [];
+    for (const sourceRelative of sourcePaths) {
+      await ensureShareAccess(sourceRelative, req, 'write');
+      if (await isProtectedFsPath(sourceRelative)) {
+        return res.status(403).json({ error: 'This path cannot be deleted' });
+      }
+      const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
+      if (!fs.existsSync(sourceAbsolute)) {
+        return res.status(404).json({ error: `Path not found: ${sourceRelative}` });
+      }
+      stats.push(collectFsEntryStats(sourceAbsolute));
+    }
+
+    const totals = sumFsStats(stats);
+    const job = createFsOperationJob('delete', {
+      message: 'Queued',
+      sourcePaths,
+      totalBytes: totals.totalBytes,
+      totalItems: totals.totalItems,
+    });
+    enqueueFsOperation(job.id, () => processFsDeleteJob(job.id, req));
+    return res.status(202).json({
+      operationId: job.id,
+      operation: serializeFsOperation(job, true),
+      success: true,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to start delete operation') });
+  }
+};
+
+const filesystemOperationUploadCreateHandler = async (req, res) => {
+  try {
+    const destinationRelative = normalizeLocalRelativePath(req.body?.destinationPath || '');
+    const manifest = Array.isArray(req.body?.manifest)
+      ? req.body.manifest.map((entry) => normalizeFsOperationManifestEntry(entry)).filter(Boolean)
+      : [];
+
+    if (!destinationRelative) {
+      return res.status(400).json({ error: 'destinationPath is required' });
+    }
+    if (manifest.length === 0) {
+      return res.status(400).json({ error: 'At least one file is required' });
+    }
+
+    await ensureShareAccess(destinationRelative, req, 'write');
+    ensureFsTargetAllowed(destinationRelative);
+    if (!fs.existsSync(resolveFsPath(destinationRelative).absolutePath) || !fs.statSync(resolveFsPath(destinationRelative).absolutePath).isDirectory()) {
+      return res.status(400).json({ error: 'Destination must be an existing folder' });
+    }
+
+    const dedupedManifest = [...new Map(manifest.map((entry) => [entry.relativePath, entry])).values()];
+    const totals = dedupedManifest.reduce((acc, entry) => ({
+      totalBytes: acc.totalBytes + entry.size,
+      totalItems: acc.totalItems + 1,
+    }), { totalBytes: 0, totalItems: 0 });
+    const job = createFsOperationJob('upload', {
+      destinationPath: destinationRelative,
+      manifest: dedupedManifest,
+      message: 'Waiting for file data',
+      stagingPath: getFsOperationStagingRoot(sanitizeFsOperationId(`upload-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`)),
+      status: 'receiving',
+      totalBytes: totals.totalBytes,
+      totalItems: totals.totalItems,
+      uploadedFiles: [],
+    });
+
+    const stagingPath = getFsOperationStagingRoot(job.id);
+    fs.mkdirSync(stagingPath, { recursive: true });
+    const updatedJob = updateFsOperation(job.id, { stagingPath });
+    return res.status(202).json({
+      operationId: updatedJob.id,
+      operation: serializeFsOperation(updatedJob, true),
+      success: true,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to create upload operation') });
+  }
+};
+
+const filesystemOperationUploadFileHandler = async (req, res) => {
+  const job = readFsOperation(req.params.id || '');
+  if (!job || job.kind !== 'upload') {
+    return res.status(404).json({ error: 'Upload operation not found' });
+  }
+  if (job.status !== 'receiving') {
+    return res.status(409).json({ error: 'Upload operation is not accepting files right now' });
+  }
+
+  const relativePath = normalizeFsUploadRelativePath(req.query.relativePath || req.headers['x-file-relative-path'] || '');
+  if (!relativePath) {
+    return res.status(400).json({ error: 'relativePath is required' });
+  }
+  const manifestEntry = job.manifest.find((entry) => entry.relativePath === relativePath);
+  if (!manifestEntry) {
+    return res.status(404).json({ error: 'File is not part of this upload manifest' });
+  }
+
+  const tempPath = path.join(job.stagingPath, `${relativePath}.part`);
+  const targetPath = path.join(job.stagingPath, relativePath);
+  fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+
+  try {
+    await new Promise((resolve, reject) => {
+      let receivedBytes = 0;
+      let lastPersistAt = 0;
+      const stream = fs.createWriteStream(tempPath, { flags: 'w' });
+
+      const fail = (error) => {
+        try {
+          stream.destroy();
+        } catch {
+          // ignore
+        }
+        try {
+          fs.rmSync(tempPath, { force: true });
+        } catch {
+          // ignore
+        }
+        reject(error);
+      };
+
+      req.on('data', (chunk) => {
+        receivedBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
+        const now = Date.now();
+        if (now - lastPersistAt > 200) {
+          lastPersistAt = now;
+          const current = readFsOperation(job.id);
+          if (current) {
+            const currentUploaded = current.manifest
+              .filter((entry) => current.uploadedFiles.includes(entry.relativePath))
+              .reduce((sum, entry) => sum + entry.size, 0);
+            writeFsOperation({
+              ...current,
+              message: `Receiving ${path.basename(relativePath)}`,
+              processedBytes: Math.min(current.totalBytes, currentUploaded + receivedBytes),
+            });
+          }
+        }
+      });
+      req.on('aborted', () => fail(new Error('Upload aborted by client')));
+      req.on('error', fail);
+      stream.on('error', fail);
+      stream.on('finish', resolve);
+      req.pipe(stream);
+    });
+
+    if (fs.existsSync(targetPath)) {
+      fs.rmSync(targetPath, { force: true });
+    }
+    fs.renameSync(tempPath, targetPath);
+
+    const nextJob = updateFsOperation(job.id, (current) => {
+      const uploadedFiles = [...new Set([...current.uploadedFiles, relativePath])];
+      const uploadedBytes = current.manifest
+        .filter((entry) => uploadedFiles.includes(entry.relativePath))
+        .reduce((sum, entry) => sum + entry.size, 0);
+      return {
+        ...current,
+        message: `Received ${uploadedFiles.length}/${current.totalItems} file${current.totalItems === 1 ? '' : 's'}`,
+        processedBytes: Math.min(current.totalBytes, uploadedBytes),
+        processedItems: Math.min(current.totalItems, uploadedFiles.length),
+        uploadedFiles,
+      };
+    });
+
+    return res.json({
+      operation: serializeFsOperation(nextJob, true),
+      success: true,
+    });
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // ignore
+    }
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to receive upload file') });
+  }
+};
+
+const filesystemOperationUploadFinalizeHandler = async (req, res) => {
+  try {
+    const job = readFsOperation(req.params.id || '');
+    if (!job || job.kind !== 'upload') {
+      return res.status(404).json({ error: 'Upload operation not found' });
+    }
+    if (job.status !== 'receiving') {
+      return res.status(409).json({ error: 'Upload operation is not waiting for finalize' });
+    }
+
+    const missingEntries = job.manifest
+      .map((entry) => entry.relativePath)
+      .filter((relativePath) => !job.uploadedFiles.includes(relativePath));
+    if (missingEntries.length > 0) {
+      return res.status(400).json({ error: 'Not all files were uploaded', missing: missingEntries });
+    }
+
+    const queuedJob = updateFsOperation(job.id, {
+      message: 'Queued for finalize',
+      status: 'queued',
+    });
+    enqueueFsOperation(queuedJob.id, () => processFsUploadFinalizeJob(queuedJob.id, req));
+    return res.status(202).json({
+      operationId: queuedJob.id,
+      operation: serializeFsOperation(queuedJob, true),
+      success: true,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to finalize upload') });
+  }
+};
+
 const filesystemDeleteHandler = async (req, res) => {
   try {
     const sourceRelatives = Array.isArray(req.body?.paths)
@@ -5513,6 +6432,13 @@ registerDualRoute('get', '/telemetry', requireAuth, requireAdmin, telemetryHandl
 registerDualRoute('get', '/fs/list', requireAuth, filesystemListHandler);
 registerDualRoute('post', '/fs/mkdir', requireAuth, filesystemMkdirHandler);
 registerDualRoute('post', '/fs/rename', requireAuth, filesystemRenameHandler);
+registerDualRoute('get', '/fs/operations', requireAuth, filesystemOperationsListHandler);
+registerDualRoute('get', '/fs/operations/:id', requireAuth, filesystemOperationDetailHandler);
+registerDualRoute('post', '/fs/operations/upload', requireAuth, filesystemOperationUploadCreateHandler);
+registerDualRoute('post', '/fs/operations/:id/file', requireAuth, filesystemOperationUploadFileHandler);
+registerDualRoute('post', '/fs/operations/:id/finalize', requireAuth, filesystemOperationUploadFinalizeHandler);
+registerDualRoute('post', '/fs/operations/transfer', requireAuth, filesystemOperationTransferHandler);
+registerDualRoute('post', '/fs/operations/delete', requireAuth, filesystemOperationDeleteHandler);
 registerDualRoute('post', '/fs/delete', requireAuth, filesystemDeleteHandler);
 registerDualRoute('get', '/fs/download', requireAuth, filesystemDownloadHandler);
 registerDualRoute('post', '/fs/upload', requireAuth, express.raw({ type: '*/*', limit: '128mb' }), filesystemUploadHandler);

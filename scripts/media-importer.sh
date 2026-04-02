@@ -38,14 +38,32 @@ load_shell_env_file() {
 load_shell_env_file "$SERVER_ENV_FILE"
 . "$PROJECT/scripts/drive-common.sh"
 
-MEDIA_VAULT_ROOT="${MEDIA_VAULT_ROOT:-$DRIVES_D_DIR/VAULT/Media}"
-MEDIA_SCRATCH_ROOT="${MEDIA_SCRATCH_ROOT:-$DRIVES_E_DIR/SCRATCH/HmSTxScratch}"
+MEDIA_VAULT_DRIVES="${MEDIA_VAULT_DRIVES:-D}"
+MEDIA_SCRATCH_DRIVES="${MEDIA_SCRATCH_DRIVES:-E}"
+DEFAULT_VAULT_DRIVE_DIR=""
+DEFAULT_SCRATCH_DRIVE_DIR=""
+if type resolve_drive_dir >/dev/null 2>&1; then
+    DEFAULT_VAULT_DRIVE_DIR="$(resolve_drive_dir "${MEDIA_VAULT_DRIVES%%,*}" || true)"
+    DEFAULT_SCRATCH_DRIVE_DIR="$(resolve_drive_dir "${MEDIA_SCRATCH_DRIVES%%,*}" || true)"
+fi
+MEDIA_VAULT_ROOT="${MEDIA_VAULT_ROOT:-${DEFAULT_VAULT_DRIVE_DIR:+$DEFAULT_VAULT_DRIVE_DIR/VAULT/Media}}"
+MEDIA_SCRATCH_ROOT="${MEDIA_SCRATCH_ROOT:-${DEFAULT_SCRATCH_DRIVE_DIR:+$DEFAULT_SCRATCH_DRIVE_DIR/SCRATCH/HmSTxScratch}}"
+if [ -z "$MEDIA_VAULT_ROOT" ]; then
+    MEDIA_VAULT_ROOT="$DRIVES_D_DIR/VAULT/Media"
+fi
+if [ -z "$MEDIA_SCRATCH_ROOT" ]; then
+    MEDIA_SCRATCH_ROOT="$DRIVES_E_DIR/SCRATCH/HmSTxScratch"
+fi
 MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-$MEDIA_VAULT_ROOT/movies}"
 MEDIA_SERIES_DIR="${MEDIA_SERIES_DIR:-$MEDIA_VAULT_ROOT/series}"
+MEDIA_MUSIC_DIR="${MEDIA_MUSIC_DIR:-$MEDIA_VAULT_ROOT/music}"
+MEDIA_AUDIOBOOKS_DIR="${MEDIA_AUDIOBOOKS_DIR:-$MEDIA_VAULT_ROOT/audiobooks}"
 MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-$MEDIA_SCRATCH_ROOT/downloads}"
 MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-$MEDIA_DOWNLOADS_DIR/movies}"
 MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-$MEDIA_DOWNLOADS_DIR/series}"
 MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-$MEDIA_DOWNLOADS_DIR/manual}"
+MEDIA_SMALL_DOWNLOADS_DIR="${MEDIA_SMALL_DOWNLOADS_DIR:-$DRIVES_C_DIR/Download/Home-Server/small}"
+MEDIA_SMALL_DOWNLOADS_MAX_MB="${MEDIA_SMALL_DOWNLOADS_MAX_MB:-256}"
 MEDIA_IMPORT_REVIEW_DIR="${MEDIA_IMPORT_REVIEW_DIR:-$MEDIA_SCRATCH_ROOT/review}"
 MEDIA_IMPORT_LOG_DIR="${MEDIA_IMPORT_LOG_DIR:-$MEDIA_SCRATCH_ROOT/logs}"
 MEDIA_TRANSCODE_DIR="${MEDIA_TRANSCODE_DIR:-$MEDIA_SCRATCH_ROOT/cache/jellyfin}"
@@ -66,6 +84,7 @@ MEDIA_IMPORT_EVENTS_FILE="${MEDIA_IMPORT_EVENTS_FILE:-$MEDIA_IMPORT_LOG_DIR/impo
 LOGFILE="$MEDIA_IMPORT_LOG_DIR/media-importer.log"
 LOCK_FILE="$MEDIA_IMPORT_LOG_DIR/media-importer.lock"
 MIN_VAULT_FREE_BYTES=$((MEDIA_IMPORT_ABORT_FREE_GB * 1024 * 1024 * 1024))
+SMALL_DOWNLOAD_MAX_BYTES=$((MEDIA_SMALL_DOWNLOADS_MAX_MB * 1024 * 1024))
 SCRATCH_MIN_FREE_BYTES=$((MEDIA_SCRATCH_MIN_FREE_GB * 1024 * 1024 * 1024))
 RETENTION_SECONDS=$((MEDIA_SCRATCH_RETENTION_DAYS * 24 * 60 * 60))
 PRESSURE_GRACE_SECONDS=$((24 * 60 * 60))
@@ -77,6 +96,7 @@ mkdir -p \
     "$MEDIA_DOWNLOADS_MOVIES_DIR" \
     "$MEDIA_DOWNLOADS_SERIES_DIR" \
     "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+    "$MEDIA_SMALL_DOWNLOADS_DIR" \
     "$MEDIA_QBIT_TMP_DIR" \
     "$MEDIA_TRANSCODE_DIR" \
     "$MEDIA_MISC_CACHE_DIR" \
@@ -259,12 +279,33 @@ release_lock() {
 
 path_free_bytes() {
     local target="$1"
-    df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $4 * 1024}'
+    local free_bytes=""
+
+    free_bytes="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 && $4 ~ /^[0-9]+$/ {print $4 * 1024}' || true)"
+    if [ -n "$free_bytes" ]; then
+        printf '%s\n' "$free_bytes"
+        return 0
+    fi
+
+    stat -f -c '%a %S' "$target" 2>/dev/null | awk 'NR==1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {print $1 * $2}'
 }
 
 path_used_percent() {
     local target="$1"
-    df -Pk "$target" 2>/dev/null | awk 'NR==2 {gsub(/%/, "", $5); print $5 + 0}'
+    local used_percent=""
+
+    used_percent="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {gsub(/%/, "", $5); if ($5 ~ /^[0-9]+$/) print $5 + 0}' || true)"
+    if [ -n "$used_percent" ]; then
+        printf '%s\n' "$used_percent"
+        return 0
+    fi
+
+    stat -f -c '%a %b' "$target" 2>/dev/null | awk '
+        NR==1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $2 > 0 {
+            used = $2 - $1
+            printf "%.0f\n", (used * 100) / $2
+        }
+    '
 }
 
 space_ok() {
@@ -312,6 +353,8 @@ ensure_runtime_paths() {
     mkdir -p \
         "$MEDIA_MOVIES_DIR" \
         "$MEDIA_SERIES_DIR" \
+        "$MEDIA_MUSIC_DIR" \
+        "$MEDIA_AUDIOBOOKS_DIR" \
         "$MEDIA_IMPORT_REVIEW_DIR"
 }
 
@@ -422,8 +465,14 @@ increment_cleanup_totals() {
 
 heuristic_manual_dest() {
     local candidate="$1"
+    local entry_size="${2:-0}"
     local name=""
     name="$(basename "$candidate")"
+
+    if [ "$entry_size" -gt 0 ] && [ "$entry_size" -le "$SMALL_DOWNLOAD_MAX_BYTES" ]; then
+        printf '%s\n' "$MEDIA_SMALL_DOWNLOADS_DIR"
+        return
+    fi
 
     if [[ "$name" =~ [sS][0-9]{2}[eE][0-9]{2} ]] || [[ "$name" =~ Season[[:space:]_-]?[0-9]+ ]] || [[ "$name" =~ Episode ]]; then
         printf '%s\n' "$MEDIA_SERIES_DIR"
@@ -431,6 +480,14 @@ heuristic_manual_dest() {
     fi
 
     case "${name,,}" in
+        *.m4b|*.aax|*.aaxc)
+            printf '%s\n' "$MEDIA_AUDIOBOOKS_DIR"
+            return
+            ;;
+        *.flac|*.mp3|*.m4a|*.ogg|*.opus|*.wav|*.alac|*.aac)
+            printf '%s\n' "$MEDIA_MUSIC_DIR"
+            return
+            ;;
         *.mkv|*.mp4|*.avi|*.mov|*.mpg|*.mpeg|*.m4v|*.wmv)
             printf '%s\n' "$MEDIA_MOVIES_DIR"
             return
@@ -456,7 +513,9 @@ resolve_source_type() {
 resolve_dest_for_source() {
     local path="$1"
     local source_type=""
+    local entry_size=""
     source_type="$(resolve_source_type "$path")"
+    entry_size="$(file_size_bytes "$path")"
     case "$source_type" in
         movies)
             printf '%s\n' "$MEDIA_MOVIES_DIR"
@@ -465,7 +524,7 @@ resolve_dest_for_source() {
             printf '%s\n' "$MEDIA_SERIES_DIR"
             ;;
         *)
-            heuristic_manual_dest "$path"
+            heuristic_manual_dest "$path" "$entry_size"
             ;;
     esac
 }
@@ -491,11 +550,13 @@ copy_entry() {
     fi
 
     entry_size="$(file_size_bytes "$src")"
-    if ! space_ok "$entry_size"; then
-        FAILED_COUNT=$((FAILED_COUNT + 1))
-        log WARN "$label skipped (vault would dip below ${MEDIA_IMPORT_ABORT_FREE_GB}GiB): $src"
-        record_event "import" "skipped-space" "$src" "$dest" "vault free space threshold"
-        return 0
+    if path_within "$dest_base" "$MEDIA_VAULT_ROOT"; then
+        if ! space_ok "$entry_size"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            log WARN "$label skipped (vault would dip below ${MEDIA_IMPORT_ABORT_FREE_GB}GiB): $src"
+            record_event "import" "skipped-space" "$src" "$dest" "vault free space threshold"
+            return 0
+        fi
     fi
 
     if [ "$dest_base" = "$MEDIA_IMPORT_REVIEW_DIR" ]; then
@@ -535,6 +596,12 @@ copy_entry() {
     IMPORTED_COUNT=$((IMPORTED_COUNT + 1))
     log INFO "$label imported to $dest"
     record_event "import" "copied" "$src" "$dest" ""
+    if [ "$dest_base" = "$MEDIA_SMALL_DOWNLOADS_DIR" ]; then
+        log INFO "$label moved into small downloads storage: $dest"
+        record_event "import" "stored-small" "$src" "$dest" ""
+        safe_remove_path "$src"
+        return 0
+    fi
     if [ "$dest_base" != "$MEDIA_IMPORT_REVIEW_DIR" ]; then
         record_import_index "$source_type" "$src" "$dest"
     fi

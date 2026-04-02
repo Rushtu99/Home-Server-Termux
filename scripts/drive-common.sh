@@ -22,6 +22,25 @@ MOUNT_RUNTIME_DIR="${MOUNT_RUNTIME_DIR:-$RUNTIME_DIR/mounts}"
 EXFAT_E_RAW_DIR="${EXFAT_E_RAW_DIR:-$MOUNT_RUNTIME_DIR/E-raw}"
 HMSTX_DRIVE_ROLE_FILE_NAME="${HMSTX_DRIVE_ROLE_FILE_NAME:-.hmstx-role.conf}"
 
+proc_mounts_escape_path() {
+    local target="$1"
+
+    target="${target//\\/\\134}"
+    target="${target// /\\040}"
+    target="${target//$'\t'/\\011}"
+    target="${target//$'\n'/\\012}"
+    printf '%s\n' "$target"
+}
+
+path_is_direct_mount_in_proc() {
+    local target="$1"
+    local escaped_target=""
+
+    [ -n "$target" ] || return 1
+    escaped_target="$(proc_mounts_escape_path "$target")"
+    grep -Fq " $escaped_target " /proc/mounts 2>/dev/null
+}
+
 block_device_exists() {
     local device="$1"
 
@@ -48,7 +67,7 @@ prepare_drives_root() {
         return 0
     fi
 
-    if grep -Fq " $DRIVES_C_DIR " /proc/mounts 2>/dev/null; then
+    if path_is_direct_mount_in_proc "$DRIVES_C_DIR"; then
         return 0
     fi
 
@@ -115,7 +134,7 @@ mount_external_drive() {
 
     mkdir -p "$mount_point"
 
-    if grep -Fq " $mount_point " /proc/mounts 2>/dev/null; then
+    if path_is_direct_mount_in_proc "$mount_point"; then
         printf 'mounted\n'
         return 0
     fi
@@ -200,6 +219,7 @@ resolve_drive_dir() {
     local normalized_token=""
     local drive_dir=""
     local base_name=""
+    local fallback_match=""
 
     case "$token" in
         /*)
@@ -210,26 +230,34 @@ resolve_drive_dir() {
             ;;
     esac
 
+    normalized_token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -n "$normalized_token" ] && [ "${token#/}" = "$token" ]; then
+        while IFS= read -r drive_dir; do
+            [ -n "$drive_dir" ] || continue
+            base_name="$(basename "$drive_dir")"
+            case "$base_name" in
+                "$normalized_token"|"${normalized_token} "*)
+                    if path_is_direct_mount_in_proc "$drive_dir"; then
+                        printf '%s\n' "$drive_dir"
+                        return 0
+                    fi
+                    if [ -z "$fallback_match" ]; then
+                        fallback_match="$drive_dir"
+                    fi
+                    ;;
+            esac
+        done < <(list_external_drive_dirs)
+    fi
+
     if [ -d "$candidate" ]; then
         printf '%s\n' "$candidate"
         return 0
     fi
 
-    normalized_token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-    if [ -z "$normalized_token" ]; then
-        return 1
+    if [ -n "$fallback_match" ]; then
+        printf '%s\n' "$fallback_match"
+        return 0
     fi
-
-    while IFS= read -r drive_dir; do
-        [ -n "$drive_dir" ] || continue
-        base_name="$(basename "$drive_dir")"
-        case "$base_name" in
-            "$normalized_token"|"${normalized_token} "*)
-                printf '%s\n' "$drive_dir"
-                return 0
-                ;;
-        esac
-    done < <(list_external_drive_dirs)
 
     return 1
 }

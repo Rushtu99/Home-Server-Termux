@@ -6,6 +6,14 @@ import { appFetch, createDemoDownloadUrl } from '../demo-api';
 import { isDemoMode } from '../demo-mode';
 import type { DrivePayload } from '../dashboard-utils';
 import { EMPTY_DRIVE_PAYLOAD as EMPTY_PAYLOAD, formatBytes, normalizeDrivePayload } from '../dashboard-utils';
+import {
+  collectDroppedUploadFiles,
+  collectInputUploadFiles,
+  dedupeUploadFiles,
+  isFsOperationActive,
+  normalizeFsOperation,
+} from './filesystem-operations';
+import type { FsOperation, FsUploadFile } from './filesystem-operations';
 import { DialogSurface, MenuButton, ToolPage } from '../ui-primitives';
 import { usePolling } from '../usePolling';
 
@@ -57,6 +65,13 @@ type FsClipboard = {
 type FsMenuState = {
   path: string;
   upward: boolean;
+} | null;
+
+type FsDropChoice = {
+  destinationPath: string;
+  sourcePaths: string[];
+  sourceSummary: string;
+  targetName: string;
 } | null;
 
 type SharePermission = {
@@ -114,6 +129,32 @@ const formatTimestamp = (value: string | null) => {
 const formatEntryTime = (value: string) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleString();
+};
+
+const formatOperationProgress = (operation: FsOperation) => {
+  if (operation.totalBytes > 0) {
+    const ratio = Math.min(1, operation.processedBytes / operation.totalBytes);
+    return `${Math.round(ratio * 100)}%`;
+  }
+  if (operation.totalItems > 0) {
+    const ratio = Math.min(1, operation.processedItems / operation.totalItems);
+    return `${Math.round(ratio * 100)}%`;
+  }
+  return operation.status === 'success' ? '100%' : '0%';
+};
+
+const describeOperation = (operation: FsOperation) => {
+  const targetLabel = operation.destinationPath.split('/').filter(Boolean).pop() || 'folder';
+  switch (operation.kind) {
+    case 'upload':
+      return `Upload to ${targetLabel}`;
+    case 'move':
+      return `Move to ${targetLabel}`;
+    case 'delete':
+      return 'Recycle entries';
+    default:
+      return `Copy to ${targetLabel}`;
+  }
 };
 
 const normalizeFsPayload = (payload: Partial<FsPayload> | null | undefined): FsPayload => ({
@@ -192,10 +233,13 @@ const getShareUserPermissionMap = (share: ShareRecord | null): Record<string, 'i
 
 export default function FilesPage() {
   const demoMode = isDemoMode();
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadFilesInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadFolderInputRef = useRef<HTMLInputElement | null>(null);
   const menuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const activeOperationIdsRef = useRef<string[]>([]);
   const [driveState, setDriveState] = useState<DrivePayload>(EMPTY_PAYLOAD);
   const [browser, setBrowser] = useState<FsPayload>(EMPTY_FS);
+  const [operations, setOperations] = useState<FsOperation[]>([]);
   const [loadError, setLoadError] = useState('');
   const [browserError, setBrowserError] = useState('');
   const [manualBusy, setManualBusy] = useState(false);
@@ -214,6 +258,8 @@ export default function FilesPage() {
   const [search, setSearch] = useState('');
   const [clipboard, setClipboard] = useState<FsClipboard>(null);
   const [menuState, setMenuState] = useState<FsMenuState>(null);
+  const [dropTargetPath, setDropTargetPath] = useState('');
+  const [dropChoice, setDropChoice] = useState<FsDropChoice>(null);
   const [locationsOpen, setLocationsOpen] = useState(false);
   const [isNarrowLayout, setIsNarrowLayout] = useState(false);
   const [isPhoneLayout, setIsPhoneLayout] = useState(false);
@@ -328,6 +374,10 @@ export default function FilesPage() {
   }, []);
 
   useEffect(() => {
+    void loadFsOperations();
+  }, []);
+
+  useEffect(() => {
     void loadShares().catch(() => {});
     void loadUsers().catch(() => {});
   }, []);
@@ -335,6 +385,8 @@ export default function FilesPage() {
   useEffect(() => {
     setMenuState(null);
     setLocationsOpen(false);
+    setDropChoice(null);
+    setDropTargetPath('');
   }, [browser.path]);
 
   useEffect(() => {
@@ -347,6 +399,14 @@ export default function FilesPage() {
     syncLayout();
     window.addEventListener('resize', syncLayout);
     return () => window.removeEventListener('resize', syncLayout);
+  }, []);
+
+  useEffect(() => {
+    if (!uploadFolderInputRef.current) {
+      return;
+    }
+    uploadFolderInputRef.current.setAttribute('webkitdirectory', '');
+    uploadFolderInputRef.current.setAttribute('directory', '');
   }, []);
 
   const selectedShare = browser.path === ''
@@ -415,6 +475,138 @@ export default function FilesPage() {
       throw new Error(String(payload?.error || 'Filesystem action failed'));
     }
     return payload;
+  };
+
+  const upsertOperation = (operation: FsOperation) => {
+    setOperations((current) => {
+      const next = [normalizeFsOperation(operation), ...current.filter((entry) => entry.id !== operation.id)];
+      return next
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+        .slice(0, 16);
+    });
+  };
+
+  const loadFsOperations = async () => {
+    try {
+      const res = await appFetch(`${API}/fs/operations?limit=16`, { credentials: 'include' });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String(payload?.error || 'Unable to read filesystem operations'));
+      }
+
+      const nextOperations: FsOperation[] = Array.isArray(payload?.operations)
+        ? payload.operations.map((entry: Partial<FsOperation>) => normalizeFsOperation(entry))
+        : [];
+      const previousActiveIds = new Set(activeOperationIdsRef.current);
+      const nextActiveIds = nextOperations.filter((entry) => isFsOperationActive(entry)).map((entry) => entry.id);
+      const completedIds = nextOperations
+        .filter((entry) => previousActiveIds.has(entry.id) && !isFsOperationActive(entry))
+        .map((entry) => entry.id);
+
+      activeOperationIdsRef.current = nextActiveIds;
+      startTransition(() => {
+        setOperations(nextOperations);
+      });
+
+      if (completedIds.length > 0) {
+        void loadDirectory(browser.path, { preserveSelection: true });
+      }
+    } catch {
+      // keep operations UI best-effort; filesystem page remains usable without the queue snapshot
+    }
+  };
+
+  usePolling(true, operations.some((entry) => isFsOperationActive(entry)) ? 1000 : 5000, loadFsOperations);
+
+  const createFsOperation = async (endpoint: string, body: Record<string, unknown>) => {
+    const res = await appFetch(`${API}${endpoint}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(String(payload?.error || 'Filesystem operation failed'));
+    }
+    const operation = normalizeFsOperation(payload?.operation);
+    upsertOperation(operation);
+    return operation;
+  };
+
+  const uploadFileToOperation = async (operation: FsOperation, fileEntry: FsUploadFile, uploadedBytesBeforeFile: number) =>
+    new Promise<FsOperation>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API}/fs/operations/${encodeURIComponent(operation.id)}/file?relativePath=${encodeURIComponent(fileEntry.relativePath)}`);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader('Content-Type', fileEntry.file.type || 'application/octet-stream');
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          return;
+        }
+        upsertOperation({
+          ...operation,
+          message: `Uploading ${fileEntry.relativePath}`,
+          processedBytes: Math.min(operation.totalBytes, uploadedBytesBeforeFile + event.loaded),
+          processedItems: operation.processedItems,
+          updatedAt: new Date().toISOString(),
+        });
+      };
+      xhr.onerror = () => reject(new Error('Upload failed'));
+      xhr.onload = () => {
+        let payload: { error?: string; operation?: Partial<FsOperation> } = {};
+        try {
+          payload = xhr.responseText ? JSON.parse(xhr.responseText) as { error?: string; operation?: Partial<FsOperation> } : {};
+        } catch {
+          payload = {};
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(String(payload?.error || 'Upload failed')));
+          return;
+        }
+        const nextOperation = normalizeFsOperation(payload?.operation);
+        upsertOperation(nextOperation);
+        resolve(nextOperation);
+      };
+      xhr.send(fileEntry.file);
+    });
+
+  const startUploadOperation = async (destinationPath: string, files: FsUploadFile[]) => {
+    const uploadFiles = dedupeUploadFiles(files);
+    if (uploadFiles.length === 0) {
+      return;
+    }
+
+    setUploadBusy(true);
+    setBrowserError('');
+    try {
+      let operation = await createFsOperation('/fs/operations/upload', {
+        destinationPath,
+        manifest: uploadFiles.map((entry) => ({
+          lastModified: entry.lastModified,
+          relativePath: entry.relativePath,
+          size: entry.size,
+        })),
+      });
+
+      let uploadedBytes = operation.processedBytes;
+      const uploadedSet = new Set(operation.uploadedFiles || []);
+      for (const fileEntry of uploadFiles) {
+        if (uploadedSet.has(fileEntry.relativePath)) {
+          uploadedBytes += fileEntry.size;
+          continue;
+        }
+        operation = await uploadFileToOperation(operation, fileEntry, uploadedBytes);
+        uploadedBytes += fileEntry.size;
+      }
+
+      await createFsOperation(`/fs/operations/${operation.id}/finalize`, {});
+      await loadFsOperations();
+    } catch (error) {
+      setBrowserError(String(error instanceof Error ? error.message : error || 'Upload failed'));
+    } finally {
+      setUploadBusy(false);
+    }
   };
 
   const normalizeTargetEntries = (entries: FsEntry[]) => {
@@ -570,16 +762,12 @@ export default function FilesPage() {
     }
 
     try {
-      const payload = await runFsCommand('/fs/delete', entries.length === 1
+      await createFsOperation('/fs/operations/delete', entries.length === 1
         ? { path: entries[0].path }
         : { paths: entries.map((entry) => entry.path) });
-      if (Number(payload?.failureCount || 0) > 0) {
-        setBrowserError(`Recycled ${payload?.successCount || 0} item(s), ${payload?.failureCount || 0} failed.`);
-      } else {
-        setBrowserError('');
-      }
+      setBrowserError('');
       clearSelection();
-      await loadDirectory(browser.path);
+      await loadFsOperations();
     } catch (error) {
       setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to delete entry'));
     }
@@ -643,7 +831,7 @@ export default function FilesPage() {
     }
 
     try {
-      const payload = await runFsCommand('/fs/paste', clipboard.items.length === 1
+      const operation = await createFsOperation('/fs/operations/transfer', clipboard.items.length === 1
         ? {
             sourcePath: clipboard.items[0].path,
             destinationPath: browser.path,
@@ -654,13 +842,8 @@ export default function FilesPage() {
             destinationPath: browser.path,
             mode: clipboard.mode,
           });
-      await loadDirectory(browser.path, { preserveSelection: true });
-      setSelectedPath(String(payload?.path || ''));
-      if (Number(payload?.failureCount || 0) > 0) {
-        setBrowserError(`Pasted ${payload?.successCount || 0} item(s), ${payload?.failureCount || 0} failed.`);
-      } else {
-        setBrowserError('');
-      }
+      setSelectedPath(String(operation.destinationPath || ''));
+      setBrowserError('');
       if (clipboard.mode === 'move') {
         setClipboard(null);
       }
@@ -669,8 +852,12 @@ export default function FilesPage() {
     }
   };
 
-  const handleUploadTrigger = () => {
-    uploadInputRef.current?.click();
+  const handleUploadTrigger = (mode: 'files' | 'folder') => {
+    if (mode === 'folder') {
+      uploadFolderInputRef.current?.click();
+      return;
+    }
+    uploadFilesInputRef.current?.click();
   };
 
   const openFsMenu = (entry: FsEntry) => {
@@ -687,39 +874,102 @@ export default function FilesPage() {
     setMenuState((current) => current?.path === entry.path ? null : { path: entry.path, upward });
   };
 
-  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>, mode: 'files' | 'folder') => {
+    const files = collectInputUploadFiles(event.target.files, mode);
+    event.target.value = '';
+    if (files.length === 0) {
       return;
     }
 
-    setUploadBusy(true);
-    try {
-      const bytes = await file.arrayBuffer();
-      const params = new URLSearchParams({
-        name: file.name,
-        path: browser.path,
-      });
-      const res = await appFetch(`${API}/fs/upload?${params.toString()}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-          'X-File-Name': file.name,
-        },
-        body: bytes,
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(String(payload?.error || 'Upload failed'));
-      }
+    await startUploadOperation(browser.path, files);
+  };
 
-      await loadDirectory(browser.path, { preserveSelection: true });
+  const startTransferOperation = async (mode: 'copy' | 'move', destinationPath: string, sourcePaths: string[]) => {
+    const uniqueSourcePaths = [...new Set(sourcePaths.filter(Boolean))];
+    if (uniqueSourcePaths.length === 0) {
+      return;
+    }
+    await createFsOperation('/fs/operations/transfer', uniqueSourcePaths.length === 1
+      ? { sourcePath: uniqueSourcePaths[0], destinationPath, mode }
+      : { sourcePaths: uniqueSourcePaths, destinationPath, mode });
+    if (mode === 'move' && clipboard?.mode === 'move') {
+      const movedSet = new Set(uniqueSourcePaths);
+      setClipboard((current) => {
+        if (!current) {
+          return current;
+        }
+        const items = current.items.filter((entry) => !movedSet.has(entry.path));
+        return items.length > 0 ? { ...current, items } : null;
+      });
+    }
+  };
+
+  const handleRowDragStart = (event: React.DragEvent<HTMLElement>, entry: FsEntry) => {
+    if (!entry.editable || browser.path === '') {
+      event.preventDefault();
+      return;
+    }
+
+    const selectedEntriesForDrag = selectedPaths.includes(entry.path)
+      ? getSelectionEntries().filter((item) => item.editable)
+      : [entry].filter((item) => item.editable);
+    if (selectedEntriesForDrag.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const sourcePaths = selectedEntriesForDrag.map((item) => item.path);
+    setSelectedPath(entry.path);
+    setSelectedPaths(sourcePaths);
+    event.dataTransfer.effectAllowed = 'copyMove';
+    event.dataTransfer.setData('application/x-home-server-fs-paths', JSON.stringify(sourcePaths));
+    event.dataTransfer.setData('text/plain', selectedEntriesForDrag.map((item) => item.name).join(', '));
+  };
+
+  const handleDropHover = (event: React.DragEvent<HTMLElement>, destinationPath: string, allowWrite: boolean) => {
+    if (!allowWrite) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = event.dataTransfer.types.includes('application/x-home-server-fs-paths') ? 'move' : 'copy';
+    setDropTargetPath(destinationPath);
+  };
+
+  const handleDropLeave = (destinationPath: string) => {
+    setDropTargetPath((current) => current === destinationPath ? '' : current);
+  };
+
+  const handleExternalDrop = async (event: React.DragEvent<HTMLElement>, destinationPath: string) => {
+    event.preventDefault();
+    setDropTargetPath('');
+    const sourcePathsRaw = event.dataTransfer.getData('application/x-home-server-fs-paths');
+    if (sourcePathsRaw) {
+      try {
+        const parsed = JSON.parse(sourcePathsRaw) as string[];
+        const sourcePaths = Array.isArray(parsed) ? parsed.map((entry) => String(entry || '')).filter(Boolean) : [];
+        if (sourcePaths.length > 0) {
+          const sourceSummary = sourcePaths.length === 1 ? sourcePaths[0].split('/').pop() || sourcePaths[0] : `${sourcePaths.length} items`;
+          setDropChoice({
+            destinationPath,
+            sourcePaths,
+            sourceSummary,
+            targetName: destinationPath.split('/').pop() || currentFolderLabel,
+          });
+          return;
+        }
+      } catch {
+        // fall back to external file collection
+      }
+    }
+
+    try {
+      const files = await collectDroppedUploadFiles(event.dataTransfer);
+      if (files.length === 0) {
+        return;
+      }
+      await startUploadOperation(destinationPath, files);
     } catch (error) {
-      setBrowserError(String(error instanceof Error ? error.message : error || 'Upload failed'));
-    } finally {
-      event.target.value = '';
-      setUploadBusy(false);
+      setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to collect dropped files'));
     }
   };
 
@@ -746,6 +996,8 @@ export default function FilesPage() {
     : `${clipboardCount} items`;
   const directoryCount = filteredEntries.filter((entry) => entry.type === 'directory' || entry.type === 'symlink').length;
   const fileCount = filteredEntries.length - directoryCount;
+  const activeOperations = operations.filter((entry) => isFsOperationActive(entry));
+  const recentOperations = operations.slice(0, 8);
   const canWriteCurrentFolder = browser.path === ''
     ? false
     : browser.share?.accessLevel === 'write' && browser.share?.isReadOnly !== true;
@@ -1055,8 +1307,11 @@ export default function FilesPage() {
                 <button className="ui-button" type="button" onClick={createFolder} disabled={browser.path === '' ? !canCreateShare : !canWriteCurrentFolder}>
                   {browser.path === '' ? 'New Share' : 'New Folder'}
                 </button>
-                <button className="ui-button" type="button" onClick={handleUploadTrigger} disabled={uploadBusy || !canWriteCurrentFolder}>
-                  {uploadBusy ? 'Uploading…' : 'Upload File'}
+                <button className="ui-button" type="button" onClick={() => handleUploadTrigger('files')} disabled={uploadBusy || !canWriteCurrentFolder}>
+                  {uploadBusy ? 'Uploading…' : 'Upload Files'}
+                </button>
+                <button className="ui-button" type="button" onClick={() => handleUploadTrigger('folder')} disabled={uploadBusy || !canWriteCurrentFolder}>
+                  Upload Folder
                 </button>
                 <button className="ui-button" type="button" onClick={renameSelected} disabled={!canRenameSelection}>
                   Rename
@@ -1081,7 +1336,8 @@ export default function FilesPage() {
                 <button className="ui-button" type="button" onClick={clearSelection} disabled={selectedCount === 0}>
                   Clear
                 </button>
-                <input ref={uploadInputRef} type="file" hidden onChange={handleUpload} />
+                <input ref={uploadFilesInputRef} type="file" multiple hidden onChange={(event) => void handleUpload(event, 'files')} />
+                <input ref={uploadFolderInputRef} type="file" multiple hidden onChange={(event) => void handleUpload(event, 'folder')} />
               </div>
             </div>
 
@@ -1092,6 +1348,49 @@ export default function FilesPage() {
             </div>
 
             {browserError ? <p className="status-message status-message--error">{browserError}</p> : null}
+
+            {recentOperations.length > 0 ? (
+              <section className="fs-operations-panel">
+                <div className="fs-operations-panel__header">
+                  <div>
+                    <strong>Operations queue</strong>
+                    <span>{activeOperations.length > 0 ? `${activeOperations.length} active` : 'Recent activity'}</span>
+                  </div>
+                  <button className="ui-button" type="button" onClick={() => void loadFsOperations()}>
+                    Refresh Queue
+                  </button>
+                </div>
+                <div className="fs-operations-list">
+                  {recentOperations.map((operation) => {
+                    const progressLabel = formatOperationProgress(operation);
+                    const progressValue = Number.parseInt(progressLabel, 10) || 0;
+                    return (
+                      <article key={operation.id} className={`fs-operation-card fs-operation-card--${operation.status}`}>
+                        <div className="fs-operation-card__topline">
+                          <strong>{describeOperation(operation)}</strong>
+                          <span>{operation.status}</span>
+                        </div>
+                        <div className="fs-operation-card__meta">
+                          <span>{operation.totalItems > 0 ? `${operation.processedItems}/${operation.totalItems} items` : 'Preparing items'}</span>
+                          <span>{operation.totalBytes > 0 ? `${formatBytes(operation.processedBytes)} / ${formatBytes(operation.totalBytes)}` : progressLabel}</span>
+                          <span>{formatEntryTime(operation.updatedAt || operation.createdAt)}</span>
+                        </div>
+                        <div className="fs-operation-progress" aria-hidden="true">
+                          <span style={{ width: `${Math.min(100, Math.max(0, progressValue))}%` }} />
+                        </div>
+                        <p className="fs-operation-card__message">{operation.message || describeOperation(operation)}</p>
+                        {operation.failureCount > 0 ? (
+                          <p className="status-message status-message--error">
+                            {operation.failureCount} failure{operation.failureCount === 1 ? '' : 's'}
+                            {operation.failures[0]?.path ? ` · ${operation.failures[0].path}` : ''}
+                          </p>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
 
             {clipboard ? (
               <div className="fs-clipboard-card">
@@ -1111,7 +1410,33 @@ export default function FilesPage() {
               </div>
             ) : null}
 
-            <div className="fs-browser-list">
+            {dropChoice ? (
+              <div className="fs-drop-choice">
+                <div className="fs-drop-choice__copy">
+                  <span>Drop target ready</span>
+                  <strong>{dropChoice.sourceSummary}</strong>
+                  <small>{dropChoice.targetName}</small>
+                </div>
+                <div className="fs-browser-actions">
+                  <button className="ui-button ui-button--primary" type="button" onClick={() => { void startTransferOperation('move', dropChoice.destinationPath, dropChoice.sourcePaths); setDropChoice(null); }}>
+                    Move Here
+                  </button>
+                  <button className="ui-button" type="button" onClick={() => { void startTransferOperation('copy', dropChoice.destinationPath, dropChoice.sourcePaths); setDropChoice(null); }}>
+                    Copy Here
+                  </button>
+                  <button className="ui-button" type="button" onClick={() => setDropChoice(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div
+              className={`fs-browser-list ${dropTargetPath === browser.path ? 'fs-browser-list--drop' : ''}`}
+              onDragLeave={() => handleDropLeave(browser.path)}
+              onDragOver={(event) => handleDropHover(event, browser.path, canWriteCurrentFolder)}
+              onDrop={(event) => { if (canWriteCurrentFolder) { void handleExternalDrop(event, browser.path); } }}
+            >
               <div className="fs-list-head">
                 <label className="fs-check fs-check--head">
                   <input
@@ -1131,11 +1456,17 @@ export default function FilesPage() {
                 filteredEntries.map((entry) => {
                   const isDirectory = entry.type === 'directory' || entry.type === 'symlink';
                   const isSelected = selectedPath === entry.path || selectedPaths.includes(entry.path);
+                  const canDropIntoEntry = isDirectory && entry.editable;
 
                   return (
                     <article
                       key={entry.path}
-                      className={`fs-browser-item ${isSelected ? 'fs-browser-item--selected' : ''}`}
+                      className={`fs-browser-item ${isSelected ? 'fs-browser-item--selected' : ''} ${dropTargetPath === entry.path ? 'fs-browser-item--drop-target' : ''}`}
+                      draggable={entry.editable && browser.path !== ''}
+                      onDragLeave={() => handleDropLeave(entry.path)}
+                      onDragOver={(event) => handleDropHover(event, entry.path, canDropIntoEntry)}
+                      onDragStart={(event) => handleRowDragStart(event, entry)}
+                      onDrop={(event) => { if (canDropIntoEntry) { void handleExternalDrop(event, entry.path); } }}
                     >
                       <label className="fs-check" onClick={(event) => event.stopPropagation()}>
                         <input
@@ -1198,6 +1529,22 @@ export default function FilesPage() {
                           ) : null}
                         </div>
                       </div>
+                      {dropChoice?.destinationPath === entry.path ? (
+                        <div className="fs-row-drop-choice">
+                          <span>{dropChoice.sourceSummary}</span>
+                          <div className="fs-browser-actions">
+                            <button className="ui-button ui-button--primary" type="button" onClick={() => { void startTransferOperation('move', dropChoice.destinationPath, dropChoice.sourcePaths); setDropChoice(null); }}>
+                              Move Here
+                            </button>
+                            <button className="ui-button" type="button" onClick={() => { void startTransferOperation('copy', dropChoice.destinationPath, dropChoice.sourcePaths); setDropChoice(null); }}>
+                              Copy Here
+                            </button>
+                            <button className="ui-button" type="button" onClick={() => setDropChoice(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })
