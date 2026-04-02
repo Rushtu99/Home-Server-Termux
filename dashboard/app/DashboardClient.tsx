@@ -445,19 +445,43 @@ const LOW_POWER_STORAGE_KEY = 'hmstx-low-power';
 const ONBOARDING_STORAGE_KEY = 'hmstx-onboarded';
 const DEMO_BANNER_STORAGE_KEY = 'hmstx-demo-banner-dismissed';
 const COLLAPSE_STORAGE_KEY = 'hmstx-collapsed-sections';
+const REPO_BASE_URL = 'https://github.com/Rushtu99/Home-Server-Termux/blob/main';
+const PROJECT_README_URL = `${REPO_BASE_URL}/README.md`;
+const DOCS_HUB_URL = `${REPO_BASE_URL}/docs/README.md`;
+const OPERATIONS_DOC_URL = `${REPO_BASE_URL}/docs/operations.md`;
+const ROADMAP_DOC_URL = `${REPO_BASE_URL}/docs/roadmap.md`;
+const MEDIA_STORAGE_DOC_URL = `${REPO_BASE_URL}/docs/media-storage.md`;
 
 const COMMAND_DOCS = [
+  {
+    id: 'docs-hub',
+    label: 'Open docs hub',
+    subtitle: 'Docs',
+    value: DOCS_HUB_URL,
+  },
+  {
+    id: 'docs-operations',
+    label: 'Open operations runbook',
+    subtitle: 'Docs',
+    value: OPERATIONS_DOC_URL,
+  },
+  {
+    id: 'docs-roadmap',
+    label: 'Open live NAS roadmap',
+    subtitle: 'Docs',
+    value: ROADMAP_DOC_URL,
+  },
+  {
+    id: 'docs-media',
+    label: 'Open media and storage guide',
+    subtitle: 'Docs',
+    value: MEDIA_STORAGE_DOC_URL,
+  },
   {
     id: 'docs-readme',
     label: 'Open project README',
     subtitle: 'Docs',
-    value: 'https://github.com/Rushtu99/Home-Server-Termux/blob/main/README.md',
-  },
-  {
-    id: 'docs-media',
-    label: 'Open media stack status',
-    subtitle: 'Docs',
-    value: 'https://github.com/Rushtu99/Home-Server-Termux/blob/main/README.md#media-and-streaming-stack',
+    value: PROJECT_README_URL,
   },
 ];
 
@@ -902,6 +926,12 @@ export default function Dashboard() {
     setCommandQuery('');
     setSearchHasFocus(false);
     setAuthError(message);
+  };
+
+  const openExternalLink = (url: string) => {
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noreferrer');
+    }
   };
 
   const authFetch = (path: string, init: RequestInit = {}) =>
@@ -5190,8 +5220,18 @@ export default function Dashboard() {
             <strong>Search quickly</strong>
             <span>Use Ctrl/Cmd+K to jump to services, run actions, and open docs without hunting through tabs.</span>
           </div>
+          <div style={styles.quickLink}>
+            <strong>Use the docs hub</strong>
+            <span>The same demo shell links directly to the operator docs, operations runbook, and live NAS roadmap.</span>
+          </div>
         </div>
         <div style={{ ...styles.actionWrap, marginTop: 16 }}>
+          <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => openExternalLink(DOCS_HUB_URL)}>
+            Docs Hub
+          </button>
+          <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => openExternalLink(ROADMAP_DOC_URL)}>
+            Roadmap
+          </button>
           <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={dismissOnboarding}>
             Get Started
           </button>

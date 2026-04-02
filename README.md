@@ -74,8 +74,18 @@ scripts/storage-watchdog-service.sh check-now
 - [Architecture](/data/data/com.termux/files/home/home-server/docs/architecture.md)
 - [Configuration](/data/data/com.termux/files/home/home-server/docs/configuration.md)
 - [Media and Storage](/data/data/com.termux/files/home/home-server/docs/media-storage.md)
+- [Live NAS Roadmap](/data/data/com.termux/files/home/home-server/docs/roadmap.md)
 - [Operations](/data/data/com.termux/files/home/home-server/docs/operations.md)
 - [Troubleshooting](/data/data/com.termux/files/home/home-server/docs/troubleshooting.md)
+
+## Roadmap
+
+The next maintenance phase is focused on turning HmSTx into a full private home NAS without changing its private-by-default model:
+
+- complete repo-wide lifecycle control and service health persistence
+- finish the operator-facing share and backup workflows
+- add stronger recovery, audit, and remote VPN access guidance
+- keep GitHub Pages aligned with the real dashboard shell and real operator docs
 
 ## Development Notes
 

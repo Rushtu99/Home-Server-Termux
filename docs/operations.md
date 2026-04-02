@@ -78,3 +78,5 @@ npm run build:demo
 ```
 
 CI publishes `dashboard/out` to `gh-pages` through `.github/workflows/deploy-dashboard-preview.yml`.
+
+The preview workflow should also run when operator docs or preview-facing copy changes. The Pages build is still the real dashboard shell, so the public preview should keep its docs links and onboarding text aligned with the repo.
