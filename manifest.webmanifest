@@ -1,0 +1,24 @@
+{
+  "name": "HmSTx Dashboard",
+  "short_name": "HmSTx",
+  "description": "Operational dashboard for the Termux home server",
+  "display": "standalone",
+  "start_url": ".",
+  "scope": ".",
+  "background_color": "#111315",
+  "theme_color": "#111315",
+  "icons": [
+    {
+      "src": "./hmstx-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./hmstx-icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+1:"$Sreact.fragment"
+2:I[7121,[],""]
+3:I[4581,[],""]
+:HL["/Home-Server-Termux/_next/static/css/482c2d58a9be9483.css","style"]
+0:{"rsc":["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/Home-Server-Termux/_next/static/css/482c2d58a9be9483.css","precedence":"next"}]],["$","html",null,{"lang":"en","suppressHydrationWarning":true,"className":"__variable_34edfe __variable_5fe703 h-full antialiased","children":["$","body",null,{"suppressHydrationWarning":true,"className":"min-h-full","children":[["$","script",null,{"dangerouslySetInnerHTML":{"__html":"\n(() => {\n  try {\n    const stored = localStorage.getItem('hmstx-theme');\n    const theme = stored === 'light' || stored === 'contrast' || stored === 'dark'\n      ? stored\n      : 'dark';\n    document.documentElement.dataset.theme = theme;\n  } catch {\n    document.documentElement.dataset.theme = 'dark';\n  }\n})();\n"}}],["$","a",null,{"href":"#app-main","className":"skip-link","children":"Skip To Main Content"}],["$","$L2",null,{"parallelRouterKey":"children","template":["$","$L3",null,{}]}]]}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"bFgbtSb4VQM1nYTUfhgkO"}

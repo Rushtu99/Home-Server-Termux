@@ -1,0 +1,6 @@
+1:"$Sreact.fragment"
+2:I[484,[],"ViewportBoundary"]
+3:I[484,[],"MetadataBoundary"]
+4:"$Sreact.suspense"
+5:I[6869,[],"IconMark"]
+0:{"rsc":["$","$1","h",{"children":[["$","meta",null,{"name":"robots","content":"noindex"}],["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}],["$","meta","2",{"name":"theme-color","content":"#f5f3ee","media":"(prefers-color-scheme: light)"}],["$","meta","3",{"name":"theme-color","content":"#111315","media":"(prefers-color-scheme: dark)"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"HmSTx"}],["$","meta","1",{"name":"description","content":"Operational dashboard for the Termux home server"}],["$","link","2",{"rel":"manifest","href":"/Home-Server-Termux/manifest.webmanifest"}],["$","link","3",{"rel":"icon","href":"/Home-Server-Termux/favicon.ico?603d046c9a6fdfbb","type":"image/x-icon","sizes":"16x16"}],["$","$L5","4",{}]]}]}]}],["$","meta",null,{"name":"next-size-adjust","content":""}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"bFgbtSb4VQM1nYTUfhgkO"}
