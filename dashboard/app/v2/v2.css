@@ -13,6 +13,8 @@
   flex-direction: column;
   padding: 16px;
   gap: 18px;
+  transition: transform 180ms ease;
+  z-index: 50;
 }
 
 .dash2-brand strong {
@@ -89,6 +91,10 @@
   gap: 16px;
 }
 
+.dash2-sidebar-backdrop {
+  display: none;
+}
+
 .dash2-header {
   display: flex;
   justify-content: space-between;
@@ -118,6 +124,24 @@
   gap: 10px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.dash2-theme-picker {
+  display: grid;
+  gap: 4px;
+}
+
+.dash2-theme-picker span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash2-theme-picker select {
+  min-width: 160px;
+}
+
+.dash2-sidebar-toggle {
+  min-height: 30px;
 }
 
 .dash2-content {
@@ -159,6 +183,61 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.dash2-overview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 14px;
+}
+
+.dash2-overview-layout__main,
+.dash2-overview-layout__side {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.dash2-graph-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.dash2-graph-card {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, transparent);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.dash2-graph-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dash2-graph-card strong {
+  color: var(--text);
+}
+
+.dash2-graph-card svg {
+  width: 100%;
+  height: 90px;
+}
+
+.dash2-graph-card__line {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+}
+
+.dash2-graph-card__area {
+  fill: color-mix(in srgb, var(--accent-soft) 70%, transparent);
 }
 
 .dash2-metrics {
@@ -280,6 +359,13 @@
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.dash2-small-copy {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .dash2-list__actions {
@@ -408,6 +494,23 @@
   flex-wrap: wrap;
 }
 
+.dash2-service-admin-card__actions--compact .ui-button {
+  padding: 4px 8px;
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.dash2-ui-button--small {
+  padding: 4px 8px;
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.dash2-ui-button--danger {
+  border-color: color-mix(in srgb, var(--danger) 65%, transparent);
+  color: var(--danger);
+}
+
 .dash2-llm-controls {
   display: grid;
   gap: 8px;
@@ -431,6 +534,89 @@
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.dash2-chatbox-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.dash2-chatbox-rail {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, transparent);
+  padding: 10px;
+}
+
+.dash2-chatbox-rail h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.dash2-chat-history-item {
+  align-items: stretch !important;
+}
+
+.dash2-chat-history-item > .ui-button:first-child {
+  flex: 1;
+  text-align: left;
+}
+
+.dash2-chat-history-item--active {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent) !important;
+}
+
+.dash2-chatbox-thread {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.dash2-chat-log__meta {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash2-media-health-grid {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.dash2-media-health-card {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, transparent);
+  padding: 10px;
+}
+
+.dash2-media-health-card h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.dash2-terminal-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.dash2-terminal-mini {
+  width: 100%;
+  min-height: 260px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: #0b0f14;
 }
 
 .dash2-chat-input {
@@ -488,8 +674,25 @@
   }
 
   .dash2-sidebar {
-    border-right: 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(88vw, 320px);
+    border-right: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    transform: translateX(-102%);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+
+  .dash2-sidebar--open {
+    transform: translateX(0);
+  }
+
+  .dash2-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.42);
+    border: 0;
+    z-index: 40;
   }
 
   .dash2-nav {
@@ -498,5 +701,17 @@
 
   .dash2-main {
     padding: 14px;
+  }
+
+  .dash2-overview-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dash2-chatbox-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dash2-terminal-mini {
+    min-height: 210px;
   }
 }

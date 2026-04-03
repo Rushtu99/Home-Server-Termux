@@ -52,6 +52,108 @@ html[data-theme="contrast"] {
   color-scheme: dark;
 }
 
+html[data-theme="forest-green"] {
+  --background: #0f1512;
+  --foreground: #e7f0e6;
+  --panel: #152019;
+  --panel-raised: #1a2a20;
+  --border: #345141;
+  --muted: #9fb8a6;
+  --accent: #4f9d69;
+  --accent-soft: rgba(79, 157, 105, 0.16);
+  --accent-strong: #72bf8a;
+  --ok: #72bf8a;
+  --warning: #d0a75a;
+  --danger: #d26b6b;
+  --focus-ring: rgba(79, 157, 105, 0.32);
+  color-scheme: dark;
+}
+
+html[data-theme="crimson-red"] {
+  --background: #161012;
+  --foreground: #f3e9ea;
+  --panel: #241519;
+  --panel-raised: #2d1b21;
+  --border: #6d3944;
+  --muted: #c8a4ab;
+  --accent: #d44c64;
+  --accent-soft: rgba(212, 76, 100, 0.16);
+  --accent-strong: #f06f87;
+  --ok: #7ac08f;
+  --warning: #e6b95a;
+  --danger: #ef7f95;
+  --focus-ring: rgba(212, 76, 100, 0.32);
+  color-scheme: dark;
+}
+
+html[data-theme="neon-orange"] {
+  --background: #15110d;
+  --foreground: #f7efe5;
+  --panel: #241a12;
+  --panel-raised: #2e2116;
+  --border: #7a5330;
+  --muted: #d3b89e;
+  --accent: #ff7b21;
+  --accent-soft: rgba(255, 123, 33, 0.18);
+  --accent-strong: #ff9b52;
+  --ok: #8dc58d;
+  --warning: #ffd166;
+  --danger: #ef7b6f;
+  --focus-ring: rgba(255, 123, 33, 0.32);
+  color-scheme: dark;
+}
+
+html[data-theme="radiant-yellow"] {
+  --background: #16140c;
+  --foreground: #f8f2da;
+  --panel: #252014;
+  --panel-raised: #31291b;
+  --border: #85713a;
+  --muted: #cfbe8a;
+  --accent: #f5c84c;
+  --accent-soft: rgba(245, 200, 76, 0.18);
+  --accent-strong: #ffdb75;
+  --ok: #9acc87;
+  --warning: #f5c84c;
+  --danger: #e0877a;
+  --focus-ring: rgba(245, 200, 76, 0.32);
+  color-scheme: dark;
+}
+
+html[data-theme="puffy-pink"] {
+  --background: #170f16;
+  --foreground: #f8eaf3;
+  --panel: #251726;
+  --panel-raised: #2f1e31;
+  --border: #7b4d7d;
+  --muted: #d4b4d4;
+  --accent: #ff88cc;
+  --accent-soft: rgba(255, 136, 204, 0.2);
+  --accent-strong: #ffabdc;
+  --ok: #9fd7a2;
+  --warning: #f0c96a;
+  --danger: #ef8ca9;
+  --focus-ring: rgba(255, 136, 204, 0.34);
+  color-scheme: dark;
+}
+
+html[data-theme="purple-haze"] {
+  --background: #120f1c;
+  --foreground: #efe9ff;
+  --panel: #1d1830;
+  --panel-raised: #241f3b;
+  --border: #564a8e;
+  --muted: #b6aed9;
+  --accent: #9f7bff;
+  --accent-soft: rgba(159, 123, 255, 0.2);
+  --accent-strong: #bfa6ff;
+  --ok: #8fc9a7;
+  --warning: #d9b56a;
+  --danger: #d982a4;
+  --focus-ring: rgba(159, 123, 255, 0.34);
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: light) {
   html:not([data-theme]) {
     --background: #f5f3ee;

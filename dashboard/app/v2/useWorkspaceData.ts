@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchUiBootstrap, fetchWorkspacePayload } from './api';
 import { DEFAULT_WORKSPACE, resolveWorkspaceFromQuery } from './workspaceMap';
 import type { UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
@@ -28,6 +28,8 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const [workspaceError, setWorkspaceError] = useState('');
   const [loadingWorkspace, setLoadingWorkspace] = useState(true);
   const [workspaceReloadTick, setWorkspaceReloadTick] = useState(0);
+  const workspaceRequestRef = useRef(0);
+  const loadedWorkspaceKeyRef = useRef('');
 
   const setActiveWorkspace = useCallback((workspace: WorkspaceKey) => {
     setActiveWorkspaceState(workspace);
@@ -100,22 +102,27 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     let cancelled = false;
 
     const loadWorkspace = async () => {
-      setLoadingWorkspace(true);
+      const requestId = workspaceRequestRef.current + 1;
+      workspaceRequestRef.current = requestId;
+      const shouldBlockRender = loadedWorkspaceKeyRef.current !== activeWorkspace;
+      if (shouldBlockRender) {
+        setLoadingWorkspace(true);
+      }
       try {
         const payload = await fetchWorkspacePayload(activeWorkspace);
-        if (cancelled) {
+        if (cancelled || requestId !== workspaceRequestRef.current) {
           return;
         }
         setWorkspaceData(payload);
+        loadedWorkspaceKeyRef.current = String(payload.workspaceKey || activeWorkspace);
         setWorkspaceError('');
       } catch (error) {
-        if (cancelled) {
+        if (cancelled || requestId !== workspaceRequestRef.current) {
           return;
         }
-        setWorkspaceData(null);
         setWorkspaceError(String(error instanceof Error ? error.message : error || `Unable to load ${activeWorkspace} workspace`));
       } finally {
-        if (!cancelled) {
+        if (!cancelled && requestId === workspaceRequestRef.current) {
           setLoadingWorkspace(false);
         }
       }

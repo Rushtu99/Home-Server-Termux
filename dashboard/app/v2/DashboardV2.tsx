@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { appFetch } from '../demo-api';
 import { ErrorState, LoadingState, StatusBadge } from './components';
 import { toErrorMessage } from './errors';
@@ -9,6 +9,19 @@ import { controlService, lockServiceController, unlockServiceController } from '
 import { useWorkspaceData } from './useWorkspaceData';
 import { WorkspaceViewport } from './workspaces';
 import type { UiNavItem, WorkspaceKey } from './types';
+
+const THEME_STORAGE_KEY = 'hmstx-theme';
+const THEME_OPTIONS = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'contrast', label: 'Contrast' },
+  { value: 'forest-green', label: 'Forest Green' },
+  { value: 'crimson-red', label: 'Crimson Red' },
+  { value: 'neon-orange', label: 'Neon Orange' },
+  { value: 'radiant-yellow', label: 'Radiant Yellow' },
+  { value: 'puffy-pink', label: 'Puffy Pink' },
+  { value: 'purple-haze', label: 'Purple Haze' },
+] as const;
 
 const statusTone = (status: string) => {
   const token = String(status || '').toLowerCase();
@@ -56,6 +69,9 @@ export default function DashboardV2() {
   const [controlBusyKey, setControlBusyKey] = useState('');
   const [controlStatus, setControlStatus] = useState('');
   const [headerBusy, setHeaderBusy] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
+  const [theme, setTheme] = useState('dark');
 
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
@@ -64,6 +80,56 @@ export default function DashboardV2() {
     () => /login required|session expired|unauthorized|401/i.test(bootstrapError),
     [bootstrapError]
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const initial = THEME_OPTIONS.some((entry) => entry.value === stored)
+      ? String(stored)
+      : 'dark';
+    setTheme(initial);
+    document.documentElement.dataset.theme = initial;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const media = window.matchMedia('(max-width: 980px)');
+    const applyState = () => {
+      const narrow = media.matches;
+      setIsNarrowScreen(narrow);
+      if (!narrow) {
+        setSidebarOpen(false);
+      }
+    };
+    applyState();
+    media.addEventListener('change', applyState);
+    return () => media.removeEventListener('change', applyState);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarOpen) {
+      return;
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSidebarOpen(false);
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [sidebarOpen]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -170,9 +236,13 @@ export default function DashboardV2() {
     }
   };
 
+  const hasActiveWorkspaceData = Boolean(workspaceData && workspaceData.workspaceKey === activeWorkspace);
+  const activeWorkspaceTitle = nav.find((entry) => entry.key === activeWorkspace)?.label || 'Dashboard';
+  const activeWorkspaceSummary = nav.find((entry) => entry.key === activeWorkspace)?.summary || 'Home server control workspace';
+
   return (
     <div className="dash2-shell">
-      <aside className="dash2-sidebar" aria-label="Dashboard workspaces">
+      <aside className={`dash2-sidebar ${sidebarOpen ? 'dash2-sidebar--open' : ''}`} aria-label="Dashboard workspaces">
         <div className="dash2-brand">
           <strong>HmSTx v2</strong>
           <span>Neon operations console</span>
@@ -186,7 +256,12 @@ export default function DashboardV2() {
                 key={item.key}
                 type="button"
                 className={`dash2-nav__item ${isActive ? 'dash2-nav__item--active' : ''}`}
-                onClick={() => setActiveWorkspace(item.key as WorkspaceKey)}
+                onClick={() => {
+                  setActiveWorkspace(item.key as WorkspaceKey);
+                  if (isNarrowScreen) {
+                    setSidebarOpen(false);
+                  }
+                }}
                 aria-current={isActive ? 'page' : undefined}
               >
                 <span className="dash2-nav__row">
@@ -211,15 +286,43 @@ export default function DashboardV2() {
         </div>
       </aside>
 
+      {isNarrowScreen && sidebarOpen ? (
+        <button
+          className="dash2-sidebar-backdrop"
+          type="button"
+          aria-label="Close workspace navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      ) : null}
+
       <main className="dash2-main" id="app-main">
         <header className="dash2-header">
           <div>
-            <h1>{nav.find((entry) => entry.key === activeWorkspace)?.label || 'Dashboard'}</h1>
-            <p>{nav.find((entry) => entry.key === activeWorkspace)?.summary || 'Home server control workspace'}</p>
+            <h1>{activeWorkspaceTitle}</h1>
+            <p>{activeWorkspaceSummary}</p>
           </div>
           <div className="dash2-header__meta">
+            {isNarrowScreen ? (
+              <button
+                className="ui-button dash2-sidebar-toggle"
+                type="button"
+                aria-expanded={sidebarOpen}
+                aria-controls="app-main"
+                onClick={() => setSidebarOpen((current) => !current)}
+              >
+                {sidebarOpen ? 'Close menu' : 'Workspaces'}
+              </button>
+            ) : null}
             <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
             <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleString() : 'Waiting for snapshot'}</span>
+            <label className="dash2-theme-picker">
+              <span>Theme</span>
+              <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
+                {THEME_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
             <button className="ui-button" type="button" onClick={handleRefresh} disabled={headerBusy}>
               {headerBusy ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -262,11 +365,13 @@ export default function DashboardV2() {
           </section>
         ) : null}
         {bootstrapError && !authRequired ? <ErrorState message={bootstrapError} /> : null}
-        {!authRequired && loadingWorkspace ? <LoadingState /> : null}
-        {!authRequired && workspaceError ? <ErrorState message={workspaceError} /> : null}
+        {!authRequired && loadingWorkspace && !hasActiveWorkspaceData ? <LoadingState /> : null}
+        {!authRequired && workspaceError && !hasActiveWorkspaceData ? <ErrorState message={workspaceError} /> : null}
 
-        {!authRequired && !loadingWorkspace && !workspaceError && workspaceData ? (
+        {!authRequired && workspaceData && hasActiveWorkspaceData ? (
           <section className="dash2-content">
+            {loadingWorkspace ? <p className="dash2-admin-note">Refreshing workspace data…</p> : null}
+            {workspaceError ? <ErrorState message={workspaceError} /> : null}
             <WorkspaceViewport
               workspace={activeWorkspace}
               payload={workspaceData}

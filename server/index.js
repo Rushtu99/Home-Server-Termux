@@ -191,6 +191,9 @@ const RADARR_PORT = Number(process.env.RADARR_PORT || 7878);
 const PROWLARR_PORT = Number(process.env.PROWLARR_PORT || 9696);
 const BAZARR_PORT = Number(process.env.BAZARR_PORT || 6767);
 const JELLYSEERR_PORT = Number(process.env.JELLYSEERR_PORT || 5055);
+const JELLYFIN_BASE_URL = process.env.JELLYFIN_BASE_URL || `http://${JELLYFIN_BIND_HOST}:${JELLYFIN_PORT}`;
+const JELLYFIN_API_KEY = process.env.JELLYFIN_API_KEY || '';
+const JELLYFIN_API_TIMEOUT_MS = Math.max(800, Number(process.env.JELLYFIN_API_TIMEOUT_MS || 2500) || 2500);
 const DEFAULT_PS4_FTP_NAME = process.env.DEFAULT_PS4_FTP_NAME || 'PS4';
 const DEFAULT_PS4_HOST = process.env.DEFAULT_PS4_HOST || '192.168.1.8';
 const DEFAULT_PS4_PORT = Number(process.env.DEFAULT_PS4_PORT || 2121);
@@ -719,10 +722,12 @@ let ftpProviderCache = {
 };
 let networkSnapshotCache = null;
 const localProbeCache = {
+  jellyfinMediaHealth: { expiresAt: 0, value: null },
   jellyfinLiveTv: { expiresAt: 0, value: null },
   qbittorrentConfig: { expiresAt: 0, value: null },
 };
 const timedCache = {
+  mediaHealth: { expiresAt: 0, value: null, promise: null },
   monitor: { expiresAt: 0, value: null, promise: null },
   services: { expiresAt: 0, value: null, promise: null },
   storage: { expiresAt: 0, value: null, promise: null },
@@ -1064,6 +1069,144 @@ const probeJellyfinLiveTvState = () => withLocalProbeCache('jellyfinLiveTv', 500
 
   return { channelCount, inspected };
 });
+
+const buildJellyfinApiUrl = (pathname) => {
+  const base = String(JELLYFIN_BASE_URL || '').trim().replace(/\/+$/, '');
+  const cleanPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return `${base}${cleanPath}`;
+};
+
+const fetchJellyfinJson = async (pathname) => {
+  const timeout = withTimeoutSignal(JELLYFIN_API_TIMEOUT_MS);
+  try {
+    const response = await fetch(buildJellyfinApiUrl(pathname), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Emby-Token': JELLYFIN_API_KEY,
+      },
+      signal: timeout.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(String(body?.Message || body?.error || `Jellyfin returned ${response.status}`));
+    }
+    return body;
+  } finally {
+    timeout.clear();
+  }
+};
+
+const buildUnavailableMediaHealth = (error) => ({
+  activeSessions: [],
+  available: false,
+  error: error || 'Jellyfin API key is not configured',
+  lastUpdated: new Date().toISOString(),
+  libraries: [],
+  status: 'unavailable',
+  totals: {
+    episodeCount: 0,
+    movieCount: 0,
+    songCount: 0,
+    seriesCount: 0,
+  },
+});
+
+const buildJellyfinMediaHealthSnapshot = async () => {
+  if (!JELLYFIN_API_KEY) {
+    return buildUnavailableMediaHealth('Configure JELLYFIN_API_KEY to enable live media health.');
+  }
+
+  const [librariesResult, countsResult, sessionsResult] = await Promise.allSettled([
+    fetchJellyfinJson('/Library/VirtualFolders'),
+    fetchJellyfinJson('/Items/Counts'),
+    fetchJellyfinJson('/Sessions'),
+  ]);
+
+  const errors = [];
+  if (librariesResult.status === 'rejected') {
+    errors.push(String(librariesResult.reason || 'Library fetch failed'));
+  }
+  if (countsResult.status === 'rejected') {
+    errors.push(String(countsResult.reason || 'Counts fetch failed'));
+  }
+  if (sessionsResult.status === 'rejected') {
+    errors.push(String(sessionsResult.reason || 'Session fetch failed'));
+  }
+
+  const librariesPayload = librariesResult.status === 'fulfilled' && Array.isArray(librariesResult.value)
+    ? librariesResult.value
+    : [];
+  const countsPayload = countsResult.status === 'fulfilled' && countsResult.value && typeof countsResult.value === 'object'
+    ? countsResult.value
+    : {};
+  const sessionsPayload = sessionsResult.status === 'fulfilled' && Array.isArray(sessionsResult.value)
+    ? sessionsResult.value
+    : [];
+
+  const libraries = librariesPayload.map((entry, index) => {
+    const locations = Array.isArray(entry?.Locations) ? entry.Locations : [];
+    const pathHint = String(locations[0] || '');
+    return {
+      id: String(entry?.ItemId || entry?.Id || `library-${index}`),
+      itemCount: Number(entry?.ItemCount || 0),
+      name: String(entry?.Name || `Library ${index + 1}`),
+      path: pathHint,
+      type: String(entry?.CollectionType || 'mixed'),
+    };
+  });
+
+  const activeSessions = sessionsPayload
+    .filter((entry) => Boolean(entry?.NowPlayingItem))
+    .map((entry, index) => ({
+      client: String(entry?.Client || entry?.DeviceName || 'client'),
+      id: String(entry?.Id || `session-${index}`),
+      itemName: String(entry?.NowPlayingItem?.Name || entry?.NowPlayingItem?.SeriesName || 'Unknown item'),
+      userName: String(entry?.UserName || 'unknown'),
+    }));
+
+  const hasAnyData = libraries.length > 0 || Object.keys(countsPayload).length > 0 || activeSessions.length > 0;
+  if (!hasAnyData && errors.length > 0) {
+    return buildUnavailableMediaHealth(errors[0]);
+  }
+
+  return {
+    activeSessions,
+    available: true,
+    error: errors[0] || '',
+    lastUpdated: new Date().toISOString(),
+    libraries,
+    status: errors.length > 0 ? 'degraded' : 'working',
+    totals: {
+      episodeCount: Number(countsPayload.EpisodeCount || 0),
+      movieCount: Number(countsPayload.MovieCount || 0),
+      seriesCount: Number(countsPayload.SeriesCount || 0),
+      songCount: Number(countsPayload.SongCount || 0),
+    },
+  };
+};
+
+const getJellyfinMediaHealthSnapshot = async ({ force = false } = {}) => {
+  const cache = timedCache.mediaHealth;
+  const now = Date.now();
+  if (!force && cache.value && cache.expiresAt > now) {
+    return cache.value;
+  }
+  if (cache.promise) {
+    return cache.promise;
+  }
+
+  cache.promise = buildJellyfinMediaHealthSnapshot()
+    .catch((error) => buildUnavailableMediaHealth(String(error || 'Unable to fetch Jellyfin media health')))
+    .then((payload) => {
+      cache.value = payload;
+      cache.expiresAt = Date.now() + 15000;
+      cache.promise = null;
+      return payload;
+    });
+
+  return cache.promise;
+};
 
 const detectFtpProvider = async (forceRefresh = false) => {
   const now = Date.now();
@@ -1632,6 +1775,38 @@ const aggregateCatalogStatus = (entries) => {
   return 'unavailable';
 };
 
+const mediaRootLabel = (rootPath) => {
+  const value = String(rootPath || '').toLowerCase();
+  if (value.includes('/movies')) {
+    return 'movies';
+  }
+  if (value.includes('/series')) {
+    return 'series';
+  }
+  if (value.includes('/music')) {
+    return 'music';
+  }
+  if (value.includes('/audiobooks')) {
+    return 'audiobooks';
+  }
+  const parts = String(rootPath || '').split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || 'library';
+};
+
+const compactLibraryRootsSummary = (roots) => {
+  const labels = Array.from(new Set((roots || []).map((entry) => mediaRootLabel(entry)).filter(Boolean)));
+  const vaultPresent = (roots || []).some((entry) => String(entry || '').toLowerCase().includes('/vault/'));
+  const scratchPresent = (roots || []).some((entry) => String(entry || '').toLowerCase().includes('/scratch/'));
+  const laneLabel = vaultPresent && scratchPresent
+    ? 'vault + scratch'
+    : vaultPresent
+      ? 'vault'
+      : scratchPresent
+        ? 'scratch'
+        : 'mixed';
+  return `Library roots ready (${roots.length}): ${labels.join(', ')} [${laneLabel}]`;
+};
+
 const buildMediaWorkflowSnapshot = (catalog) => {
   const storageProtection = readStorageProtectionState();
   const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
@@ -1738,12 +1913,12 @@ const buildMediaWorkflowSnapshot = (catalog) => {
   const watchSummary = watchEntry?.status === 'blocked'
     ? watchEntry.statusReason || 'Watch stack is blocked by storage protection.'
     : libraryRootReady
-      ? `Library roots ready at ${libraryRoots.join(' and ')}`
+      ? compactLibraryRootsSummary(libraryRoots)
       : `Library roots missing under ${MEDIA_VAULT_ROOT}`;
   const downloadsSummary = primaryDownloadEntry?.status === 'blocked'
     ? primaryDownloadEntry.statusReason || 'Downloads are blocked by storage protection.'
     : downloadEntries.length > 0
-      ? `${primaryDownloadEntry?.label || 'Download clients'} run in the Downloads tab. Save path: ${qbittorrentConfig.defaultSavePath || downloadRoots.join(' and ')}`
+      ? `${primaryDownloadEntry?.label || 'Download clients'} run in Downloads. Save path: ${qbittorrentConfig.defaultSavePath || MEDIA_DOWNLOADS_MANUAL_DIR}`
       : 'No download clients are configured yet.';
 
   return {
@@ -5424,11 +5599,13 @@ const uiWorkspacePayloadHandler = async (req, res) => {
     }
 
     if (workspaceKey === 'media') {
+      const mediaHealth = await getJellyfinMediaHealthSnapshot();
       return res.json({
         generatedAt: now,
         workspaceKey,
         lifecycle: buildStackLifecycleSummary(serviceCatalog),
         mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
+        mediaHealth,
         services: mediaEntries,
       });
     }

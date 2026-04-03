@@ -756,6 +756,11 @@ const aggregateCatalogStatus = (entries: DemoServiceCatalogEntry[]) => {
   return 'unavailable';
 };
 
+const compactLibrarySummary = (roots: string[]) => {
+  const labels = roots.map((entry) => entry.split('/').pop() || entry);
+  return `Library roots ready (${roots.length}): ${labels.join(', ')} [vault + scratch]`;
+};
+
 const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]) => {
   const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
   const watchEntry = catalogByKey.get('jellyfin') || null;
@@ -781,7 +786,7 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       libraryRoots,
       serviceKeys: watchEntry ? [watchEntry.key] : [],
       status: watchEntry?.status || 'unavailable',
-      summary: 'Library roots are present and ready for Jellyfin playback.',
+      summary: compactLibrarySummary(libraryRoots),
     },
     requests: {
       blocker: !requestEntry || !requestEntry.available ? requestEntry?.blocker || 'Request portal is not installed in the demo host.' : null,
@@ -805,7 +810,7 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       primaryServiceKey: primaryDownloadEntry?.key || null,
       serviceKeys: downloadEntries.map((entry) => entry.key),
       status: aggregateCatalogStatus(downloadEntries),
-      summary: `${primaryDownloadEntry?.label || 'Download clients'} run in the dedicated Downloads tab. Save path: ~/Drives/Media/downloads/manual`,
+      summary: `${primaryDownloadEntry?.label || 'Download clients'} run in Downloads. Save path: ~/Drives/Media/downloads/manual`,
       workspaceTab: 'downloads',
     },
     storage: {
@@ -925,6 +930,37 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       serviceKeys: supportEntries.map((entry) => entry.key),
       status: aggregateCatalogStatus(supportEntries),
       summary: 'Redis and PostgreSQL support the media workflow behind the scenes.',
+    },
+  };
+};
+
+const buildDemoMediaHealth = (state: DemoState) => {
+  const activeSessions = state.connections
+    .filter((entry) => String(entry.protocol || '').toLowerCase() === 'jellyfin' || String(entry.status || '').toLowerCase() === 'playing')
+    .map((entry, index) => ({
+      client: String(entry.protocol || 'client'),
+      id: `demo-session-${index}`,
+      itemName: 'Demo playback item',
+      userName: String(entry.username || 'unknown'),
+    }));
+
+  return {
+    activeSessions,
+    available: true,
+    error: '',
+    lastUpdated: nowIso(),
+    libraries: [
+      { id: 'lib-movies', itemCount: 128, name: 'Movies', path: '~/Drives/Media/movies', type: 'movies' },
+      { id: 'lib-series', itemCount: 73, name: 'Series', path: '~/Drives/Media/series', type: 'series' },
+      { id: 'lib-music', itemCount: 402, name: 'Music', path: '~/Drives/Media/music', type: 'music' },
+      { id: 'lib-audiobooks', itemCount: 96, name: 'Audiobooks', path: '~/Drives/Media/audiobooks', type: 'audiobooks' },
+    ],
+    status: 'working',
+    totals: {
+      episodeCount: 882,
+      movieCount: 128,
+      seriesCount: 73,
+      songCount: 402,
     },
   };
 };
@@ -1101,6 +1137,7 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
       workspaceKey,
       lifecycle: dashboard.lifecycle,
       mediaWorkflow: dashboard.mediaWorkflow,
+      mediaHealth: buildDemoMediaHealth(state),
       services: serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(String(entry.group || ''))),
     };
   }

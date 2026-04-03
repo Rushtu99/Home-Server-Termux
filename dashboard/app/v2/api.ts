@@ -38,6 +38,17 @@ const postJson = async <T>(url: string, body: Record<string, unknown> = {}): Pro
   return response.json() as Promise<T>;
 };
 
+const deleteJson = async <T>(url: string): Promise<T> => {
+  const response = await appFetch(url, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return response.json() as Promise<T>;
+};
+
 export const unlockServiceController = (adminPassword: string) =>
   postJson<{ success: boolean; locked: boolean; expiresAt: string }>(`${API}/control/unlock`, { adminPassword });
 
@@ -102,3 +113,33 @@ export const sendLlmChat = (payload: {
       modelId?: string;
     };
   }>(`${API}/llm/chat`, payload);
+
+export const listLlmConversations = () =>
+  fetchJson<{
+    conversations: Array<{
+      id: number;
+      title?: string;
+      createdAt?: string;
+      updatedAt?: string;
+    }>;
+  }>(`${API}/llm/conversations`);
+
+export const getLlmConversationMessages = (conversationId: number) =>
+  fetchJson<{
+    conversation: {
+      id: number;
+      title?: string;
+      createdAt?: string;
+      updatedAt?: string;
+    };
+    messages: Array<{
+      id: number;
+      role: 'user' | 'assistant' | string;
+      content: string;
+      createdAt?: string;
+      modelId?: string;
+    }>;
+  }>(`${API}/llm/conversations/${conversationId}/messages`);
+
+export const deleteLlmConversation = (conversationId: number) =>
+  deleteJson<{ success: boolean; id: number }>(`${API}/llm/conversations/${conversationId}`);
