@@ -15,6 +15,7 @@ BAZARR_PORT="${BAZARR_PORT:-6767}"
 BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
 BAZARR_LOG_PATH="${BAZARR_LOG_PATH:-$LOG_DIR/bazarr.log}"
 BAZARR_CONFIG_DIR="${BAZARR_CONFIG_DIR:-$BAZARR_HOME/data}"
+SERVICE_NAME="bazarr"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$BAZARR_HOME" "$BAZARR_CONFIG_DIR"
 
@@ -71,6 +72,28 @@ stop_service() {
     rm -f "$BAZARR_PID_PATH"
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+    local status_code=1
+
+    if is_running; then
+        running=true
+        status="running"
+        status_code=0
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+
+    return "$status_code"
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -83,10 +106,14 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            is_running
+        fi
         ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]}" >&2
         exit 1
         ;;
 esac

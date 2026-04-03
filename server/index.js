@@ -1225,6 +1225,8 @@ const trimServiceHistory = (history = []) => {
   return next.slice(-SERVICE_HISTORY_LIMIT);
 };
 
+const isServiceFailureStatus = (status) => ['blocked', 'stalled'].includes(status);
+
 const getServiceStats = (serviceName) => {
   const history = trimServiceHistory(serviceHealthHistory[serviceName] || []);
   serviceHealthHistory[serviceName] = history;
@@ -1233,6 +1235,7 @@ const getServiceStats = (serviceName) => {
     return {
       avgLatencyMs: null,
       lastCheckedAt: null,
+      lastFailureAt: null,
       lastTransitionAt: null,
       latencyMs: null,
       samples: 0,
@@ -1256,10 +1259,18 @@ const getServiceStats = (serviceName) => {
   }
 
   const last = history[history.length - 1];
+  let lastFailureAt = null;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (isServiceFailureStatus(history[index].status)) {
+      lastFailureAt = history[index].checkedAt;
+      break;
+    }
+  }
 
   return {
     avgLatencyMs: latencyCount > 0 ? Number((latencyTotal / latencyCount).toFixed(0)) : null,
     lastCheckedAt: last.checkedAt,
+    lastFailureAt,
     lastTransitionAt: last.transitionAt || last.checkedAt,
     latencyMs: Number.isFinite(last.latencyMs) ? last.latencyMs : null,
     samples: history.length,
@@ -1303,6 +1314,181 @@ const statusReasonForService = (entry) => {
   }
 
   return 'Expected to be running, but the health check failed.';
+};
+
+const toServiceLifecycleState = (entry) => {
+  if (entry.status === 'blocked') {
+    return 'blocked';
+  }
+
+  if (entry.status === 'unavailable') {
+    return 'degraded';
+  }
+
+  if (entry.status === 'stalled') {
+    return entry.controlMode === 'always_on' ? 'crashed' : 'degraded';
+  }
+
+  if (entry.status === 'stopped') {
+    return 'stopped';
+  }
+
+  if (entry.status === 'working') {
+    if (Number.isFinite(entry.latencyMs) && entry.latencyMs > 800) {
+      return 'degraded';
+    }
+    return 'healthy';
+  }
+
+  return 'degraded';
+};
+
+const defaultLifecycleReasonForState = (state) => {
+  if (state === 'healthy') {
+    return 'Healthy.';
+  }
+  if (state === 'degraded') {
+    return 'Service health is degraded.';
+  }
+  if (state === 'blocked') {
+    return 'Service is blocked.';
+  }
+  if (state === 'crashed') {
+    return 'Service health check failed.';
+  }
+  if (state === 'stopped') {
+    return 'Stopped by operator.';
+  }
+  return 'Service health is unknown.';
+};
+
+const buildServiceLifecycleEntry = (entry) => {
+  const state = toServiceLifecycleState(entry);
+  const checkedAt = entry.lastCheckedAt || new Date().toISOString();
+  const reason = String(entry.statusReason || entry.blocker || defaultLifecycleReasonForState(state));
+  const inferredFailureAt = isServiceFailureStatus(entry.status) ? checkedAt : null;
+  const restartRecommended = state === 'crashed'
+    || Boolean(entry.resumeRequired)
+    || (state === 'blocked' && entry.available);
+
+  return {
+    checkedAt,
+    lastFailureAt: entry.lastFailureAt || inferredFailureAt,
+    reason,
+    restartRecommended,
+    state,
+  };
+};
+
+const parseTimestampMs = (value) => {
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const buildStackLifecycleSummary = (serviceCatalog = []) => {
+  const counts = {
+    healthy: 0,
+    degraded: 0,
+    blocked: 0,
+    crashed: 0,
+    stopped: 0,
+  };
+  let checkedAt = null;
+  let checkedAtMs = -1;
+  let lastFailureAt = null;
+  let lastFailureAtMs = -1;
+  let restartRecommended = false;
+
+  for (const entry of serviceCatalog) {
+    const state = ['healthy', 'degraded', 'blocked', 'crashed', 'stopped'].includes(entry.state)
+      ? entry.state
+      : toServiceLifecycleState(entry);
+    counts[state] = (counts[state] || 0) + 1;
+
+    const entryCheckedAtMs = parseTimestampMs(entry.checkedAt || entry.lastCheckedAt);
+    if (entryCheckedAtMs !== null && entryCheckedAtMs >= checkedAtMs) {
+      checkedAtMs = entryCheckedAtMs;
+      checkedAt = new Date(entryCheckedAtMs).toISOString();
+    }
+
+    const entryLastFailureAtMs = parseTimestampMs(entry.lastFailureAt);
+    if (entryLastFailureAtMs !== null && entryLastFailureAtMs >= lastFailureAtMs) {
+      lastFailureAtMs = entryLastFailureAtMs;
+      lastFailureAt = new Date(entryLastFailureAtMs).toISOString();
+    }
+
+    restartRecommended = restartRecommended || Boolean(entry.restartRecommended);
+  }
+
+  const total = serviceCatalog.length;
+  const resolvedCheckedAt = checkedAt || new Date().toISOString();
+  if (total === 0) {
+    return {
+      state: 'stopped',
+      reason: 'No services are registered in the catalog.',
+      checkedAt: resolvedCheckedAt,
+      lastFailureAt: null,
+      restartRecommended: false,
+      counts,
+    };
+  }
+
+  if (counts.crashed > 0) {
+    return {
+      state: 'crashed',
+      reason: `${counts.crashed} service${counts.crashed === 1 ? '' : 's'} failed health checks.`,
+      checkedAt: resolvedCheckedAt,
+      lastFailureAt: lastFailureAt || resolvedCheckedAt,
+      restartRecommended: true,
+      counts,
+    };
+  }
+
+  if (counts.blocked > 0) {
+    const blockedVerb = counts.blocked === 1 ? 'is' : 'are';
+    return {
+      state: 'blocked',
+      reason: `${counts.blocked} service${counts.blocked === 1 ? '' : 's'} ${blockedVerb} blocked.`,
+      checkedAt: resolvedCheckedAt,
+      lastFailureAt,
+      restartRecommended,
+      counts,
+    };
+  }
+
+  if (counts.degraded > 0) {
+    const degradedVerb = counts.degraded === 1 ? 'is' : 'are';
+    return {
+      state: 'degraded',
+      reason: `${counts.degraded} service${counts.degraded === 1 ? '' : 's'} ${degradedVerb} degraded.`,
+      checkedAt: resolvedCheckedAt,
+      lastFailureAt,
+      restartRecommended,
+      counts,
+    };
+  }
+
+  if (counts.healthy === 0 && counts.stopped > 0) {
+    return {
+      state: 'stopped',
+      reason: 'All services are currently stopped.',
+      checkedAt: resolvedCheckedAt,
+      lastFailureAt,
+      restartRecommended,
+      counts,
+    };
+  }
+
+  return {
+    state: 'healthy',
+    reason: counts.stopped > 0
+      ? 'Running services are healthy; some services are stopped by operator.'
+      : 'All services are healthy.',
+    checkedAt: resolvedCheckedAt,
+    lastFailureAt,
+    restartRecommended,
+    counts,
+  };
 };
 
 const checkServiceHealth = async (serviceName, svc) => {
@@ -1377,6 +1563,7 @@ const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
     key: name,
     label: meta.label,
     lastCheckedAt: stats.lastCheckedAt,
+    lastFailureAt: stats.lastFailureAt,
     lastTransitionAt: stats.lastTransitionAt,
     latencyMs: stats.latencyMs,
     placeholder: !available && PLACEHOLDER_SERVICE_SET.has(name),
@@ -1396,6 +1583,13 @@ const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
   } else {
     entry.statusReason = statusReasonForService(entry);
   }
+
+  const lifecycle = buildServiceLifecycleEntry(entry);
+  entry.state = lifecycle.state;
+  entry.reason = lifecycle.reason;
+  entry.checkedAt = lifecycle.checkedAt;
+  entry.lastFailureAt = lifecycle.lastFailureAt;
+  entry.restartRecommended = lifecycle.restartRecommended;
   return entry;
 };
 
@@ -2647,11 +2841,13 @@ const getDashboardSnapshot = async (sessionId) => {
     getControlledServiceNames(),
     buildServiceCatalog(),
   ]);
+  const lifecycle = buildStackLifecycleSummary(serviceCatalog);
 
   return {
     generatedAt: new Date().toISOString(),
     services,
     serviceCatalog,
+    lifecycle,
     serviceGroups: buildServiceGroups(serviceCatalog),
     mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
     monitor,
@@ -2671,12 +2867,14 @@ const getTelemetrySnapshot = async (sessionId) => {
     getMonitorSnapshot(),
     buildServiceCatalog(),
   ]);
+  const lifecycle = buildStackLifecycleSummary(serviceCatalog);
 
   return {
     generatedAt: new Date().toISOString(),
     logs: getLogsSnapshot(),
     monitor,
     serviceCatalog,
+    lifecycle,
     serviceGroups: buildServiceGroups(serviceCatalog),
     mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
     serviceController: {
@@ -3078,8 +3276,10 @@ const moveFsEntry = (sourcePath, targetPath) => {
   }
 };
 
-const FS_OPERATION_ACTIVE_STATUSES = new Set(['queued', 'receiving', 'running']);
-const FS_OPERATION_TERMINAL_STATUSES = new Set(['success', 'partial', 'failed']);
+const FS_OPERATION_ACTIVE_STATUSES = new Set(['queued', 'receiving', 'running', 'cancelling']);
+const FS_OPERATION_TERMINAL_STATUSES = new Set(['success', 'partial', 'failed', 'cancelled']);
+const FS_OPERATION_CANCELLATION_STATUSES = new Set(['cancelling', 'cancelled']);
+const FS_OPERATION_CANCELLED_ERROR_CODE = 'FS_OPERATION_CANCELLED';
 
 const sanitizeFsOperationId = (value = '', fallback = '') => {
   const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
@@ -3095,6 +3295,14 @@ const normalizeFsUploadRelativePath = (value = '') =>
 
 const getFsOperationStatePath = (operationId = '') => path.join(FS_OPERATIONS_STATE_DIR, `${operationId}.json`);
 const getFsOperationStagingRoot = (operationId = '') => path.join(FS_OPERATIONS_STAGING_DIR, operationId);
+
+const createFsOperationCancelledError = (message = 'Operation cancelled') => {
+  const error = new Error(String(message || 'Operation cancelled'));
+  error.code = FS_OPERATION_CANCELLED_ERROR_CODE;
+  return error;
+};
+
+const isFsOperationCancelledError = (error) => Boolean(error && typeof error === 'object' && error.code === FS_OPERATION_CANCELLED_ERROR_CODE);
 
 const normalizeFsOperationFailure = (entry) => ({
   error: String(entry?.error || 'Operation failed'),
@@ -3189,6 +3397,64 @@ const updateFsOperation = (operationId, updater) => {
   });
 };
 
+const removeFsOperationState = (operationId = '') => {
+  const normalizedId = sanitizeFsOperationId(operationId);
+  if (!normalizedId) {
+    return false;
+  }
+  try {
+    fs.rmSync(getFsOperationStatePath(normalizedId), { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const cleanupFsOperationArtifacts = (job) => {
+  if (!job || job.kind !== 'upload') {
+    return;
+  }
+
+  const stagingPath = String(job.stagingPath || '');
+  if (!stagingPath) {
+    return;
+  }
+
+  try {
+    const stagingAbsolute = path.resolve(stagingPath);
+    const rootAbsolute = path.resolve(FS_OPERATIONS_STAGING_DIR);
+    if (stagingAbsolute === rootAbsolute || stagingAbsolute.startsWith(`${rootAbsolute}${path.sep}`)) {
+      fs.rmSync(stagingAbsolute, { force: true, recursive: true });
+    }
+  } catch {
+    // best effort cleanup
+  }
+};
+
+const isFsOperationCancellationRequested = (operationId = '') => {
+  const job = readFsOperation(operationId);
+  if (!job) {
+    return true;
+  }
+  return FS_OPERATION_CANCELLATION_STATUSES.has(job.status);
+};
+
+const throwIfFsOperationCancelled = (operationId, message = 'Operation cancelled') => {
+  if (isFsOperationCancellationRequested(operationId)) {
+    throw createFsOperationCancelledError(message);
+  }
+};
+
+const markFsOperationCancelled = (operationId, message = 'Operation cancelled') => {
+  const nextJob = updateFsOperation(operationId, (job) => ({
+    ...job,
+    message: String(message || 'Operation cancelled'),
+    status: 'cancelled',
+  }));
+  cleanupFsOperationArtifacts(nextJob);
+  return nextJob;
+};
+
 const serializeFsOperation = (job, detail = false) => {
   if (!job) {
     return null;
@@ -3236,6 +3502,13 @@ const createFsOperationTracker = (job) => {
     const now = Date.now();
     if (!force && now - lastWriteAt < 200) {
       return current;
+    }
+    const diskJob = readFsOperation(current.id);
+    if (diskJob && FS_OPERATION_CANCELLATION_STATUSES.has(diskJob.status)) {
+      current.status = diskJob.status;
+      if (diskJob.message) {
+        current.message = diskJob.message;
+      }
     }
     lastWriteAt = now;
     current.updatedAt = new Date(now).toISOString();
@@ -3312,7 +3585,10 @@ const sumFsStats = (statsList = []) => statsList.reduce((acc, entry) => ({
   totalItems: acc.totalItems + Math.max(0, Number(entry?.totalItems || 0) || 0),
 }), { totalBytes: 0, totalItems: 0 });
 
-const copyFileWithProgress = async (sourcePath, targetPath, onProgress) => {
+const copyFileWithProgress = async (sourcePath, targetPath, onProgress, shouldAbort = null) => {
+  if (shouldAbort?.()) {
+    throw createFsOperationCancelledError();
+  }
   const sourceStat = fs.statSync(sourcePath);
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 
@@ -3337,6 +3613,10 @@ const copyFileWithProgress = async (sourcePath, targetPath, onProgress) => {
     };
 
     readStream.on('data', (chunk) => {
+      if (shouldAbort?.()) {
+        fail(createFsOperationCancelledError());
+        return;
+      }
       onProgress?.({
         bytes: Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk),
         items: 0,
@@ -3346,6 +3626,10 @@ const copyFileWithProgress = async (sourcePath, targetPath, onProgress) => {
     writeStream.on('error', fail);
     writeStream.on('close', () => {
       if (settled) {
+        return;
+      }
+      if (shouldAbort?.()) {
+        fail(createFsOperationCancelledError());
         return;
       }
       settled = true;
@@ -3361,7 +3645,10 @@ const copyFileWithProgress = async (sourcePath, targetPath, onProgress) => {
   });
 };
 
-const copyFsEntryWithProgress = async (sourcePath, targetPath, tracker, mode, knownStats = null) => {
+const copyFsEntryWithProgress = async (sourcePath, targetPath, tracker, mode, knownStats = null, shouldAbort = null) => {
+  if (shouldAbort?.()) {
+    throw createFsOperationCancelledError();
+  }
   const sourceLstat = fs.lstatSync(sourcePath);
   const sourceStats = knownStats || collectFsEntryStats(sourcePath);
 
@@ -3391,7 +3678,7 @@ const copyFsEntryWithProgress = async (sourcePath, targetPath, tracker, mode, kn
   }
 
   if (sourceLstat.isFile()) {
-    await copyFileWithProgress(sourcePath, targetPath, (delta) => tracker.tick(delta, false));
+    await copyFileWithProgress(sourcePath, targetPath, (delta) => tracker.tick(delta, false), shouldAbort);
     tracker.tick({ items: 1 }, true);
     if (mode === 'move') {
       fs.unlinkSync(sourcePath);
@@ -3408,9 +3695,12 @@ const copyFsEntryWithProgress = async (sourcePath, targetPath, tracker, mode, kn
   tracker.tick({ items: 1 }, false);
   const children = fs.readdirSync(sourcePath, { withFileTypes: true });
   for (const child of children) {
+    if (shouldAbort?.()) {
+      throw createFsOperationCancelledError();
+    }
     const sourceChildPath = path.join(sourcePath, child.name);
     const targetChildPath = path.join(targetPath, child.name);
-    await copyFsEntryWithProgress(sourceChildPath, targetChildPath, tracker, mode, null);
+    await copyFsEntryWithProgress(sourceChildPath, targetChildPath, tracker, mode, null, shouldAbort);
   }
   try {
     const sourceStat = fs.statSync(sourcePath);
@@ -3436,6 +3726,15 @@ const enqueueFsOperation = (operationId, worker) => {
       try {
         await worker();
       } catch (error) {
+        const latest = readFsOperation(operationId);
+        if (isFsOperationCancelledError(error) || (latest && FS_OPERATION_CANCELLATION_STATUSES.has(latest.status))) {
+          try {
+            markFsOperationCancelled(operationId, latest?.message || 'Operation cancelled');
+          } catch {
+            // operation may already be removed
+          }
+          return;
+        }
         updateFsOperation(operationId, (job) => ({
           ...job,
           failureCount: Math.max(1, job.failureCount || 0),
@@ -4777,6 +5076,7 @@ const servicesHandler = async (req, res) => {
       locked: !isServiceControllerUnlocked(req.session?.id),
       optionalServices: controlledServiceNames,
     },
+    lifecycle: buildStackLifecycleSummary(serviceCatalog),
     services: result,
     serviceCatalog,
     serviceGroups: buildServiceGroups(serviceCatalog),
@@ -4995,6 +5295,208 @@ const dashboardHandler = async (req, res) => {
   } catch (err) {
     pushDebugEvent('error', 'Dashboard snapshot failed', { error: String(err) }, true);
     res.status(500).json({ error: 'Unable to build dashboard snapshot' });
+  }
+};
+
+const UI_WORKSPACES = ['overview', 'media', 'files', 'transfers', 'ai', 'terminal', 'admin'];
+const LEGACY_TAB_TO_WORKSPACE = {
+  home: 'overview',
+  media: 'media',
+  downloads: 'media',
+  arr: 'media',
+  terminal: 'terminal',
+  filesystem: 'files',
+  ftp: 'transfers',
+  ai: 'ai',
+  settings: 'admin',
+};
+
+const uiNavBlueprint = [
+  { key: 'overview', label: 'Overview', legacyTabs: ['home'], summary: 'System health, telemetry, and lifecycle status' },
+  { key: 'media', label: 'Media', legacyTabs: ['media', 'downloads', 'arr'], summary: 'Jellyfin and automation workflow surfaces' },
+  { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, and filesystem management' },
+  { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools' },
+  { key: 'ai', label: 'AI', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace' },
+  { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface' },
+  { key: 'admin', label: 'Admin', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations' },
+];
+
+const normalizeUiWorkspaceKey = (value = '') => {
+  const key = String(value || '').trim().toLowerCase();
+  return UI_WORKSPACES.includes(key) ? key : '';
+};
+
+const buildUiBootstrapPayload = async (sessionUser) => {
+  const serviceCatalog = await buildServiceCatalog();
+  const lifecycle = buildStackLifecycleSummary(serviceCatalog);
+  const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
+  const hasFilesAccess = await syncManagedShares().then((shares) => shares.length > 0).catch(() => false);
+  const transferService = serviceByKey.get('ftp');
+  const aiService = serviceByKey.get('llm');
+  const terminalService = serviceByKey.get('ttyd');
+
+  const nav = uiNavBlueprint.map((entry) => {
+    let available = true;
+    let status = 'working';
+
+    if (entry.key === 'transfers') {
+      available = Boolean(transferService?.available);
+      status = String(transferService?.status || (available ? 'working' : 'unavailable'));
+    } else if (entry.key === 'ai') {
+      available = Boolean(aiService?.available);
+      status = String(aiService?.status || (available ? 'working' : 'unavailable'));
+    } else if (entry.key === 'terminal') {
+      available = Boolean(terminalService?.available);
+      status = String(terminalService?.status || (available ? 'working' : 'unavailable'));
+    } else if (entry.key === 'files') {
+      available = hasFilesAccess;
+      status = available ? 'working' : 'blocked';
+    }
+
+    return {
+      ...entry,
+      available,
+      status,
+    };
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    user: sessionUser ? { role: sessionUser.role, username: sessionUser.username } : null,
+    lifecycle,
+    nav,
+    legacyTabMap: LEGACY_TAB_TO_WORKSPACE,
+    capabilities: {
+      canAdmin: sessionUser?.role === 'admin',
+      canControlServices: sessionUser?.role === 'admin',
+      canManageUsers: sessionUser?.role === 'admin',
+      canManageShares: sessionUser?.role === 'admin',
+      canUseFilesWorkspace: hasFilesAccess || sessionUser?.role === 'admin',
+      canUseTransfersWorkspace: Boolean(transferService?.available),
+      canUseAiWorkspace: Boolean(aiService?.available),
+      canUseTerminalWorkspace: Boolean(terminalService?.available),
+    },
+    serviceCounts: {
+      total: serviceCatalog.length,
+      available: serviceCatalog.filter((entry) => entry.available).length,
+      working: serviceCatalog.filter((entry) => entry.status === 'working').length,
+      blocked: serviceCatalog.filter((entry) => entry.status === 'blocked').length,
+      unavailable: serviceCatalog.filter((entry) => entry.status === 'unavailable').length,
+    },
+  };
+};
+
+const uiBootstrapHandler = async (req, res) => {
+  try {
+    const payload = await buildUiBootstrapPayload(req.session);
+    res.json(payload);
+  } catch (err) {
+    pushDebugEvent('error', 'UI bootstrap snapshot failed', { error: String(err) }, true);
+    res.status(500).json({ error: 'Unable to build UI bootstrap payload' });
+  }
+};
+
+const uiWorkspacePayloadHandler = async (req, res) => {
+  const workspaceKey = normalizeUiWorkspaceKey(req.params.workspaceKey || '');
+  if (!workspaceKey) {
+    return res.status(404).json({ error: 'Unknown workspace key' });
+  }
+
+  try {
+    const serviceCatalog = await buildServiceCatalog();
+    const now = new Date().toISOString();
+    const mediaEntries = serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(entry.group));
+    const transferEntries = serviceCatalog.filter((entry) => ['access', 'downloads'].includes(entry.group));
+
+    if (workspaceKey === 'overview') {
+      const [telemetry, connections, storage] = await Promise.all([
+        getTelemetrySnapshot(req.session?.id),
+        Promise.resolve(getConnectionsSnapshot()),
+        getStorageSnapshot(),
+      ]);
+      return res.json({
+        generatedAt: now,
+        workspaceKey,
+        telemetry,
+        connections,
+        storage,
+      });
+    }
+
+    if (workspaceKey === 'media') {
+      return res.json({
+        generatedAt: now,
+        workspaceKey,
+        lifecycle: buildStackLifecycleSummary(serviceCatalog),
+        mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
+        services: mediaEntries,
+      });
+    }
+
+    if (workspaceKey === 'files') {
+      const [drives, shares, users] = await Promise.all([
+        getDriveSnapshot(),
+        syncManagedShares(),
+        Promise.resolve(appDb.listUsers()),
+      ]);
+      return res.json({
+        generatedAt: now,
+        workspaceKey,
+        drives,
+        storageProtection: readStorageProtectionState(),
+        shares,
+        users,
+      });
+    }
+
+    if (workspaceKey === 'transfers') {
+      return res.json({
+        generatedAt: now,
+        workspaceKey,
+        ftpDefaults: {
+          defaultName: DEFAULT_PS4_FTP_NAME,
+          host: process.env.FTP_CLIENT_HOST || DEFAULT_PS4_HOST,
+          port: Number(process.env.FTP_CLIENT_PORT || DEFAULT_PS4_PORT),
+          user: process.env.FTP_CLIENT_USER || DEFAULT_PS4_USER,
+          secure: process.env.FTP_CLIENT_SECURE === 'true',
+          downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
+          ftpMounting: getCloudMountCapability(),
+        },
+        favourites: appDb.listFtpFavourites().map(serializeFtpFavourite),
+        services: transferEntries,
+      });
+    }
+
+    if (workspaceKey === 'ai') {
+      const llmState = await buildLlmState();
+      return res.json({
+        generatedAt: now,
+        workspaceKey,
+        llmState,
+      });
+    }
+
+    if (workspaceKey === 'terminal') {
+      return res.json({
+        generatedAt: now,
+        workspaceKey,
+        terminal: serviceCatalog.find((entry) => entry.key === 'ttyd') || null,
+      });
+    }
+
+    const [dashboard, services] = await Promise.all([
+      getDashboardSnapshot(req.session?.id),
+      getServicesSnapshot(),
+    ]);
+    return res.json({
+      generatedAt: now,
+      workspaceKey,
+      dashboard,
+      services,
+    });
+  } catch (err) {
+    pushDebugEvent('error', 'UI workspace payload failed', { error: String(err), workspaceKey }, true);
+    return res.status(500).json({ error: `Unable to build '${workspaceKey}' workspace payload` });
   }
 };
 
@@ -5445,14 +5947,20 @@ const createFsOperationJob = (kind, payload = {}) => writeFsOperation({
 });
 
 const processFsTransferJob = async (operationId, req) => {
+  const isCancelled = () => isFsOperationCancellationRequested(operationId);
   const tracker = createFsOperationTracker(updateFsOperation(operationId, {
     message: 'Preparing transfer',
     status: 'running',
   }));
   const job = tracker.job;
   const sourceStatsByPath = new Map();
+  let cancelled = false;
 
   for (const sourceRelative of job.sourcePaths) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
     if (!fs.existsSync(sourceAbsolute)) {
       tracker.fail(sourceRelative, 'Source path not found');
@@ -5462,6 +5970,10 @@ const processFsTransferJob = async (operationId, req) => {
   }
 
   for (const sourceRelative of job.sourcePaths) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
     const targetRelative = normalizeLocalRelativePath(path.join(job.destinationPath, path.basename(sourceRelative)));
     const targetAbsolute = resolveFsPath(targetRelative).absolutePath;
@@ -5485,13 +5997,32 @@ const processFsTransferJob = async (operationId, req) => {
       }
 
       tracker.set({ message: `${job.kind === 'move' ? 'Moving' : 'Copying'} ${path.basename(sourceRelative)}` }, false);
-      await copyFsEntryWithProgress(sourceAbsolute, targetAbsolute, tracker, job.kind, knownStats);
+      await copyFsEntryWithProgress(sourceAbsolute, targetAbsolute, tracker, job.kind, knownStats, isCancelled);
     } catch (error) {
+      if (isFsOperationCancelledError(error)) {
+        cancelled = true;
+        break;
+      }
       tracker.fail(sourceRelative, error);
     }
   }
 
   const completed = tracker.refresh();
+  if (cancelled || FS_OPERATION_CANCELLATION_STATUSES.has(completed.status)) {
+    tracker.set({
+      message: `${job.kind === 'move' ? 'Move' : 'Copy'} cancelled`,
+      status: 'cancelled',
+    }, true);
+    pushAuditEvent(req, 'warn', `Filesystem entr${job.sourcePaths.length === 1 ? 'y' : 'ies'} ${job.kind} cancelled`, {
+      destination: job.destinationPath,
+      failureCount: completed.failureCount,
+      items: job.sourcePaths,
+      operationId,
+      processedItems: completed.processedItems,
+    });
+    return;
+  }
+
   const status = completed.failureCount > 0
     ? completed.processedItems > 0
       ? 'partial'
@@ -5514,14 +6045,20 @@ const processFsTransferJob = async (operationId, req) => {
 };
 
 const processFsDeleteJob = async (operationId, req) => {
+  const isCancelled = () => isFsOperationCancellationRequested(operationId);
   const tracker = createFsOperationTracker(updateFsOperation(operationId, {
     message: 'Recycling entries',
     status: 'running',
   }));
   const job = tracker.job;
   const sourceStatsByPath = new Map();
+  let cancelled = false;
 
   for (const sourceRelative of job.sourcePaths) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
     if (!fs.existsSync(sourceAbsolute)) {
       tracker.fail(sourceRelative, 'Path not found');
@@ -5531,6 +6068,10 @@ const processFsDeleteJob = async (operationId, req) => {
   }
 
   for (const sourceRelative of job.sourcePaths) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     try {
       if (await isProtectedFsPath(sourceRelative)) {
         throw new Error('This path cannot be deleted');
@@ -5553,11 +6094,29 @@ const processFsDeleteJob = async (operationId, req) => {
         to: recycled.path,
       });
     } catch (error) {
+      if (isFsOperationCancelledError(error)) {
+        cancelled = true;
+        break;
+      }
       tracker.fail(sourceRelative, error);
     }
   }
 
   const completed = tracker.refresh();
+  if (cancelled || FS_OPERATION_CANCELLATION_STATUSES.has(completed.status)) {
+    tracker.set({
+      message: 'Recycle cancelled',
+      status: 'cancelled',
+    }, true);
+    pushAuditEvent(req, 'warn', 'Filesystem recycle cancelled', {
+      failureCount: completed.failureCount,
+      items: job.sourcePaths,
+      operationId,
+      processedItems: completed.processedItems,
+    });
+    return;
+  }
+
   const status = completed.failureCount > 0
     ? completed.processedItems > 0
       ? 'partial'
@@ -5572,6 +6131,7 @@ const processFsDeleteJob = async (operationId, req) => {
 };
 
 const processFsUploadFinalizeJob = async (operationId, req) => {
+  const isCancelled = () => isFsOperationCancellationRequested(operationId);
   const tracker = createFsOperationTracker(updateFsOperation(operationId, {
     message: 'Finalizing upload',
     status: 'running',
@@ -5579,8 +6139,13 @@ const processFsUploadFinalizeJob = async (operationId, req) => {
   const job = tracker.job;
   const uploadedSet = new Set(job.uploadedFiles);
   const manifest = job.manifest;
+  let cancelled = false;
 
   for (const entry of manifest) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     if (!uploadedSet.has(entry.relativePath)) {
       tracker.fail(entry.relativePath, 'File data was not uploaded');
       continue;
@@ -5614,6 +6179,10 @@ const processFsUploadFinalizeJob = async (operationId, req) => {
         }
       }
     } catch (error) {
+      if (isFsOperationCancelledError(error)) {
+        cancelled = true;
+        break;
+      }
       tracker.fail(entry.relativePath, error);
     }
   }
@@ -5625,6 +6194,21 @@ const processFsUploadFinalizeJob = async (operationId, req) => {
   }
 
   const completed = tracker.refresh();
+  if (cancelled || FS_OPERATION_CANCELLATION_STATUSES.has(completed.status)) {
+    tracker.set({
+      message: 'Upload cancelled',
+      status: 'cancelled',
+    }, true);
+    pushAuditEvent(req, 'warn', 'Filesystem upload cancelled', {
+      destination: job.destinationPath,
+      failureCount: completed.failureCount,
+      itemCount: manifest.length,
+      operationId,
+      processedItems: completed.processedItems,
+    });
+    return;
+  }
+
   const successfulCount = manifest.length - completed.failureCount;
   tracker.set({
     message: completed.failureCount > 0
@@ -5664,6 +6248,70 @@ const filesystemOperationDetailHandler = async (req, res) => {
     return res.status(404).json({ error: 'Filesystem operation not found' });
   }
   return res.json(serializeFsOperation(job, true));
+};
+
+const filesystemOperationControlHandler = async (req, res) => {
+  try {
+    const job = readFsOperation(req.params.id || '');
+    if (!job) {
+      return res.status(404).json({ error: 'Filesystem operation not found' });
+    }
+
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    if (action === 'cancel') {
+      if (job.status === 'cancelled') {
+        return res.json({ operation: serializeFsOperation(job, true), success: true });
+      }
+      if (FS_OPERATION_TERMINAL_STATUSES.has(job.status)) {
+        return res.status(409).json({ error: 'Operation is already complete', operation: serializeFsOperation(job, true) });
+      }
+
+      if (job.status === 'queued' || (job.kind === 'upload' && job.status === 'receiving')) {
+        const cancelledJob = markFsOperationCancelled(
+          job.id,
+          job.kind === 'delete'
+            ? 'Recycle cancelled'
+            : job.kind === 'move'
+              ? 'Move cancelled'
+              : job.kind === 'upload'
+                ? 'Upload cancelled'
+                : 'Copy cancelled',
+        );
+        pushAuditEvent(req, 'warn', 'Filesystem operation cancelled', {
+          kind: job.kind,
+          operationId: job.id,
+          status: job.status,
+        });
+        return res.json({ operation: serializeFsOperation(cancelledJob, true), success: true });
+      }
+
+      const nextJob = job.status === 'cancelling'
+        ? job
+        : updateFsOperation(job.id, {
+          message: 'Cancelling operation',
+          status: 'cancelling',
+        });
+      pushAuditEvent(req, 'warn', 'Filesystem operation cancellation requested', {
+        kind: job.kind,
+        operationId: job.id,
+        status: job.status,
+      });
+      return res.json({ operation: serializeFsOperation(nextJob, true), success: true });
+    }
+
+    if (action === 'dismiss') {
+      if (!FS_OPERATION_TERMINAL_STATUSES.has(job.status)) {
+        return res.status(409).json({ error: 'Only completed operations can be dismissed' });
+      }
+      cleanupFsOperationArtifacts(job);
+      removeFsOperationState(job.id);
+      return res.json({ dismissed: true, operationId: job.id, success: true });
+    }
+
+    return res.status(400).json({ error: 'Unsupported operation control action' });
+  } catch (error) {
+    return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to control filesystem operation') });
+  }
 };
 
 const filesystemOperationTransferHandler = async (req, res) => {
@@ -5817,6 +6465,9 @@ const filesystemOperationUploadFileHandler = async (req, res) => {
   if (!job || job.kind !== 'upload') {
     return res.status(404).json({ error: 'Upload operation not found' });
   }
+  if (job.status === 'cancelling' || job.status === 'cancelled') {
+    return res.status(409).json({ error: 'Upload operation was cancelled', operation: serializeFsOperation(job, true) });
+  }
   if (job.status !== 'receiving') {
     return res.status(409).json({ error: 'Upload operation is not accepting files right now' });
   }
@@ -5855,6 +6506,10 @@ const filesystemOperationUploadFileHandler = async (req, res) => {
       };
 
       req.on('data', (chunk) => {
+        if (isFsOperationCancellationRequested(job.id)) {
+          fail(createFsOperationCancelledError('Upload cancelled'));
+          return;
+        }
         receivedBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
         const now = Date.now();
         if (now - lastPersistAt > 200) {
@@ -5876,9 +6531,14 @@ const filesystemOperationUploadFileHandler = async (req, res) => {
       req.on('error', fail);
       stream.on('error', fail);
       stream.on('finish', resolve);
+      if (isFsOperationCancellationRequested(job.id)) {
+        fail(createFsOperationCancelledError('Upload cancelled'));
+        return;
+      }
       req.pipe(stream);
     });
 
+    throwIfFsOperationCancelled(job.id, 'Upload cancelled');
     if (fs.existsSync(targetPath)) {
       fs.rmSync(targetPath, { force: true });
     }
@@ -5908,6 +6568,21 @@ const filesystemOperationUploadFileHandler = async (req, res) => {
     } catch {
       // ignore
     }
+    if (isFsOperationCancelledError(error)) {
+      const latest = readFsOperation(job.id);
+      if (latest && latest.status !== 'cancelled') {
+        try {
+          markFsOperationCancelled(job.id, 'Upload cancelled');
+        } catch {
+          // ignore
+        }
+      }
+      const cancelledJob = readFsOperation(job.id) || latest || job;
+      return res.status(409).json({
+        error: 'Upload cancelled',
+        operation: serializeFsOperation(cancelledJob, true),
+      });
+    }
     return res.status(400).json({ error: String(error instanceof Error ? error.message : error || 'Unable to receive upload file') });
   }
 };
@@ -5917,6 +6592,9 @@ const filesystemOperationUploadFinalizeHandler = async (req, res) => {
     const job = readFsOperation(req.params.id || '');
     if (!job || job.kind !== 'upload') {
       return res.status(404).json({ error: 'Upload operation not found' });
+    }
+    if (job.status === 'cancelling' || job.status === 'cancelled') {
+      return res.status(409).json({ error: 'Upload operation was cancelled', operation: serializeFsOperation(job, true) });
     }
     if (job.status !== 'receiving') {
       return res.status(409).json({ error: 'Upload operation is not waiting for finalize' });
@@ -6411,6 +7089,8 @@ registerDualRoute('post', '/control/lock', requireAuth, requireAdmin, controlLoc
 registerDualRoute('post', '/control', requireAuth, requireAdmin, controlHandler);
 registerDualRoute('get', '/monitor', requireAuth, requireAdmin, monitorHandler);
 registerDualRoute('get', '/dashboard', requireAuth, requireAdmin, dashboardHandler);
+registerDualRoute('get', '/ui/bootstrap', requireAuth, requireAdmin, uiBootstrapHandler);
+registerDualRoute('get', '/ui/workspaces/:workspaceKey', requireAuth, requireAdmin, uiWorkspacePayloadHandler);
 registerDualRoute('get', '/connections', requireAuth, requireAdmin, connectionsHandler);
 registerDualRoute('post', '/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
 registerDualRoute('get', '/storage', requireAuth, requireAdmin, storageHandler);
@@ -6434,6 +7114,7 @@ registerDualRoute('post', '/fs/mkdir', requireAuth, filesystemMkdirHandler);
 registerDualRoute('post', '/fs/rename', requireAuth, filesystemRenameHandler);
 registerDualRoute('get', '/fs/operations', requireAuth, filesystemOperationsListHandler);
 registerDualRoute('get', '/fs/operations/:id', requireAuth, filesystemOperationDetailHandler);
+registerDualRoute('post', '/fs/operations/:id/control', requireAuth, filesystemOperationControlHandler);
 registerDualRoute('post', '/fs/operations/upload', requireAuth, filesystemOperationUploadCreateHandler);
 registerDualRoute('post', '/fs/operations/:id/file', requireAuth, filesystemOperationUploadFileHandler);
 registerDualRoute('post', '/fs/operations/:id/finalize', requireAuth, filesystemOperationUploadFinalizeHandler);

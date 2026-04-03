@@ -21,6 +21,7 @@ PSQL_BIN="${PSQL_BIN:-$(command -v psql || true)}"
 CREATEDB_BIN="${CREATEDB_BIN:-$(command -v createdb || true)}"
 POSTGRES_DB="${POSTGRES_DB:-homeserver_media}"
 POSTGRES_USER="${POSTGRES_USER:-homeserver_media}"
+SERVICE_NAME="postgres"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$POSTGRES_HOME" "$POSTGRES_SOCKET_DIR"
 
@@ -96,6 +97,24 @@ stop_service() {
     rm -f "$POSTGRES_PID_PATH"
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+
+    if is_running; then
+        running=true
+        status="running"
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -108,10 +127,14 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            is_running
+        fi
         ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]}" >&2
         exit 1
         ;;
 esac

@@ -19,6 +19,7 @@ LLM_ACTIVE_MODEL_FILE="${LLM_ACTIVE_MODEL_FILE:-$RUNTIME_DIR/llm-active-model.tx
 LLM_PID_PATH="${LLM_PID_PATH:-$RUNTIME_DIR/llm.pid}"
 LLM_LOG_PATH="${LLM_LOG_PATH:-$LOG_DIR/llm.log}"
 LLM_SERVER_BIN="${LLM_SERVER_BIN:-$(command -v llama-server || true)}"
+SERVICE_NAME="llm"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$LLM_HOME" "$LLM_MODELS_DIR"
 
@@ -109,6 +110,24 @@ stop_service() {
     rm -f "$LLM_PID_PATH"
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+
+    if is_running; then
+        running=true
+        status="running"
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -121,10 +140,14 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            is_running
+        fi
         ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]}" >&2
         exit 1
         ;;
 esac

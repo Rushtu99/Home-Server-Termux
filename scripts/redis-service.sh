@@ -14,6 +14,7 @@ REDIS_PID_PATH="${REDIS_PID_PATH:-$RUNTIME_DIR/redis.pid}"
 REDIS_LOG_PATH="${REDIS_LOG_PATH:-$LOG_DIR/redis.log}"
 REDIS_CONFIG_PATH="${REDIS_CONFIG_PATH:-$REDIS_HOME/redis.conf}"
 REDIS_BIN="${REDIS_BIN:-$(command -v redis-server || command -v valkey-server || true)}"
+SERVICE_NAME="redis"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$REDIS_HOME"
 
@@ -74,6 +75,24 @@ stop_service() {
     rm -f "$REDIS_PID_PATH"
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+
+    if is_running; then
+        running=true
+        status="running"
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -86,10 +105,14 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            is_running
+        fi
         ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]}" >&2
         exit 1
         ;;
 esac

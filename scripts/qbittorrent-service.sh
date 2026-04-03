@@ -35,6 +35,7 @@ QBITTORRENT_BIN="${QBITTORRENT_BIN:-$(command -v qbittorrent-nox || true)}"
 QBITTORRENT_CONFIG_PATH="${QBITTORRENT_CONFIG_PATH:-$QBITTORRENT_HOME/qBittorrent/config/qBittorrent.conf}"
 QBITTORRENT_CONFIG_BACKUP_PATH="${QBITTORRENT_CONFIG_BACKUP_PATH:-$QBITTORRENT_HOME/qBittorrent/config/qBittorrent.conf.bak}"
 QBITTORRENT_FINISHED_CMD="${QBITTORRENT_FINISHED_CMD:-$MEDIA_IMPORTER_CMD import --trigger qb-finish --source \"%F\"}"
+SERVICE_NAME="qbittorrent"
 
 mkdir -p \
     "$RUNTIME_DIR" \
@@ -199,6 +200,24 @@ stop_service() {
     rm -f "$QBITTORRENT_PID_PATH"
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+
+    if is_running; then
+        running=true
+        status="running"
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -211,10 +230,14 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            is_running
+        fi
         ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]}" >&2
         exit 1
         ;;
 esac

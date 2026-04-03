@@ -6,6 +6,7 @@ The runtime model is opinionated:
 - `nginx` on `:8088` is the public entrypoint
 - dashboard (`dashboard/`) and API (`server/index.js`) stay loopback-bound
 - service control flows through backend-owned metadata instead of frontend guesses
+- repo-wide lifecycle control runs through `scripts/hmstx-control.sh` (`preflight`, `start`, `stop`, `restart`, `status`)
 - media storage is split into vault storage and scratch storage under `~/Drives`
 - the GitHub Pages demo is built from the same dashboard shell, not a separate mock app
 
@@ -38,6 +39,8 @@ nginx -t -p "$(pwd)" -c "$(pwd)/nginx.conf"
 bash start.sh
 ```
 
+For normal operator work, use `bash scripts/hmstx-control.sh start`, `status`, `restart`, and `stop` instead of calling service wrappers one by one.
+
 Required first-boot settings in `server/.env`:
 - `JWT_SECRET`
 - `APP_AUTH_SECRET`
@@ -45,6 +48,12 @@ Required first-boot settings in `server/.env`:
 - `ADMIN_ACTION_PASSWORD`
 
 `server/.env.example` now sets `STRICT_BOOTSTRAP=true`, so the API will refuse to start until those values are replaced.
+
+After the env file is in place, run a preflight before first boot or after changing host prerequisites:
+
+```bash
+bash scripts/hmstx-control.sh preflight
+```
 
 ## Validation
 

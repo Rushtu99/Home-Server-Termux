@@ -58,7 +58,7 @@ type DemoFsOperation = {
   processedBytes: number;
   processedItems: number;
   sourcePaths: string[];
-  status: 'queued' | 'receiving' | 'running' | 'success' | 'partial' | 'failed';
+  status: 'queued' | 'receiving' | 'running' | 'cancelling' | 'success' | 'partial' | 'failed' | 'cancelled';
   totalBytes: number;
   totalItems: number;
   updatedAt: string;
@@ -92,15 +92,6 @@ type DemoFtpFavourite = {
   username: string;
 };
 
-type DemoFtpEntry = {
-  modifiedAt?: string;
-  name: string;
-  permissions?: string;
-  rawModifiedAt?: string;
-  size: number;
-  type: 'file' | 'directory';
-};
-
 type DemoRemoteNode = {
   modifiedAt: string;
   name: string;
@@ -115,16 +106,21 @@ type DemoServiceCatalogEntry = {
   blockedBy?: string;
   blockedReason?: string;
   blocker?: string;
+  checkedAt?: string | null;
   controlMode: 'always_on' | 'optional';
   description: string;
   group: 'platform' | 'media' | 'arr' | 'data' | 'access' | 'filesystem' | 'downloads' | 'ai';
   key: string;
+  lastFailureAt?: string | null;
   lastCheckedAt?: string | null;
   lastTransitionAt?: string | null;
   label: string;
   latencyMs?: number | null;
   placeholder: boolean;
+  reason?: string | null;
+  restartRecommended?: boolean;
   route?: string;
+  state?: string;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable' | 'blocked';
   statusReason?: string;
   resumeRequired?: boolean;
@@ -166,14 +162,6 @@ const jsonResponse = (body: unknown, status = 200) =>
     },
   });
 
-const textResponse = (body: string, status = 200, contentType = 'text/plain; charset=utf-8') =>
-  new Response(body, {
-    status,
-    headers: {
-      'Content-Type': contentType,
-    },
-  });
-
 const parseJsonBody = (init?: RequestInit) => {
   if (!init?.body || typeof init.body !== 'string') {
     return {};
@@ -209,12 +197,6 @@ const parentFsPath = (value = '') => {
   const parts = normalizeFsPath(value).split('/').filter(Boolean);
   parts.pop();
   return parts.join('/');
-};
-
-const parentRemotePath = (value = '/') => {
-  const parts = normalizeRemotePath(value).split('/').filter(Boolean);
-  parts.pop();
-  return `/${parts.join('/')}` || '/';
 };
 
 const topLevelName = (value = '') => normalizeFsPath(value).split('/').filter(Boolean)[0] || '';
@@ -604,20 +586,38 @@ const statusReasonForDemoService = (entry: DemoServiceCatalogEntry) => {
   return 'Expected to be running, but the health check failed.';
 };
 
+const lifecycleStateForDemoStatus = (status: DemoServiceCatalogEntry['status']) => {
+  if (status === 'working') {
+    return 'running';
+  }
+  if (status === 'stalled') {
+    return 'degraded';
+  }
+  return status;
+};
+
 const buildServiceCatalog = (state: DemoState): DemoServiceCatalogEntry[] =>
   SERVICE_META.map((entry) => {
+    const checkedAt = nowIso();
+
     if (!entry.available) {
       const unavailableEntry = {
         ...clone(entry),
         avgLatencyMs: null,
-        lastCheckedAt: nowIso(),
-        lastTransitionAt: nowIso(),
+        checkedAt,
+        lastCheckedAt: checkedAt,
+        lastFailureAt: null,
+        lastTransitionAt: checkedAt,
         latencyMs: null,
+        restartRecommended: false,
+        state: lifecycleStateForDemoStatus(entry.status),
         uptimePct: null,
       };
+      const reason = statusReasonForDemoService(unavailableEntry);
       return {
         ...unavailableEntry,
-        statusReason: statusReasonForDemoService(unavailableEntry),
+        reason,
+        statusReason: reason,
       };
     }
 
@@ -626,19 +626,26 @@ const buildServiceCatalog = (state: DemoState): DemoServiceCatalogEntry[] =>
       ? (running ? 'working' : 'stopped')
       : (running ? 'working' : 'stalled');
     const latencyMs = running ? demoServiceLatency[entry.key] || 44 : null;
+    const reason = statusReasonForDemoService({
+      ...entry,
+      latencyMs,
+      status,
+    });
+    const restartRecommended = status === 'stalled';
 
     return {
       ...entry,
       avgLatencyMs: latencyMs,
-      lastCheckedAt: nowIso(),
-      lastTransitionAt: nowIso(),
+      checkedAt,
+      lastCheckedAt: checkedAt,
+      lastFailureAt: restartRecommended ? checkedAt : null,
+      lastTransitionAt: checkedAt,
       latencyMs,
+      reason,
+      restartRecommended,
+      state: lifecycleStateForDemoStatus(status),
       status,
-      statusReason: statusReasonForDemoService({
-        ...entry,
-        latencyMs,
-        status,
-      }),
+      statusReason: reason,
       uptimePct: running ? 99.4 : 96.1,
     };
   });
@@ -649,6 +656,86 @@ const buildServiceGroups = (catalog: DemoServiceCatalogEntry[]) =>
     acc[entry.group].push(entry.key);
     return acc;
   }, {});
+
+const buildLifecycleSummary = (catalog: DemoServiceCatalogEntry[]) => {
+  const counts = {
+    blocked: 0,
+    crashed: 0,
+    degraded: 0,
+    healthy: 0,
+    stopped: 0,
+  };
+  let lastFailureAt: string | null = null;
+  let restartRecommended = false;
+
+  for (const entry of catalog) {
+    const state = lifecycleStateForDemoStatus(entry.status);
+    if (state in counts) {
+      counts[state as keyof typeof counts] += 1;
+    } else {
+      counts.degraded += 1;
+    }
+    if (!lastFailureAt && entry.lastFailureAt) {
+      lastFailureAt = entry.lastFailureAt;
+    }
+    restartRecommended = restartRecommended || Boolean(entry.restartRecommended);
+  }
+
+  if (counts.crashed > 0) {
+    return {
+      checkedAt: nowIso(),
+      counts,
+      lastFailureAt: lastFailureAt || nowIso(),
+      reason: `${counts.crashed} service${counts.crashed === 1 ? '' : 's'} failed health checks.`,
+      restartRecommended: true,
+      state: 'crashed',
+    };
+  }
+
+  if (counts.blocked > 0) {
+    return {
+      checkedAt: nowIso(),
+      counts,
+      lastFailureAt,
+      reason: `${counts.blocked} service${counts.blocked === 1 ? '' : 's'} are blocked.`,
+      restartRecommended,
+      state: 'blocked',
+    };
+  }
+
+  if (counts.degraded > 0) {
+    return {
+      checkedAt: nowIso(),
+      counts,
+      lastFailureAt,
+      reason: `${counts.degraded} service${counts.degraded === 1 ? '' : 's'} are degraded.`,
+      restartRecommended,
+      state: 'degraded',
+    };
+  }
+
+  if (counts.healthy === 0 && counts.stopped > 0) {
+    return {
+      checkedAt: nowIso(),
+      counts,
+      lastFailureAt,
+      reason: 'All services are currently stopped.',
+      restartRecommended,
+      state: 'stopped',
+    };
+  }
+
+  return {
+    checkedAt: nowIso(),
+    counts,
+    lastFailureAt,
+    reason: counts.stopped > 0
+      ? 'Running services are healthy; some services are stopped by operator.'
+      : 'All services are healthy.',
+    restartRecommended,
+    state: 'healthy',
+  };
+};
 
 const aggregateCatalogStatus = (entries: DemoServiceCatalogEntry[]) => {
   if (entries.length === 0) {
@@ -845,6 +932,7 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
 const buildDashboardPayload = (state: DemoState) => {
   const serviceCatalog = buildServiceCatalog(state);
   const mediaWorkflow = buildMediaWorkflow(state, serviceCatalog);
+  const lifecycle = buildLifecycleSummary(serviceCatalog);
 
   return {
   connections: {
@@ -891,6 +979,7 @@ const buildDashboardPayload = (state: DemoState) => {
     optionalServices,
   },
   serviceCatalog,
+  lifecycle,
   serviceGroups: buildServiceGroups(serviceCatalog),
   mediaWorkflow,
   services: clone(state.services),
@@ -904,6 +993,7 @@ const buildTelemetryPayload = (state: DemoState) => {
   const dashboard = buildDashboardPayload(state);
   return {
     generatedAt: dashboard.generatedAt,
+    lifecycle: dashboard.lifecycle,
     logs: dashboard.logs,
     mediaWorkflow: dashboard.mediaWorkflow,
     monitor: dashboard.monitor,
@@ -911,6 +1001,175 @@ const buildTelemetryPayload = (state: DemoState) => {
     serviceController: dashboard.serviceController,
     serviceGroups: dashboard.serviceGroups,
     services: dashboard.services,
+  };
+};
+
+const UI_WORKSPACES = ['overview', 'media', 'files', 'transfers', 'ai', 'terminal', 'admin'] as const;
+const LEGACY_TAB_TO_WORKSPACE: Record<string, typeof UI_WORKSPACES[number]> = {
+  home: 'overview',
+  media: 'media',
+  downloads: 'media',
+  arr: 'media',
+  terminal: 'terminal',
+  filesystem: 'files',
+  ftp: 'transfers',
+  ai: 'ai',
+  settings: 'admin',
+};
+
+const normalizeWorkspaceKey = (value = '') => {
+  const key = String(value || '').trim().toLowerCase();
+  return UI_WORKSPACES.includes(key as typeof UI_WORKSPACES[number]) ? key : '';
+};
+
+const buildUiBootstrapPayload = (state: DemoState) => {
+  const serviceCatalog = buildServiceCatalog(state);
+  const lifecycle = buildLifecycleSummary(serviceCatalog);
+  const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
+  const transferService = serviceByKey.get('ftp');
+  const aiService = serviceByKey.get('llm');
+  const terminalService = serviceByKey.get('ttyd');
+  const canUseFilesWorkspace = state.shares.length > 0;
+
+  return {
+    generatedAt: nowIso(),
+    user: state.sessionUser ? clone(state.sessionUser) : null,
+    lifecycle,
+    nav: [
+      { key: 'overview', label: 'Overview', legacyTabs: ['home'], summary: 'System health, telemetry, and lifecycle status', available: true, status: 'working' },
+      { key: 'media', label: 'Media', legacyTabs: ['media', 'downloads', 'arr'], summary: 'Jellyfin and automation workflow surfaces', available: true, status: lifecycle.state },
+      { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, and filesystem management', available: canUseFilesWorkspace, status: canUseFilesWorkspace ? 'working' : 'blocked' },
+      { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools', available: Boolean(transferService?.available), status: transferService?.status || 'unavailable' },
+      { key: 'ai', label: 'AI', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace', available: Boolean(aiService?.available), status: aiService?.status || 'unavailable' },
+      { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface', available: Boolean(terminalService?.available), status: terminalService?.status || 'unavailable' },
+      { key: 'admin', label: 'Admin', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations', available: true, status: lifecycle.state },
+    ],
+    legacyTabMap: LEGACY_TAB_TO_WORKSPACE,
+    capabilities: {
+      canAdmin: state.sessionUser?.role === 'admin',
+      canControlServices: state.sessionUser?.role === 'admin',
+      canManageUsers: state.sessionUser?.role === 'admin',
+      canManageShares: state.sessionUser?.role === 'admin',
+      canUseFilesWorkspace,
+      canUseTransfersWorkspace: Boolean(transferService?.available),
+      canUseAiWorkspace: Boolean(aiService?.available),
+      canUseTerminalWorkspace: Boolean(terminalService?.available),
+    },
+    serviceCounts: {
+      total: serviceCatalog.length,
+      available: serviceCatalog.filter((entry) => entry.available).length,
+      working: serviceCatalog.filter((entry) => entry.status === 'working').length,
+      blocked: serviceCatalog.filter((entry) => entry.status === 'blocked').length,
+      unavailable: serviceCatalog.filter((entry) => entry.status === 'unavailable').length,
+    },
+  };
+};
+
+const buildLlmStatePayload = (state: DemoState) => {
+  const activeModel = state.llmModels.find((entry) => entry.id === state.llmActiveModelId) || null;
+  return {
+    activeModel,
+    activeModelId: state.llmActiveModelId,
+    apiKeyConfigured: state.llmApiKeyConfigured,
+    available: true,
+    blocker: null,
+    models: clone(state.llmModels),
+    online: clone(state.llmOnline),
+    pullJobs: clone(state.llmPullJobs),
+    running: Boolean(state.services.llm),
+  };
+};
+
+const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
+  const dashboard = buildDashboardPayload(state);
+  const telemetry = buildTelemetryPayload(state);
+  const serviceCatalog = dashboard.serviceCatalog || [];
+
+  if (workspaceKey === 'overview') {
+    return {
+      generatedAt: nowIso(),
+      workspaceKey,
+      telemetry,
+      connections: dashboard.connections,
+      storage: dashboard.storage,
+    };
+  }
+
+  if (workspaceKey === 'media') {
+    return {
+      generatedAt: nowIso(),
+      workspaceKey,
+      lifecycle: dashboard.lifecycle,
+      mediaWorkflow: dashboard.mediaWorkflow,
+      services: serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(String(entry.group || ''))),
+    };
+  }
+
+  if (workspaceKey === 'files') {
+    const protection = buildMediaWorkflow(state, buildServiceCatalog(state)).storage?.protection || null;
+    return {
+      generatedAt: nowIso(),
+      workspaceKey,
+      drives: {
+        agentInstalled: true,
+        checkedAt: nowIso(),
+        events: clone(state.driveEvents),
+        manifest: {
+          drives: clone(state.drives),
+          generatedAt: nowIso(),
+          intervalMs: 60000,
+        },
+        refreshIntervalMs: 60000,
+      },
+      storageProtection: protection,
+      shares: clone(state.shares),
+      users: clone(state.users),
+    };
+  }
+
+  if (workspaceKey === 'transfers') {
+    return {
+      generatedAt: nowIso(),
+      workspaceKey,
+      ftpDefaults: {
+        defaultName: state.ftpDefaults.defaultName,
+        host: state.ftpDefaults.host,
+        port: state.ftpDefaults.port,
+        user: state.ftpDefaults.user,
+        secure: state.ftpDefaults.secure,
+        downloadRoot: state.ftpDefaults.downloadRoot,
+        ftpMounting: {
+          available: true,
+          mode: 'root_helper',
+          reason: 'Demo cloud mount helper is available',
+        },
+      },
+      favourites: clone(state.ftpFavourites),
+      services: serviceCatalog.filter((entry) => ['access', 'downloads'].includes(String(entry.group || ''))),
+    };
+  }
+
+  if (workspaceKey === 'ai') {
+    return {
+      generatedAt: nowIso(),
+      workspaceKey,
+      llmState: buildLlmStatePayload(state),
+    };
+  }
+
+  if (workspaceKey === 'terminal') {
+    return {
+      generatedAt: nowIso(),
+      workspaceKey,
+      terminal: serviceCatalog.find((entry) => entry.key === 'ttyd') || null,
+    };
+  }
+
+  return {
+    generatedAt: nowIso(),
+    workspaceKey,
+    dashboard,
+    services: clone(state.services),
   };
 };
 
@@ -1165,6 +1424,9 @@ const updateDemoFsOperation = (state: DemoState, operationId: string, updater: (
   return next;
 };
 
+const isDemoFsOperationActive = (operation: DemoFsOperation) =>
+  operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'cancelling';
+
 const requireSession = (state: DemoState) => {
   if (!state.sessionUser) {
     return jsonResponse({ error: 'Login required' }, 401);
@@ -1180,6 +1442,7 @@ const buildServiceResponse = (state: DemoState) => {
       locked: state.controllerLocked,
       optionalServices,
     },
+    lifecycle: buildLifecycleSummary(serviceCatalog),
     mediaWorkflow: buildMediaWorkflow(state, serviceCatalog),
     serviceCatalog,
     serviceGroups: buildServiceGroups(serviceCatalog),
@@ -1231,6 +1494,16 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
   }
   if (pathname === '/api/dashboard' && method === 'GET') {
     return jsonResponse(buildDashboardPayload(demoState));
+  }
+  if (pathname === '/api/ui/bootstrap' && method === 'GET') {
+    return jsonResponse(buildUiBootstrapPayload(demoState));
+  }
+  if (pathname.startsWith('/api/ui/workspaces/') && method === 'GET') {
+    const workspaceKey = normalizeWorkspaceKey(pathname.split('/').pop() || '');
+    if (!workspaceKey) {
+      return jsonResponse({ error: 'Unknown workspace key' }, 404);
+    }
+    return jsonResponse(buildUiWorkspacePayload(demoState, workspaceKey));
   }
   if (pathname === '/api/telemetry' && method === 'GET') {
     return jsonResponse(buildTelemetryPayload(demoState));
@@ -1285,18 +1558,7 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
     return jsonResponse({ expectedRunning: action !== 'stop', output: '(demo)', running: demoState.services[service], success: true });
   }
   if (pathname === '/api/llm/state' && method === 'GET') {
-    const activeModel = demoState.llmModels.find((entry) => entry.id === demoState.llmActiveModelId) || null;
-    return jsonResponse({
-      activeModel,
-      activeModelId: demoState.llmActiveModelId,
-      apiKeyConfigured: demoState.llmApiKeyConfigured,
-      available: true,
-      blocker: null,
-      models: clone(demoState.llmModels),
-      online: clone(demoState.llmOnline),
-      pullJobs: clone(demoState.llmPullJobs),
-      running: Boolean(demoState.services.llm),
-    });
+    return jsonResponse(buildLlmStatePayload(demoState));
   }
   if (pathname === '/api/llm/models/select' && method === 'POST') {
     const modelId = String(body.modelId || '').trim();
@@ -1638,6 +1900,39 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
       return jsonResponse({ error: 'Filesystem operation not found' }, 404);
     }
     return jsonResponse(clone(operation));
+  }
+  if (pathname.match(/^\/api\/fs\/operations\/[^/]+\/control$/) && method === 'POST') {
+    const operationId = pathname.split('/')[4] || '';
+    const action = String(body.action || '').trim().toLowerCase();
+    const operation = demoState.fsOperations.find((entry) => entry.id === operationId) || null;
+    if (!operation) {
+      return jsonResponse({ error: 'Filesystem operation not found' }, 404);
+    }
+    if (action === 'cancel') {
+      if (!isDemoFsOperationActive(operation)) {
+        return jsonResponse({ error: 'Operation is already complete', operation }, 409);
+      }
+      const next = updateDemoFsOperation(demoState, operationId, (current) => ({
+        ...current,
+        message: current.kind === 'delete'
+          ? 'Recycle cancelled (demo)'
+          : current.kind === 'move'
+            ? 'Move cancelled (demo)'
+            : current.kind === 'upload'
+              ? 'Upload cancelled (demo)'
+              : 'Copy cancelled (demo)',
+        status: 'cancelled',
+      }));
+      return jsonResponse({ operation: next, success: true });
+    }
+    if (action === 'dismiss') {
+      if (isDemoFsOperationActive(operation)) {
+        return jsonResponse({ error: 'Only completed operations can be dismissed' }, 409);
+      }
+      demoState.fsOperations = demoState.fsOperations.filter((entry) => entry.id !== operationId);
+      return jsonResponse({ dismissed: true, operationId, success: true });
+    }
+    return jsonResponse({ error: 'Unsupported operation control action' }, 400);
   }
   if (pathname === '/api/fs/operations/delete' && method === 'POST') {
     const sourcePaths = Array.isArray(body.paths)

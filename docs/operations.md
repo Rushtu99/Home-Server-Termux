@@ -1,19 +1,26 @@
 # Operations
 
-## Start and Reload
+## Repo Lifecycle Control
 
-Primary startup entrypoint:
+Use the repo-level control script for normal operator actions:
 
 ```bash
-bash start.sh
+bash scripts/hmstx-control.sh preflight
+bash scripts/hmstx-control.sh start
+bash scripts/hmstx-control.sh status
+bash scripts/hmstx-control.sh restart
+bash scripts/hmstx-control.sh stop
 ```
 
-During an interactive session, `start.sh` listens for `R` to reload services in place.
+- `preflight` checks the host before booting the stack.
+- `start` brings the managed stack up.
+- `status` reports the current lifecycle state and major blockers.
+- `restart` performs a clean stop/start cycle.
+- `stop` shuts the stack down cleanly.
 
-There is no separate repo-wide stop script. Normal control paths are:
-- stop the foreground `start.sh` session
-- use dashboard service controls
-- call the specific service wrapper under `scripts/`
+Use `preflight` after changing env files, paths, storage, or installed binaries. Use `status` when you need a quick answer without opening the dashboard.
+
+`start.sh` remains the lower-level bootstrap path, but day-to-day control should go through `hmstx-control.sh`.
 
 ## Logs and Runtime State
 
@@ -30,6 +37,28 @@ Important files:
 - media workflow status under scratch `logs/`
 
 Use those for debugging, not as versioned state.
+
+## Lifecycle States
+
+The canonical service lifecycle contract is:
+
+| State | Meaning | Usual operator action |
+| --- | --- | --- |
+| `healthy` | Service is up and passing checks. | No action. |
+| `degraded` | Service is reachable but unhealthy, slow, or missing requirements. | Inspect reason, then repair/restart. |
+| `blocked` | Service is intentionally blocked (for example by storage protection). | Remove blocker, then resume/restart. |
+| `crashed` | Service should be running but checks fail. | Restart and inspect logs. |
+| `stopped` | Service is intentionally off. | Start when needed. |
+
+For compatibility, payloads may still include legacy `status` aliases such as `working`, `stalled`, and `unavailable`.
+
+Storage protection has its own state values:
+
+| State | Meaning |
+| --- | --- |
+| `healthy` | No storage blockers are active. |
+| `degraded` | One or more services are blocked by storage protection. |
+| `recovered` | Storage is healthy again, but any services stopped by the watchdog still need manual resume. |
 
 ## Service Wrappers
 

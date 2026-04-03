@@ -66,6 +66,7 @@ JELLYFIN_FFMPEG_BIN="${JELLYFIN_FFMPEG_BIN:-/data/data/com.termux/files/usr/opt/
 JELLYFIN_CACHE_DIR="${JELLYFIN_CACHE_DIR:-${MEDIA_TRANSCODE_DIR:-$JELLYFIN_HOME/cache}}"
 JELLYFIN_MISC_CACHE_DIR="${JELLYFIN_MISC_CACHE_DIR:-${MEDIA_MISC_CACHE_DIR:-$JELLYFIN_HOME/cache}}"
 JELLYFIN_LIBRARY_SYNC_CMD="${JELLYFIN_LIBRARY_SYNC_CMD:-$PROJECT/scripts/jellyfin-library-sync.sh}"
+SERVICE_NAME="jellyfin"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYFIN_CACHE_DIR" "$JELLYFIN_MISC_CACHE_DIR" "$JELLYFIN_HOME/config" "$JELLYFIN_HOME/data"
 
@@ -149,6 +150,24 @@ stop_service() {
     rm -f "$JELLYFIN_PID_PATH"
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+
+    if is_running; then
+        running=true
+        status="running"
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -161,10 +180,14 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            is_running
+        fi
         ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]}" >&2
         exit 1
         ;;
 esac

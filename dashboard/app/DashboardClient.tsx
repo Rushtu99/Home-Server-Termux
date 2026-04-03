@@ -39,21 +39,41 @@ type ServiceCatalogEntry = {
   blockedBy?: 'storage_watchdog' | string;
   blockedReason?: string;
   blocker?: string;
+  checkedAt?: string | null;
   controlMode: 'always_on' | 'optional';
   description: string;
   group: ServiceGroupKey;
   key: string;
+  lastFailureAt?: string | null;
   lastCheckedAt?: string | null;
   lastTransitionAt?: string | null;
   label: string;
   latencyMs?: number | null;
   placeholder: boolean;
+  reason?: string | null;
+  restartRecommended?: boolean;
   route?: string;
+  state?: string | null;
   status: 'working' | 'stopped' | 'stalled' | 'unavailable' | string;
   statusReason?: string | null;
   resumeRequired?: boolean;
   surface: ServiceSurface;
   uptimePct?: number | null;
+};
+
+type ServiceLifecycleSummary = {
+  checkedAt?: string | null;
+  counts?: {
+    blocked?: number;
+    crashed?: number;
+    degraded?: number;
+    healthy?: number;
+    stopped?: number;
+  };
+  lastFailureAt?: string | null;
+  reason?: string | null;
+  restartRecommended?: boolean;
+  state?: 'healthy' | 'degraded' | 'blocked' | 'crashed' | 'stopped' | string;
 };
 
 type Monitor = {
@@ -202,6 +222,7 @@ type FtpDefaults = {
 
 type DashboardPayload = {
   generatedAt: string;
+  lifecycle?: ServiceLifecycleSummary;
   services: Services;
   serviceCatalog?: ServiceCatalogEntry[];
   serviceGroups?: Partial<Record<ServiceGroupKey, string[]>>;
@@ -227,6 +248,7 @@ type DashboardPayload = {
 
 type TelemetryPayload = {
   generatedAt: string;
+  lifecycle?: ServiceLifecycleSummary;
   logs: {
     entries?: DebugLog[];
     logs?: DebugLog[];
@@ -515,6 +537,122 @@ const getServiceProfile = (entry: ServiceCatalogEntry): ServiceProfile => SERVIC
   quickLabels: ['Status', 'History', 'Route'],
 };
 
+type LegacyServiceStatus = 'working' | 'stopped' | 'stalled' | 'unavailable' | 'blocked';
+
+const LIFECYCLE_STATUS_ALIASES: Record<string, LegacyServiceStatus> = {
+  active: 'working',
+  blocked: 'blocked',
+  crashed: 'stalled',
+  degraded: 'stalled',
+  down: 'stopped',
+  error: 'stalled',
+  failed: 'stalled',
+  fatal: 'stalled',
+  healthy: 'working',
+  idle: 'stopped',
+  inactive: 'stopped',
+  missing: 'unavailable',
+  off: 'stopped',
+  paused: 'stopped',
+  ready: 'working',
+  restarting: 'stalled',
+  running: 'working',
+  setup: 'stopped',
+  stalled: 'stalled',
+  starting: 'stalled',
+  stopped: 'stopped',
+  unavailable: 'unavailable',
+  unhealthy: 'stalled',
+  unknown: 'unavailable',
+  working: 'working',
+};
+
+const normalizeLifecycleStatus = (state?: string | null, status?: string | null): string => {
+  const lifecycleValue = typeof state === 'string' && state.trim()
+    ? state
+    : typeof status === 'string'
+      ? status
+      : '';
+  const token = lifecycleValue.trim().toLowerCase();
+  if (token && LIFECYCLE_STATUS_ALIASES[token]) {
+    return LIFECYCLE_STATUS_ALIASES[token];
+  }
+  if (typeof status === 'string' && status.trim()) {
+    return status.trim().toLowerCase();
+  }
+  if (token) {
+    return token;
+  }
+  return 'unavailable';
+};
+
+const normalizeIsoTimestamp = (value: unknown): string | null => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : value;
+};
+
+const normalizeServiceCatalogEntry = (entry: ServiceCatalogEntry): ServiceCatalogEntry => {
+  const checkedAt = normalizeIsoTimestamp(entry.checkedAt ?? entry.lastCheckedAt ?? null);
+  const reason = typeof entry.reason === 'string' && entry.reason.trim()
+    ? entry.reason
+    : typeof entry.statusReason === 'string' && entry.statusReason.trim()
+      ? entry.statusReason
+      : null;
+  const restartRecommended = typeof entry.restartRecommended === 'boolean'
+    ? entry.restartRecommended
+    : Boolean(entry.resumeRequired);
+  const status = normalizeLifecycleStatus(entry.state, entry.status);
+
+  return {
+    ...entry,
+    checkedAt,
+    lastCheckedAt: normalizeIsoTimestamp(entry.lastCheckedAt ?? checkedAt ?? null),
+    lastFailureAt: normalizeIsoTimestamp(entry.lastFailureAt ?? null),
+    reason,
+    restartRecommended,
+    resumeRequired: typeof entry.resumeRequired === 'boolean' ? entry.resumeRequired : restartRecommended,
+    state: typeof entry.state === 'string' && entry.state.trim() ? entry.state : status,
+    status,
+    statusReason: typeof entry.statusReason === 'string' && entry.statusReason.trim() ? entry.statusReason : reason,
+  };
+};
+
+const normalizeServiceCatalog = (entries: ServiceCatalogEntry[]) => entries.map(normalizeServiceCatalogEntry);
+
+const normalizeServiceLifecycle = (value: unknown): ServiceLifecycleSummary | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const payload = value as Partial<ServiceLifecycleSummary>;
+  const state = typeof payload.state === 'string' && payload.state.trim() ? payload.state.trim().toLowerCase() : undefined;
+  const checkedAt = normalizeIsoTimestamp(payload.checkedAt ?? null);
+  const lastFailureAt = normalizeIsoTimestamp(payload.lastFailureAt ?? null);
+  const reason = typeof payload.reason === 'string' && payload.reason.trim() ? payload.reason.trim() : null;
+  const restartRecommended = Boolean(payload.restartRecommended);
+  const counts = payload.counts && typeof payload.counts === 'object'
+    ? {
+      blocked: Math.max(0, Number(payload.counts.blocked || 0) || 0),
+      crashed: Math.max(0, Number(payload.counts.crashed || 0) || 0),
+      degraded: Math.max(0, Number(payload.counts.degraded || 0) || 0),
+      healthy: Math.max(0, Number(payload.counts.healthy || 0) || 0),
+      stopped: Math.max(0, Number(payload.counts.stopped || 0) || 0),
+    }
+    : undefined;
+
+  return {
+    checkedAt,
+    counts,
+    lastFailureAt,
+    reason,
+    restartRecommended,
+    state,
+  };
+};
+
 const DOWNLOAD_WORKSPACE_BY_SERVICE: Partial<Record<string, TabKey>> = {
   qbittorrent: 'downloads',
 };
@@ -754,6 +892,7 @@ export default function Dashboard() {
 
   const [services, setServices] = useState<Services>({});
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogEntry[]>([]);
+  const [serviceLifecycle, setServiceLifecycle] = useState<ServiceLifecycleSummary | null>(null);
   const [serviceGroups, setServiceGroups] = useState<Partial<Record<ServiceGroupKey, string[]>>>({});
   const [monitor, setMonitor] = useState<Monitor | null>(null);
   const [connections, setConnections] = useState<ConnectedUser[]>([]);
@@ -1354,7 +1493,7 @@ export default function Dashboard() {
       setServices(payload.services || {});
     }
 
-    const nextCatalog = Array.isArray(payload.serviceCatalog) ? payload.serviceCatalog : [];
+    const nextCatalog = normalizeServiceCatalog(Array.isArray(payload.serviceCatalog) ? payload.serviceCatalog : []);
     if (nextCatalog.length > 0) {
       setServiceCatalog(nextCatalog);
       syncStatusTransitions(nextCatalog);
@@ -1362,6 +1501,7 @@ export default function Dashboard() {
     if (payload.serviceGroups && typeof payload.serviceGroups === 'object') {
       setServiceGroups(payload.serviceGroups);
     }
+    setServiceLifecycle(normalizeServiceLifecycle(payload.lifecycle));
     if (payload.mediaWorkflow && typeof payload.mediaWorkflow === 'object') {
       setMediaWorkflow(payload.mediaWorkflow);
     }
@@ -1418,7 +1558,8 @@ export default function Dashboard() {
       if (payload?.services && typeof payload.services === 'object') {
         setServices(payload.services as Services);
       }
-      setServiceCatalog(Array.isArray(payload?.serviceCatalog) ? payload.serviceCatalog : []);
+      setServiceCatalog(normalizeServiceCatalog(Array.isArray(payload?.serviceCatalog) ? payload.serviceCatalog : []));
+      setServiceLifecycle(normalizeServiceLifecycle(payload?.lifecycle));
       setServiceGroups(payload?.serviceGroups && typeof payload.serviceGroups === 'object' ? payload.serviceGroups : {});
       if (payload?.mediaWorkflow && typeof payload.mediaWorkflow === 'object') {
         setMediaWorkflow(payload.mediaWorkflow);
@@ -2143,13 +2284,14 @@ export default function Dashboard() {
   };
 
   const statusToneStyle = (status: string): CSSProperties => {
-    if (status === 'working') {
+    const token = status.trim().toLowerCase();
+    if (token === 'working' || token === 'running' || token === 'healthy' || token === 'ready' || token === 'active') {
       return styles.serviceStatusOk;
     }
-    if (status === 'stopped') {
+    if (token === 'stopped' || token === 'inactive' || token === 'idle' || token === 'off' || token === 'setup' || token === 'down' || token === 'unmounted') {
       return styles.serviceStatusIdle;
     }
-    if (status === 'unavailable') {
+    if (token === 'unavailable' || token === 'failed' || token === 'error' || token === 'crashed' || token === 'fatal' || token === 'missing') {
       return styles.serviceStatusUnavailable;
     }
     return styles.serviceStatusWarn;
@@ -2160,19 +2302,32 @@ export default function Dashboard() {
   );
 
   const serviceStatusLabel = (status: string, options: { readyLabel?: string; unknownLabel?: string } = {}) => {
-    if (status === 'working') {
-      return options.readyLabel || 'Working';
+    const token = status.trim().toLowerCase();
+    if (token === 'working' || token === 'running' || token === 'healthy' || token === 'active') {
+      return options.readyLabel || 'Healthy';
     }
-    if (status === 'stopped') {
+    if (token === 'ready') {
+      return options.readyLabel || 'Ready';
+    }
+    if (token === 'stopped' || token === 'inactive' || token === 'idle' || token === 'off' || token === 'down' || token === 'unmounted') {
       return 'Stopped';
     }
-    if (status === 'unavailable') {
+    if (token === 'stalled' || token === 'degraded' || token === 'warning') {
+      return 'Degraded';
+    }
+    if (token === 'starting' || token === 'restarting' || token === 'pending') {
+      return 'Starting';
+    }
+    if (token === 'unavailable' || token === 'missing') {
       return 'Unavailable';
     }
-    if (status === 'setup') {
+    if (token === 'failed' || token === 'error' || token === 'crashed' || token === 'fatal') {
+      return 'Failed';
+    }
+    if (token === 'setup') {
       return 'Setup';
     }
-    if (status === 'blocked') {
+    if (token === 'blocked') {
       return 'Blocked';
     }
     return options.unknownLabel || 'Needs attention';
@@ -2258,7 +2413,12 @@ export default function Dashboard() {
 
   const renderServiceCard = (entry: ServiceCatalogEntry) => {
     const linkHref = buildServiceHref(entry.route);
-    const statusLabel = serviceStatusLabel(entry.status);
+    const lifecycleState = entry.state || entry.status;
+    const statusLabel = serviceStatusLabel(lifecycleState);
+    const statusTone = statusToneStyle(lifecycleState);
+    const lifecycleReason = entry.reason || entry.statusReason || '';
+    const checkedAt = entry.checkedAt || entry.lastCheckedAt || null;
+    const restartRecommended = Boolean(entry.restartRecommended || entry.resumeRequired);
     const canOperate = sessionUser?.role === 'admin' && entry.available;
     const isRunning = entry.status === 'working';
     const startBusy = Boolean(controlBusy[`${entry.key}:start`]);
@@ -2267,10 +2427,19 @@ export default function Dashboard() {
     const statsLine = entry.uptimePct != null || entry.avgLatencyMs != null
       ? `${entry.uptimePct != null ? `${entry.uptimePct.toFixed(1)}% uptime` : 'No uptime history'} · ${entry.avgLatencyMs != null ? `${entry.avgLatencyMs}ms avg` : 'No latency'}`
       : 'Waiting for service history';
+    const quickFacts = [statsLine];
+    if (checkedAt) {
+      quickFacts.push(`Checked ${fmtDateTime(checkedAt)}`);
+    }
+    if (entry.lastFailureAt) {
+      quickFacts.push(`Last failure ${fmtDateTime(entry.lastFailureAt)}`);
+    }
     const badgeItems = [
       renderServiceBadge(SERVICE_GROUP_LABELS[entry.group], styles.serviceMiniBadgeMuted, `${entry.key}:group`),
       renderServiceBadge(entry.controlMode === 'optional' ? 'Optional' : 'Core', styles.serviceMiniBadgeMuted, `${entry.key}:control`),
-      renderServiceBadge(statusLabel, statusToneStyle(entry.status), `${entry.key}:status`),
+      renderServiceBadge(statusLabel, statusTone, `${entry.key}:status`),
+      ...(restartRecommended ? [renderServiceBadge('Restart recommended', styles.serviceStatusWarn, `${entry.key}:restart-rec`)] : []),
+      ...(entry.lastFailureAt ? [renderServiceBadge('Failure logged', styles.serviceStatusUnavailable, `${entry.key}:failure`)] : []),
     ];
     const openService = () => {
       if (linkHref && typeof window !== 'undefined') {
@@ -2291,9 +2460,11 @@ export default function Dashboard() {
               </div>
               <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>{badgeItems}</div>
             </div>
-            <p style={styles.serviceCardReason}>{entry.statusReason || statsLine}</p>
+            <p style={styles.serviceCardReason}>{lifecycleReason || statsLine}</p>
+            {restartRecommended ? <p style={{ ...styles.smallLabel, color: THEME.brightYellow }}>Lifecycle checks recommend a restart.</p> : null}
+            {entry.lastFailureAt ? <p style={{ ...styles.smallLabel, color: THEME.crimsonRed }}>Last failure: {fmtDateTime(entry.lastFailureAt)}</p> : null}
             {entry.blocker ? <p style={{ ...styles.smallLabel, color: entry.status === 'unavailable' ? THEME.brightYellow : THEME.muted }}>{entry.blocker}</p> : null}
-            <span style={styles.serviceQuickLabel}>{statsLine}</span>
+            <span style={styles.serviceQuickLabel}>{quickFacts.join(' · ')}</span>
           </div>
           <div style={{ ...styles.serviceCardRail, ...(isCompact ? styles.serviceCardRailCompact : {}) }}>
             {linkHref ? (
@@ -2344,6 +2515,8 @@ export default function Dashboard() {
   const usedMemPct = monitor ? Math.min((monitor.totalMem > 0 ? (monitor.usedMem / monitor.totalMem) * 100 : 0), 100) : 0;
   const runningServices = catalogRunningServices || Object.values(services).filter(Boolean).length;
   const totalServices = serviceCatalog.length || Object.keys(services).length || 4;
+  const lifecycleBadgeLabel = serviceLifecycle?.state ? serviceStatusLabel(serviceLifecycle.state, { unknownLabel: 'Lifecycle unknown' }) : null;
+  const lifecycleBadgeTone = statusToneStyle(serviceLifecycle?.state || 'unavailable');
   const mountedFtpEntries = ftpFavourites.filter((favourite) => favourite.mount?.mounted && favourite.mount?.mountPoint);
   const mountedFtpMountPoints = new Set(mountedFtpEntries.map((favourite) => favourite.mount.mountPoint));
   const visibleStorageMounts = storage.filter((mount) => !mount.mount.startsWith('/mnt/cloud/') && !mountedFtpMountPoints.has(mount.mount));
@@ -3491,6 +3664,7 @@ export default function Dashboard() {
                   {telemetryStale ? 'Telemetry stale' : 'Telemetry live'}
                 </span>
                 <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{runningServices}/{totalServices} services</span>
+                {lifecycleBadgeLabel ? <span style={{ ...styles.headerPill, ...styles.homeHeaderPill, ...lifecycleBadgeTone }}>{lifecycleBadgeLabel}</span> : null}
                 <span style={{ ...styles.headerPill, ...styles.homeHeaderPill }}>{connections.length} clients</span>
                 {monitor?.device?.batteryPct != null ? (
                   <span
@@ -3650,22 +3824,32 @@ export default function Dashboard() {
                     ) : null}
                     {controllableServices.length === 0 ? (
                       <p style={{ ...styles.smallLabel, ...styles.homeSmallLabel }}>No optional services are available on this host.</p>
-                    ) : controllableServices.map((entry) => (
-                      <div key={entry.key} style={{ ...styles.serviceRow, ...(isPhone ? styles.serviceRowCompact : {}), opacity: serviceControllerLocked ? 0.35 : 1 }}>
-                        <div style={styles.serviceRowCopy}>
-                          <span style={styles.serviceName}>{entry.label}</span>
-                          <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
-                            {renderServiceBadge('Optional', styles.serviceMiniBadgeMuted, `${entry.key}:optional`)}
-                            {renderServiceBadge(entry.status === 'working' ? 'Working' : entry.status === 'unavailable' ? 'Unavailable' : 'Stopped', statusToneStyle(entry.status), `${entry.key}:state`)}
+                    ) : controllableServices.map((entry) => {
+                      const lifecycleState = entry.state || entry.status;
+                      const lifecycleMessage = entry.reason || entry.statusReason || (entry.checkedAt || entry.lastCheckedAt ? `Checked ${fmtDateTime(entry.checkedAt || entry.lastCheckedAt)}` : 'No lifecycle notes');
+
+                      return (
+                        <div key={entry.key} style={{ ...styles.serviceRow, ...(isPhone ? styles.serviceRowCompact : {}), opacity: serviceControllerLocked ? 0.35 : 1 }}>
+                          <div style={styles.serviceRowCopy}>
+                            <span style={styles.serviceName}>{entry.label}</span>
+                            <div style={{ ...styles.serviceBadgeRow, ...(isPhone ? styles.serviceBadgeRowCompact : {}) }}>
+                              {renderServiceBadge('Optional', styles.serviceMiniBadgeMuted, `${entry.key}:optional`)}
+                              {renderServiceBadge(serviceStatusLabel(lifecycleState), statusToneStyle(lifecycleState), `${entry.key}:state`)}
+                              {entry.restartRecommended ? renderServiceBadge('Restart recommended', styles.serviceStatusWarn, `${entry.key}:restart-rec`) : null}
+                            </div>
+                            <p style={styles.serviceRowMeta}>
+                              {lifecycleMessage}
+                              {entry.lastFailureAt ? ` · Last failure ${fmtDateTime(entry.lastFailureAt)}` : ''}
+                            </p>
+                          </div>
+                          <div style={{ ...styles.actionWrap, ...(isPhone ? styles.actionWrapCompact : {}) }}>
+                            <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:start`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'start')}>Start</button>
+                            <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:restart`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'restart')}>Restart</button>
+                            <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:stop`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'stop')}>Stop</button>
                           </div>
                         </div>
-                        <div style={{ ...styles.actionWrap, ...(isPhone ? styles.actionWrapCompact : {}) }}>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:start`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'start')}>Start</button>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:restart`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'restart')}>Restart</button>
-                          <button className="ui-button" disabled={serviceControllerLocked || !!controlBusy[`${entry.key}:stop`]} style={styles.serviceActionBtn} type="button" onClick={() => void executeControl(entry.key, 'stop')}>Stop</button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <p
                     style={{ ...styles.smallLabel, ...styles.homeSmallLabel, marginTop: 8, color: controlStatusColor }}
@@ -3962,7 +4146,7 @@ export default function Dashboard() {
                           {renderServiceBadge(serviceStatusLabel(primaryDownloadService.status, { readyLabel: 'Ready' }), statusToneStyle(primaryDownloadService.status), 'downloads:primary-status')}
                         </div>
                       </div>
-                      <p style={styles.serviceCardReason}>{primaryDownloadService.statusReason || 'Automation sends completed grabs here first, then Sonarr and Radarr import them back into the Jellyfin library.'}</p>
+                      <p style={styles.serviceCardReason}>{primaryDownloadService.reason || primaryDownloadService.statusReason || 'Automation sends completed grabs here first, then Sonarr and Radarr import them back into the Jellyfin library.'}</p>
                       <div style={styles.mediaInfoList}>
                         <span style={styles.mediaInfoItem}>{downloadSavePath ? `Save path ${downloadSavePath}` : 'Save path not detected'}</span>
                         <span style={styles.mediaInfoItem}>{mediaWorkflow?.downloads?.clientCount != null ? `${mediaWorkflow.downloads.clientCount} client${mediaWorkflow.downloads.clientCount === 1 ? '' : 's'} linked` : `${downloadServices.length} client${downloadServices.length === 1 ? '' : 's'} linked`}</span>
@@ -4075,7 +4259,7 @@ export default function Dashboard() {
                             {renderServiceBadge(serviceStatusLabel(jellyfinService.status), statusToneStyle(jellyfinService.status), 'watch:status')}
                           </div>
                         </div>
-                        <p style={styles.serviceCardReason}>{jellyfinService.statusReason || 'Requests, imports, subtitles, and Live TV all converge back into Jellyfin for actual viewing.'}</p>
+                        <p style={styles.serviceCardReason}>{jellyfinService.reason || jellyfinService.statusReason || 'Requests, imports, subtitles, and Live TV all converge back into Jellyfin for actual viewing.'}</p>
                         <div style={styles.mediaInfoList}>
                           <span style={styles.mediaInfoItem}>{mediaLibraryMounts.length > 0 ? `${mediaLibraryMounts.length} library mount${mediaLibraryMounts.length === 1 ? '' : 's'} online` : 'Library storage not detected yet'}</span>
                           <span style={styles.mediaInfoItem}>{requestPrimary ? `${requestPrimary.label} handles requests` : 'Request portal not configured'}</span>

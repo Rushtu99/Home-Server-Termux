@@ -143,6 +143,27 @@ const formatOperationProgress = (operation: FsOperation) => {
   return operation.status === 'success' ? '100%' : '0%';
 };
 
+const formatOperationStatus = (operation: FsOperation) => {
+  switch (operation.status) {
+    case 'queued':
+      return 'Queued';
+    case 'receiving':
+      return 'Receiving';
+    case 'running':
+      return 'Running';
+    case 'cancelling':
+      return 'Cancelling…';
+    case 'success':
+      return 'Completed';
+    case 'partial':
+      return 'Completed with issues';
+    case 'cancelled':
+      return 'Cancelled';
+    default:
+      return 'Failed';
+  }
+};
+
 const describeOperation = (operation: FsOperation) => {
   const targetLabel = operation.destinationPath.split('/').filter(Boolean).pop() || 'folder';
   switch (operation.kind) {
@@ -240,6 +261,7 @@ export default function FilesPage() {
   const [driveState, setDriveState] = useState<DrivePayload>(EMPTY_PAYLOAD);
   const [browser, setBrowser] = useState<FsPayload>(EMPTY_FS);
   const [operations, setOperations] = useState<FsOperation[]>([]);
+  const [operationBusyIds, setOperationBusyIds] = useState<string[]>([]);
   const [loadError, setLoadError] = useState('');
   const [browserError, setBrowserError] = useState('');
   const [manualBusy, setManualBusy] = useState(false);
@@ -532,6 +554,52 @@ export default function FilesPage() {
     const operation = normalizeFsOperation(payload?.operation);
     upsertOperation(operation);
     return operation;
+  };
+
+  const setOperationBusy = (operationId: string, busy: boolean) => {
+    setOperationBusyIds((current) => {
+      const set = new Set(current);
+      if (busy) {
+        set.add(operationId);
+      } else {
+        set.delete(operationId);
+      }
+      return [...set];
+    });
+  };
+
+  const controlFsOperation = async (operation: FsOperation, action: 'cancel' | 'dismiss') => {
+    setBrowserError('');
+    setOperationBusy(operation.id, true);
+    try {
+      const payload = await runFsCommand(`/fs/operations/${encodeURIComponent(operation.id)}/control`, { action });
+      if (payload?.dismissed) {
+        setOperations((current) => current.filter((entry) => entry.id !== operation.id));
+      } else if (payload?.operation) {
+        upsertOperation(normalizeFsOperation(payload.operation));
+      }
+      await loadFsOperations();
+    } catch (error) {
+      setBrowserError(String(error instanceof Error ? error.message : error || `Unable to ${action} operation`));
+    } finally {
+      setOperationBusy(operation.id, false);
+    }
+  };
+
+  const dismissCompletedOperations = async () => {
+    const completed = operations.filter((operation) => !isFsOperationActive(operation));
+    if (completed.length === 0) {
+      return;
+    }
+    setBrowserError('');
+    try {
+      await Promise.all(completed.map((operation) =>
+        runFsCommand(`/fs/operations/${encodeURIComponent(operation.id)}/control`, { action: 'dismiss' })
+          .catch(() => null)));
+      await loadFsOperations();
+    } catch (error) {
+      setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to clear completed operations'));
+    }
   };
 
   const uploadFileToOperation = async (operation: FsOperation, fileEntry: FsUploadFile, uploadedBytesBeforeFile: number) =>
@@ -1021,8 +1089,11 @@ export default function FilesPage() {
       className="tool-page--filesystem"
       actions={(
         <>
-          <Link href="/?tab=home" className="ui-button">
-            Home
+          <Link href="/?workspace=overview" className="ui-button">
+            Dashboard
+          </Link>
+          <Link href="/?workspace=transfers" className="ui-button">
+            Transfers
           </Link>
           {!driveAccessDenied ? (
             <button className="ui-button ui-button--primary" type="button" onClick={runManualCheck} disabled={manualBusy}>
@@ -1356,27 +1427,58 @@ export default function FilesPage() {
                     <strong>Operations queue</strong>
                     <span>{activeOperations.length > 0 ? `${activeOperations.length} active` : 'Recent activity'}</span>
                   </div>
-                  <button className="ui-button" type="button" onClick={() => void loadFsOperations()}>
-                    Refresh Queue
-                  </button>
+                  <div className="fs-operations-panel__actions">
+                    <button className="ui-button" type="button" onClick={() => void loadFsOperations()}>
+                      Refresh Queue
+                    </button>
+                    <button className="ui-button" type="button" onClick={() => void dismissCompletedOperations()}>
+                      Clear Finished
+                    </button>
+                  </div>
                 </div>
                 <div className="fs-operations-list">
                   {recentOperations.map((operation) => {
                     const progressLabel = formatOperationProgress(operation);
                     const progressValue = Number.parseInt(progressLabel, 10) || 0;
+                    const isBusy = operationBusyIds.includes(operation.id);
+                    const canCancel = operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'cancelling';
+                    const canDismiss = !isFsOperationActive(operation);
                     return (
                       <article key={operation.id} className={`fs-operation-card fs-operation-card--${operation.status}`}>
-                        <div className="fs-operation-card__topline">
-                          <strong>{describeOperation(operation)}</strong>
-                          <span>{operation.status}</span>
+                        <div className="fs-operation-card__head">
+                          <div className="fs-operation-card__topline">
+                            <strong>{describeOperation(operation)}</strong>
+                            <span>{formatOperationStatus(operation)}</span>
+                          </div>
+                          <div className="fs-operation-card__actions">
+                            <button
+                              className="ui-button"
+                              type="button"
+                              onClick={() => void controlFsOperation(operation, 'cancel')}
+                              disabled={!canCancel || isBusy || operation.status === 'cancelling'}
+                            >
+                              {operation.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
+                            </button>
+                            <button
+                              className="ui-button"
+                              type="button"
+                              onClick={() => void controlFsOperation(operation, 'dismiss')}
+                              disabled={!canDismiss || isBusy}
+                            >
+                              Dismiss
+                            </button>
+                          </div>
                         </div>
                         <div className="fs-operation-card__meta">
                           <span>{operation.totalItems > 0 ? `${operation.processedItems}/${operation.totalItems} items` : 'Preparing items'}</span>
                           <span>{operation.totalBytes > 0 ? `${formatBytes(operation.processedBytes)} / ${formatBytes(operation.totalBytes)}` : progressLabel}</span>
                           <span>{formatEntryTime(operation.updatedAt || operation.createdAt)}</span>
                         </div>
-                        <div className="fs-operation-progress" aria-hidden="true">
-                          <span style={{ width: `${Math.min(100, Math.max(0, progressValue))}%` }} />
+                        <div className="fs-operation-card__progress-row">
+                          <div className="fs-operation-progress" aria-hidden="true">
+                            <span style={{ width: `${Math.min(100, Math.max(0, progressValue))}%` }} />
+                          </div>
+                          <strong>{progressLabel}</strong>
                         </div>
                         <p className="fs-operation-card__message">{operation.message || describeOperation(operation)}</p>
                         {operation.failureCount > 0 ? (

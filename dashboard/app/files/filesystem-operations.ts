@@ -1,6 +1,6 @@
 'use client';
 
-export type FsOperationStatus = 'queued' | 'receiving' | 'running' | 'success' | 'partial' | 'failed';
+export type FsOperationStatus = 'queued' | 'receiving' | 'running' | 'cancelling' | 'success' | 'partial' | 'failed' | 'cancelled';
 export type FsOperationKind = 'upload' | 'copy' | 'move' | 'delete';
 
 export type FsOperationFailure = {
@@ -82,7 +82,7 @@ export const normalizeFsOperation = (payload: Partial<FsOperation> | null | unde
   processedBytes: Math.max(0, Number(payload?.processedBytes || 0) || 0),
   processedItems: Math.max(0, Number(payload?.processedItems || 0) || 0),
   sourcePaths: Array.isArray(payload?.sourcePaths) ? payload.sourcePaths.map((entry) => String(entry || '')).filter(Boolean) : [],
-  status: payload?.status === 'queued' || payload?.status === 'receiving' || payload?.status === 'running' || payload?.status === 'success' || payload?.status === 'partial'
+  status: payload?.status === 'queued' || payload?.status === 'receiving' || payload?.status === 'running' || payload?.status === 'cancelling' || payload?.status === 'success' || payload?.status === 'partial' || payload?.status === 'cancelled'
     ? payload.status
     : 'failed',
   totalBytes: Math.max(0, Number(payload?.totalBytes || 0) || 0),
@@ -94,7 +94,7 @@ export const normalizeFsOperation = (payload: Partial<FsOperation> | null | unde
 });
 
 export const isFsOperationActive = (operation: FsOperation) =>
-  operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running';
+  operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'cancelling';
 
 const fileFromEntry = (entry: FileSystemEntryLike) => new Promise<File>((resolve, reject) => {
   if (!entry.file) {
@@ -197,4 +197,3 @@ export const dedupeUploadFiles = (files: FsUploadFile[]): FsUploadFile[] => {
   });
   return [...byPath.values()];
 };
-

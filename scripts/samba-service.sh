@@ -12,6 +12,7 @@ SAMBA_PID_PATH="${SAMBA_PID_PATH:-$RUNTIME_DIR/samba.pid}"
 SAMBA_RENDERER="${SAMBA_RENDERER:-$PROJECT/scripts/render-samba-config.js}"
 SAMBA_LOG_PATH="${SAMBA_LOG_PATH:-$LOG_DIR/samba.log}"
 SMBD_BIN="${SMBD_BIN:-$(command -v smbd || true)}"
+SERVICE_NAME="samba"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$SAMBA_RUNTIME_DIR"
 
@@ -64,6 +65,28 @@ status_samba() {
     exit 1
 }
 
+status_json() {
+    local running=false
+    local status="stopped"
+    local checked_at=""
+    local status_code=1
+
+    if is_running; then
+        running=true
+        status="running"
+        status_code=0
+    fi
+
+    checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+        "$SERVICE_NAME" \
+        "$running" \
+        "$status" \
+        "$checked_at"
+
+    return "$status_code"
+}
+
 case "${1:-}" in
     start)
         start_samba
@@ -76,13 +99,17 @@ case "${1:-}" in
         start_samba
         ;;
     status)
-        status_samba
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            status_samba
+        fi
         ;;
     render)
         node "$SAMBA_RENDERER"
         ;;
     *)
-        printf 'Usage: %s {start|stop|restart|status|render}\n' "$0" >&2
+        printf 'Usage: %s {start|stop|restart|status [--json]|render}\n' "$0" >&2
         exit 1
         ;;
 esac
