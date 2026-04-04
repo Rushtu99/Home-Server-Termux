@@ -1,4 +1,4 @@
-const { isValidTorrentSource, validateMediaTorrentPayload } = require('../lib/torrent');
+const { isPrivateTorrentHost, isValidTorrentSource, validateMediaTorrentPayload } = require('../lib/torrent');
 
 describe('torrent helpers', () => {
   it('accepts magnet and http/https sources', () => {
@@ -11,6 +11,16 @@ describe('torrent helpers', () => {
     expect(isValidTorrentSource('')).toBe(false);
     expect(isValidTorrentSource('ftp://example.com/file.torrent')).toBe(false);
     expect(isValidTorrentSource('not-a-url')).toBe(false);
+  });
+
+  it('rejects localhost and private-network torrent URLs', () => {
+    expect(isPrivateTorrentHost('localhost')).toBe(true);
+    expect(isPrivateTorrentHost('192.168.1.20')).toBe(true);
+    expect(isPrivateTorrentHost('10.0.0.4')).toBe(true);
+    expect(isPrivateTorrentHost('example.com')).toBe(false);
+    expect(isValidTorrentSource('http://localhost/test.torrent')).toBe(false);
+    expect(isValidTorrentSource('http://192.168.1.20/test.torrent')).toBe(false);
+    expect(isValidTorrentSource('http://10.0.0.4/test.torrent')).toBe(false);
   });
 
   it('validates lane + media type constraints', () => {

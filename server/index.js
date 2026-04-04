@@ -21,6 +21,7 @@ const {
 } = require('./lib/storage-protection');
 const { buildQbittorrentWebUiUrl, extractQbittorrentSidCookie } = require('./lib/qb-webui');
 const { isValidTorrentSource } = require('./lib/torrent');
+const { extractUpstreamErrorText, toClientFacingUpstreamError } = require('./lib/upstream-errors');
 
 const ENV_FILE = path.resolve(__dirname, '.env');
 if (typeof loadEnvFile === 'function' && fs.existsSync(ENV_FILE)) {
@@ -4746,7 +4747,11 @@ const fetchOnlineModels = async ({ force = false } = {}) => {
         activeModelId: '',
         available: false,
         configured: true,
-        error: String(body?.error?.message || body?.error || `Online provider returned ${response.status}`),
+        error: toClientFacingUpstreamError({
+          status: response.status,
+          rawMessage: body?.error?.message || body?.error,
+          fallbackMessage: 'Online provider is unavailable.',
+        }),
         models: [],
       };
       onlineModelCache = {
@@ -5139,13 +5144,18 @@ const llmConversationDeleteHandler = (req, res) => {
 };
 
 const readUpstreamErrorMessage = async (response, fallbackMessage) => {
-  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-  if (contentType.includes('application/json')) {
-    const payload = await response.json().catch(() => ({}));
-    return String(payload?.error?.message || payload?.error || fallbackMessage);
+  const rawMessage = await extractUpstreamErrorText(response, fallbackMessage);
+  if (rawMessage && rawMessage !== fallbackMessage) {
+    console.warn('[llm] upstream error', {
+      message: rawMessage,
+      status: response.status,
+    });
   }
-  const text = await response.text().catch(() => '');
-  return String(text || fallbackMessage);
+  return toClientFacingUpstreamError({
+    status: response.status,
+    rawMessage,
+    fallbackMessage,
+  });
 };
 
 const parseSseBlocks = (buffer) => {
@@ -5486,8 +5496,19 @@ const llmChatHandler = async (req, res) => {
     ? await callOnlineChatCompletion(chatPayload)
     : await callLlmChatCompletion(chatPayload);
   if (!response.ok) {
+    const rawMessage = body?.error?.message || body?.error;
+    if (rawMessage) {
+      console.warn('[llm] upstream request failed', {
+        message: String(rawMessage),
+        status: response.status,
+      });
+    }
     return res.status(502).json({
-      error: body?.error?.message || body?.error || 'LLM request failed',
+      error: toClientFacingUpstreamError({
+        status: response.status,
+        rawMessage,
+        fallbackMessage: 'LLM request failed',
+      }),
     });
   }
 
@@ -5567,10 +5588,20 @@ const openAiChatCompletionsHandler = async (req, res) => {
   if (stream) {
     const upstream = await callLlmChatCompletion(payload, { stream: true });
     if (!upstream.ok) {
-      const errorBody = await upstream.json().catch(() => ({}));
+      const rawMessage = await extractUpstreamErrorText(upstream, 'Upstream LLM stream failed');
+      if (rawMessage) {
+        console.warn('[llm] upstream stream failed', {
+          message: rawMessage,
+          status: upstream.status,
+        });
+      }
       return res.status(502).json({
         error: {
-          message: errorBody?.error?.message || errorBody?.error || 'Upstream LLM stream failed',
+          message: toClientFacingUpstreamError({
+            status: upstream.status,
+            rawMessage,
+            fallbackMessage: 'Upstream LLM stream failed',
+          }),
           type: 'upstream_error',
         },
       });
@@ -5588,9 +5619,20 @@ const openAiChatCompletionsHandler = async (req, res) => {
 
   const { response, body } = await callLlmChatCompletion(payload);
   if (!response.ok) {
+    const rawMessage = body?.error?.message || body?.error;
+    if (rawMessage) {
+      console.warn('[llm] upstream openai compat failed', {
+        message: String(rawMessage),
+        status: response.status,
+      });
+    }
     return res.status(502).json({
       error: {
-        message: body?.error?.message || body?.error || 'Upstream LLM request failed',
+        message: toClientFacingUpstreamError({
+          status: response.status,
+          rawMessage,
+          fallbackMessage: 'Upstream LLM request failed',
+        }),
         type: 'upstream_error',
       },
     });

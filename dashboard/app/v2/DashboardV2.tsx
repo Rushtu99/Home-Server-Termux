@@ -53,6 +53,7 @@ export default function DashboardV2() {
     bootstrap,
     bootstrapError,
     loadingBootstrap,
+    markLoggedOut,
     reloadBootstrap,
     setActiveWorkspace,
     reloadWorkspace,
@@ -228,11 +229,17 @@ export default function DashboardV2() {
   const handleLogout = async () => {
     setHeaderBusy(true);
     try {
-      await appFetch('/api/auth/logout', {
+      const response = await appFetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
       });
-      window.location.reload();
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+        throw new Error(String(payload.error || 'Logout failed'));
+      }
+      markLoggedOut();
+    } catch (error) {
+      setLoginError(toErrorMessage(error, 'Logout failed'));
     } finally {
       setHeaderBusy(false);
     }
@@ -247,7 +254,7 @@ export default function DashboardV2() {
       <aside className={`dash2-sidebar ${sidebarOpen ? 'dash2-sidebar--open' : ''}`} aria-label="Dashboard workspaces">
         <div className="dash2-brand">
           <strong>HmSTx v2</strong>
-          <span>Neon operations console</span>
+          <span>Operations dashboard</span>
         </div>
 
         <nav className="dash2-nav">

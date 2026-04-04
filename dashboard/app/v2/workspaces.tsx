@@ -93,6 +93,22 @@ const compactPathSummary = (value: unknown) => {
   return `${parts.slice(0, 3).join('/')}/…/${parts.slice(-2).join('/')}`;
 };
 
+const compactWorkflowSummary = (value: unknown, fallback: string) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return fallback;
+  }
+  if (/^library roots ready at /i.test(text)) {
+    const list = text.replace(/^library roots ready at /i, '');
+    const locations = list.split(/\sand\s/i).map((entry) => entry.trim()).filter(Boolean);
+    return `Library roots ready (${locations.length} location${locations.length === 1 ? '' : 's'}).`;
+  }
+  if (text.length > 120) {
+    return `${text.slice(0, 117)}…`;
+  }
+  return text;
+};
+
 const toHistoryPoint = (value: unknown) => {
   const num = Number(value || 0);
   if (!Number.isFinite(num)) {
@@ -219,7 +235,7 @@ function TinySparkline({
   return (
     <article className="dash2-graph-card">
       <header>
-        <strong>{label} (legacy)</strong>
+        <strong>{label}</strong>
         <span>{Math.round(latest)}%</span>
       </header>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} trend`}>
@@ -460,7 +476,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
       key: 'watch',
       title: String(watch.label || 'Watch'),
       status: String(watch.status || 'unknown'),
-      summary: String(watch.summary || 'Primary playback and library surface.'),
+      summary: compactWorkflowSummary(watch.summary, 'Primary playback and library surface.'),
       bullets: [
         `Services: ${watchServiceKeys.join(', ') || 'jellyfin'}`,
         `Library roots: ${watchLibraryRoots.length}`,
@@ -472,7 +488,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
       key: 'requests',
       title: String(requests.label || 'Requests'),
       status: String(requests.status || 'unknown'),
-      summary: String(requests.summary || 'Request intake before automation lanes.'),
+      summary: compactWorkflowSummary(requests.summary, 'Request intake before automation lanes.'),
       bullets: [
         `Services: ${requestServiceKeys.join(', ') || 'none'}`,
         `Portal ready: ${requests.blocker ? 'no' : 'yes'}`,
@@ -484,7 +500,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
       key: 'automation',
       title: String(automation.label || 'Automation'),
       status: String(automation.status || 'unknown'),
-      summary: String(automation.summary || 'Indexer and automation orchestration lane.'),
+      summary: compactWorkflowSummary(automation.summary, 'Indexer and automation orchestration lane.'),
       bullets: [
         `Healthy: ${Number(automation.healthy || 0)}/${Math.max(Number(automation.total || 0), 0)}`,
         `Services: ${automationServiceKeys.join(', ') || 'none'}`,
@@ -496,7 +512,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
       key: 'support',
       title: String(support.label || 'Support'),
       status: String(support.status || 'unknown'),
-      summary: String(support.summary || 'Backing services for media metadata and jobs.'),
+      summary: compactWorkflowSummary(support.summary, 'Backing services for media metadata and jobs.'),
       bullets: [
         `Services: ${supportServiceKeys.join(', ') || 'none'}`,
         `Telemetry status: ${String(support.status || 'unknown')}`,
@@ -508,7 +524,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
       key: 'livetv',
       title: 'Live TV',
       status: String(liveTv.status || 'unknown'),
-      summary: String(liveTv.summary || 'Playlist + guide feed readiness for Jellyfin.'),
+      summary: compactWorkflowSummary(liveTv.summary, 'Playlist + guide feed readiness for Jellyfin.'),
       bullets: [
         `Channels: ${Number(liveTv.channelCount || 0)}`,
         `Playlist: ${liveTv.playlistConfigured ? compactPathSummary(liveTv.playlistSource) : 'not configured'}`,
@@ -548,19 +564,19 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
   return (
     <>
       <MetricGrid>
-        <MetricTile label="Watch surface" value={String(watch.label || 'Jellyfin')} helper={String(watch.summary || 'Primary playback surface')} />
-        <MetricTile label="Workflow health" value={`${Math.max(workflowReady, 0)}/${Math.max(workflowTotal, 0)}`} helper={String(automation.summary || 'Automation lane status')} />
+        <MetricTile label="Watch surface" value={String(watch.label || 'Jellyfin')} helper={compactWorkflowSummary(watch.summary, 'Primary playback surface')} />
+        <MetricTile label="Workflow health" value={`${Math.max(workflowReady, 0)}/${Math.max(workflowTotal, 0)}`} helper={compactWorkflowSummary(automation.summary, 'Automation lane status')} />
         <MetricTile label="Library list" value={libraries.length} helper={mediaHealthAvailable ? 'Live Jellyfin library roots' : 'Jellyfin health API unavailable'} />
-        <MetricTile label="Live TV" value={`${Number(liveTv.channelCount || 0)} channels`} helper={String(liveTv.summary || 'Live TV readiness')} />
+        <MetricTile label="Live TV" value={`${Number(liveTv.channelCount || 0)} channels`} helper={compactWorkflowSummary(liveTv.summary, 'Live TV readiness')} />
       </MetricGrid>
 
-      <SectionCard title="Media workflow" subtitle="Swipe cards left/right for watch → request → automate flow with stacked cascade preview.">
+      <SectionCard title="Media workflow" subtitle="Playback, requests, automation, support, and live TV readiness in one lane view.">
         <div className="dash2-workflow-carousel" role="list" aria-label="Media workflow cards">
           {workflowCards.map((entry, index) => (
             <article key={entry.key} className="dash2-workflow-card" role="listitem">
               <header className="dash2-workflow-card__header">
                 <div>
-                  <p className="dash2-workflow-card__step">Step {index + 1}</p>
+                  <p className="dash2-workflow-card__step">Stage {index + 1}</p>
                   <h3>{entry.title}</h3>
                 </div>
                 <StatusBadge tone={toneFromStatus(entry.status)}>{entry.status}</StatusBadge>
@@ -635,7 +651,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
             { label: 'Playlist source', value: <span className="dash2-small-copy">{compactPathSummary(liveTv.playlistSource)}</span> },
             { label: 'Guide source', value: <span className="dash2-small-copy">{compactPathSummary(liveTv.guideSource)}</span> },
             { label: 'Channels mapped', value: liveTv.channelsMapped === true ? 'yes' : liveTv.channelsMapped === false ? 'no' : 'unknown' },
-            { label: 'Summary', value: <span className="dash2-small-copy">{String(liveTv.summary || 'No IPTV summary available')}</span> },
+            { label: 'Summary', value: <span className="dash2-small-copy">{compactWorkflowSummary(liveTv.summary, 'No IPTV summary available')}</span> },
           ]}
         />
       </SectionCard>

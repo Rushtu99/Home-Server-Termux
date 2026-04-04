@@ -10,6 +10,7 @@ type UseWorkspaceDataResult = {
   bootstrap: UiBootstrapResponse | null;
   bootstrapError: string;
   loadingBootstrap: boolean;
+  markLoggedOut: () => void;
   reloadBootstrap: () => void;
   setActiveWorkspace: (workspace: WorkspaceKey) => void;
   reloadWorkspace: () => void;
@@ -24,6 +25,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const [bootstrapError, setBootstrapError] = useState('');
   const [loadingBootstrap, setLoadingBootstrap] = useState(true);
   const [bootstrapReloadTick, setBootstrapReloadTick] = useState(0);
+  const [sessionInactive, setSessionInactive] = useState(false);
   const [workspaceData, setWorkspaceData] = useState<UiWorkspaceResponse | null>(null);
   const [workspaceError, setWorkspaceError] = useState('');
   const [loadingWorkspace, setLoadingWorkspace] = useState(true);
@@ -42,6 +44,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   }, []);
 
   const reloadBootstrap = useCallback(() => {
+    setSessionInactive(false);
     setBootstrapError('');
     setLoadingBootstrap(true);
     setBootstrapReloadTick((current) => current + 1);
@@ -49,6 +52,18 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
 
   const reloadWorkspace = useCallback(() => {
     setWorkspaceReloadTick((current) => current + 1);
+  }, []);
+
+  const markLoggedOut = useCallback(() => {
+    setSessionInactive(true);
+    loadedWorkspaceKeyRef.current = '';
+    setBootstrap(null);
+    setBootstrapError('Login required');
+    setLoadingBootstrap(false);
+    setWorkspaceData(null);
+    setWorkspaceError('');
+    setLoadingWorkspace(false);
+    setActiveWorkspaceState(DEFAULT_WORKSPACE);
   }, []);
 
   useEffect(() => {
@@ -62,6 +77,10 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   }, []);
 
   useEffect(() => {
+    if (sessionInactive) {
+      setLoadingBootstrap(false);
+      return;
+    }
     let cancelled = false;
 
     const loadBootstrap = async () => {
@@ -71,6 +90,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
           return;
         }
         setBootstrap(payload);
+        setSessionInactive(false);
         setBootstrapError('');
         if (typeof window !== 'undefined') {
           const params = new URLSearchParams(window.location.search);
@@ -98,9 +118,13 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       cancelled = true;
       window.clearInterval(bootstrapTimer);
     };
-  }, [bootstrapReloadTick]);
+  }, [bootstrapReloadTick, sessionInactive]);
 
   useEffect(() => {
+    if (sessionInactive) {
+      setLoadingWorkspace(false);
+      return;
+    }
     let cancelled = false;
 
     const loadWorkspace = async () => {
@@ -139,7 +163,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       cancelled = true;
       window.clearInterval(workspaceTimer);
     };
-  }, [activeWorkspace, workspaceReloadTick]);
+  }, [activeWorkspace, sessionInactive, workspaceReloadTick]);
 
   return useMemo(
     () => ({
@@ -147,6 +171,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       bootstrap,
       bootstrapError,
       loadingBootstrap,
+      markLoggedOut,
       reloadBootstrap,
       setActiveWorkspace,
       reloadWorkspace,
@@ -159,6 +184,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       bootstrap,
       bootstrapError,
       loadingBootstrap,
+      markLoggedOut,
       reloadBootstrap,
       loadingWorkspace,
       reloadWorkspace,

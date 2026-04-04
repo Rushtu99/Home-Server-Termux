@@ -1,6 +1,33 @@
 const TORRENT_LANES = new Set(['arr', 'standalone']);
 const ARR_MEDIA_TYPES = new Set(['movies', 'series']);
 
+const PRIVATE_IPV4_PATTERNS = [
+  /^0\.0\.0\.0$/,
+  /^10\./,
+  /^127\./,
+  /^169\.254\./,
+  /^172\.(1[6-9]|2\d|3[0-1])\./,
+  /^192\.168\./,
+];
+
+const isPrivateTorrentHost = (hostname) => {
+  const value = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!value) {
+    return true;
+  }
+  if (
+    value === 'localhost'
+    || value === 'ip6-localhost'
+    || value === '::1'
+    || value === '::'
+    || value === 'host.docker.internal'
+    || value.endsWith('.local')
+  ) {
+    return true;
+  }
+  return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(value));
+};
+
 const isValidTorrentSource = (source) => {
   const value = String(source || '').trim();
   if (!value) {
@@ -11,7 +38,10 @@ const isValidTorrentSource = (source) => {
   }
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    return !isPrivateTorrentHost(parsed.hostname);
   } catch {
     return false;
   }
@@ -38,6 +68,7 @@ const validateMediaTorrentPayload = ({ source, lane, mediaType }) => {
 module.exports = {
   ARR_MEDIA_TYPES,
   TORRENT_LANES,
+  isPrivateTorrentHost,
   isValidTorrentSource,
   validateMediaTorrentPayload,
 };
