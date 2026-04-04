@@ -17,10 +17,14 @@ describe('torrent helpers', () => {
     expect(isPrivateTorrentHost('localhost')).toBe(true);
     expect(isPrivateTorrentHost('192.168.1.20')).toBe(true);
     expect(isPrivateTorrentHost('10.0.0.4')).toBe(true);
+    expect(isPrivateTorrentHost('fd12:3456:789a::1')).toBe(true);
+    expect(isPrivateTorrentHost('fe80::1')).toBe(true);
     expect(isPrivateTorrentHost('example.com')).toBe(false);
     expect(isValidTorrentSource('http://localhost/test.torrent')).toBe(false);
     expect(isValidTorrentSource('http://192.168.1.20/test.torrent')).toBe(false);
     expect(isValidTorrentSource('http://10.0.0.4/test.torrent')).toBe(false);
+    expect(isValidTorrentSource('http://[fd12:3456:789a::1]/test.torrent')).toBe(false);
+    expect(isValidTorrentSource('http://[fe80::1]/test.torrent')).toBe(false);
   });
 
   it('validates lane + media type constraints', () => {

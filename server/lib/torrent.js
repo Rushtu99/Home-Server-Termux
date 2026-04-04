@@ -1,3 +1,5 @@
+const net = require('net');
+
 const TORRENT_LANES = new Set(['arr', 'standalone']);
 const ARR_MEDIA_TYPES = new Set(['movies', 'series']);
 
@@ -8,6 +10,15 @@ const PRIVATE_IPV4_PATTERNS = [
   /^169\.254\./,
   /^172\.(1[6-9]|2\d|3[0-1])\./,
   /^192\.168\./,
+];
+
+const PRIVATE_IPV6_PATTERNS = [
+  /^::1$/,
+  /^::$/,
+  /^::ffff:(?:\d{1,3}\.){3}\d{1,3}$/,
+  /^fc[0-9a-f]{2}:/,
+  /^fd[0-9a-f]{2}:/,
+  /^fe[89ab][0-9a-f]:/,
 ];
 
 const isPrivateTorrentHost = (hostname) => {
@@ -24,6 +35,9 @@ const isPrivateTorrentHost = (hostname) => {
     || value.endsWith('.local')
   ) {
     return true;
+  }
+  if (net.isIP(value) === 6) {
+    return PRIVATE_IPV6_PATTERNS.some((pattern) => pattern.test(value));
   }
   return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(value));
 };
