@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import {
+  addMediaTorrent,
   checkDrives,
   deleteLlmConversation,
   disconnectConnection,
@@ -12,7 +13,7 @@ import {
   recheckStorageProtection,
   refreshOnlineModels,
   resumeStorageProtection,
-  sendLlmChat,
+  sendLlmChatStream,
   selectLlmModel,
   selectOnlineModel,
   unmountFtpFavourite,
@@ -100,6 +101,102 @@ const toHistoryPoint = (value: unknown) => {
   return Math.max(0, Math.min(100, num));
 };
 
+const driveIdentityKey = (entry: Record<string, unknown>) => {
+  const dirName = String(entry.dirName || '').trim().toLowerCase();
+  if (dirName) {
+    return `dir:${dirName}`;
+  }
+  const letter = String(entry.letter || '').trim().toUpperCase();
+  if (letter) {
+    return `letter:${letter}`;
+  }
+  const mountPoint = String(entry.mountPoint || '').trim().toLowerCase();
+  if (mountPoint) {
+    return `mount:${mountPoint}`;
+  }
+  return 'unknown';
+};
+
+const driveStatePriority = (stateValue: unknown) => {
+  const state = String(stateValue || '').trim().toLowerCase();
+  if (state === 'mounted' || state === 'working' || state === 'ready') {
+    return 4;
+  }
+  if (state === 'starting' || state === 'pending') {
+    return 3;
+  }
+  if (state === 'error' || state === 'stalled') {
+    return 2;
+  }
+  if (state === 'unmounted' || state === 'stopped') {
+    return 1;
+  }
+  return 0;
+};
+
+const normalizeDriveState = (entry: Record<string, unknown>) => {
+  const raw = String(entry.state || '').trim().toLowerCase();
+  if (raw === 'mounted' || raw === 'starting' || raw === 'error' || raw === 'unmounted') {
+    return raw;
+  }
+  if (raw.includes('mount') && !raw.includes('unmount')) {
+    return 'mounted';
+  }
+  if (raw.includes('start') || raw.includes('pending') || raw.includes('running')) {
+    return 'starting';
+  }
+  if (raw.includes('error') || raw.includes('fail')) {
+    return 'error';
+  }
+  if (raw.includes('unmount') || raw.includes('stopped')) {
+    return 'unmounted';
+  }
+  return 'unmounted';
+};
+
+const dedupeDrives = (entries: Array<Record<string, unknown>>) => {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const entry of entries) {
+    const key = driveIdentityKey(entry);
+    const current = map.get(key);
+    if (!current) {
+      map.set(key, entry);
+      continue;
+    }
+    const currentPriority = driveStatePriority(current.state);
+    const candidatePriority = driveStatePriority(entry.state);
+    if (candidatePriority > currentPriority) {
+      map.set(key, entry);
+      continue;
+    }
+    if (candidatePriority < currentPriority) {
+      continue;
+    }
+    const currentMount = String(current.mountPoint || '');
+    const candidateMount = String(entry.mountPoint || '');
+    if (candidateMount && (!currentMount || candidateMount.length < currentMount.length)) {
+      map.set(key, entry);
+    }
+  }
+  return Array.from(map.values());
+};
+
+const toneFromStatus = (statusValue: unknown): 'ok' | 'warn' | 'danger' | 'muted' => {
+  const status = String(statusValue || '').trim().toLowerCase();
+  if (status === 'working' || status === 'ready' || status === 'mounted' || status === 'healthy') {
+    return 'ok';
+  }
+  if (status === 'stalled' || status === 'blocked' || status === 'starting' || status === 'degraded' || status === 'setup') {
+    return 'warn';
+  }
+  if (status === 'error' || status === 'failed' || status === 'unavailable' || status === 'crashed') {
+    return 'danger';
+  }
+  return 'muted';
+};
+
+type NormalizedDrive = Record<string, unknown> & { state: string };
+
 function TinySparkline({
   points,
   label,
@@ -108,7 +205,7 @@ function TinySparkline({
   label: string;
 }) {
   const width = 320;
-  const height = 96;
+  const height = 104;
   const prepared = points.length > 1 ? points : [0, ...(points.length === 1 ? points : [0])];
   const path = prepared
     .map((point, index) => {
@@ -122,10 +219,14 @@ function TinySparkline({
   return (
     <article className="dash2-graph-card">
       <header>
-        <strong>{label}</strong>
+        <strong>{label} (legacy)</strong>
         <span>{Math.round(latest)}%</span>
       </header>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} trend`}>
+        <line x1="0" y1={height * 0.25} x2={width} y2={height * 0.25} className="dash2-graph-card__grid" />
+        <line x1="0" y1={height * 0.5} x2={width} y2={height * 0.5} className="dash2-graph-card__grid" />
+        <line x1="0" y1={height * 0.75} x2={width} y2={height * 0.75} className="dash2-graph-card__grid" />
+        <line x1="0" y1={height - 1} x2={width} y2={height - 1} className="dash2-graph-card__baseline" />
         <path d={areaPath} className="dash2-graph-card__area" />
         <path d={path} className="dash2-graph-card__line" />
       </svg>
@@ -212,113 +313,103 @@ function OverviewWorkspace({
         </div>
       </SectionCard>
 
-      <div className="dash2-overview-layout">
-        <div className="dash2-overview-layout__main">
-          <SectionCard title="Lifecycle health" subtitle="Service state distribution across the host.">
-            <KeyValueList
-              rows={[
-                { label: 'Healthy', value: Number(lifecycleCounts.healthy || 0) },
-                { label: 'Degraded', value: Number(lifecycleCounts.degraded || 0) },
-                { label: 'Blocked', value: Number(lifecycleCounts.blocked || 0) },
-                { label: 'Stopped', value: Number(lifecycleCounts.stopped || 0) },
-                { label: 'Crashed', value: Number(lifecycleCounts.crashed || 0) },
-              ]}
-            />
-          </SectionCard>
+      <SectionCard title="Lifecycle health" subtitle="Row 1: Health, watchlist, limited, and action signals for service lifecycle.">
+        <KeyValueList
+          rows={[
+            { label: 'Health', value: String(lifecycle.state || 'unknown') },
+            { label: 'Watchlist', value: `Healthy ${Number(lifecycleCounts.healthy || 0)} / Stopped ${Number(lifecycleCounts.stopped || 0)}` },
+            { label: 'Limited', value: `Blocked ${Number(lifecycleCounts.blocked || 0)} / Crashed ${Number(lifecycleCounts.crashed || 0)}` },
+            { label: 'Action', value: `${degradedServices} service(s) need operator attention` },
+          ]}
+        />
+      </SectionCard>
 
-          <SectionCard
-            title="Storage mounts"
-            subtitle="Current mount inventory from the backend."
-            actions={(
-              <button className="ui-button" type="button" disabled={mountBusy} onClick={() => void handleRecheckMounts()}>
-                {mountBusy ? 'Rechecking…' : 'Recheck mounts'}
-              </button>
-            )}
-          >
-            {mountStatus ? <p className="dash2-admin-note">{mountStatus}</p> : null}
-            {mounts.length === 0 ? <EmptyState title="No mounts" message="Storage telemetry is currently unavailable." /> : (
-              <ul className="dash2-list">
-                {mounts.map((entry, index) => {
-                  const role = mountRole(entry);
-                  return (
-                    <li key={`${String(entry.mount || entry.filesystem || 'mount')}-${index}`}>
-                      <div>
-                        <strong>{String(entry.mount || entry.filesystem || 'mount')}</strong>
-                        <p>{String(entry.category || entry.fsType || 'storage')}</p>
-                      </div>
-                      <div className="dash2-list__actions">
-                        <StatusBadge tone="muted">{role}</StatusBadge>
-                        <StatusBadge tone="muted">{toPercent(entry.usePercent)}</StatusBadge>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </SectionCard>
-        </div>
+      <SectionCard title="System telemetry detail" subtitle="Row 2: Legacy-style host telemetry in compact row form.">
+        <KeyValueList
+          rows={[
+            { label: 'Health', value: `CPU ${toPercent(monitor.cpuLoad)} · RAM ${memoryUsedPercent}%` },
+            { label: 'Watchlist', value: `Load ${Number(monitor.loadAvg1m || 0).toFixed(2)} / ${Number(monitor.loadAvg5m || 0).toFixed(2)} / ${Number(monitor.loadAvg15m || 0).toFixed(2)}` },
+            { label: 'Limited', value: `Event loop ${Number(monitor.eventLoopP95Ms || 0).toFixed(2)} ms p95` },
+            { label: 'Action', value: `RX/TX ${formatBytes(network.rxRate)}ps / ${formatBytes(network.txRate)}ps` },
+          ]}
+        />
+      </SectionCard>
 
-        <div className="dash2-overview-layout__side">
-          <SectionCard title="Operational todo metrics" subtitle="Quick counts for what needs operator attention next.">
-            <KeyValueList
-              rows={[
-                { label: 'Services needing attention', value: degradedServices },
-                { label: 'Mounts over 80%', value: riskyMounts },
-                { label: 'Connected sessions', value: users.length },
-                { label: 'CPU cores', value: Number(monitor.cpuCores || 0) || 'n/a' },
-                { label: 'Node RSS', value: formatBytes(monitor.processRss) },
-              ]}
-            />
-          </SectionCard>
+      <SectionCard title="Operational todo metrics" subtitle="Row 3: Operational rollup for sessions, storage risk, and host pressure.">
+        <KeyValueList
+          rows={[
+            { label: 'Health', value: `${users.length} live session(s)` },
+            { label: 'Watchlist', value: `${riskyMounts} mount(s) over 80%` },
+            { label: 'Limited', value: `${Number(monitor.cpuCores || 0) || 'n/a'} CPU cores · Wi-Fi ${device.wifiDbm != null ? `${Number(device.wifiDbm || 0)} dBm` : 'n/a'}` },
+            { label: 'Action', value: `Node RSS ${formatBytes(monitor.processRss)} · Battery ${device.batteryPct != null ? `${Number(device.batteryPct || 0)}%` : 'n/a'}` },
+          ]}
+        />
+      </SectionCard>
 
-          <SectionCard title="System telemetry detail" subtitle="Legacy-style host metrics restored next to lifecycle operations.">
-            <KeyValueList
-              rows={[
-                { label: 'Load average', value: `${Number(monitor.loadAvg1m || 0).toFixed(2)} / ${Number(monitor.loadAvg5m || 0).toFixed(2)} / ${Number(monitor.loadAvg15m || 0).toFixed(2)}` },
-                { label: 'Event loop p95', value: `${Number(monitor.eventLoopP95Ms || 0).toFixed(2)} ms` },
-                { label: 'Heap used', value: formatBytes(monitor.processHeapUsed) },
-                { label: 'Network RX/TX', value: `${formatBytes(network.rxRate)}ps / ${formatBytes(network.txRate)}ps` },
-                { label: 'Battery', value: device.batteryPct != null ? `${Number(device.batteryPct || 0)}%` : 'n/a' },
-                { label: 'Wi-Fi', value: device.wifiDbm != null ? `${Number(device.wifiDbm || 0)} dBm` : 'n/a' },
-              ]}
-            />
-          </SectionCard>
+      <SectionCard
+        title="Storage mounts"
+        subtitle="Current mount inventory from the backend."
+        actions={(
+          <button className="ui-button" type="button" disabled={mountBusy} onClick={() => void handleRecheckMounts()}>
+            {mountBusy ? 'Rechecking…' : 'Recheck mounts'}
+          </button>
+        )}
+      >
+        {mountStatus ? <p className="dash2-admin-note">{mountStatus}</p> : null}
+        {mounts.length === 0 ? <EmptyState title="No mounts" message="Storage telemetry is currently unavailable." /> : (
+          <ul className="dash2-list">
+            {mounts.map((entry, index) => {
+              const role = mountRole(entry);
+              return (
+                <li key={`${String(entry.mount || entry.filesystem || 'mount')}-${index}`}>
+                  <div>
+                    <strong>{compactPathSummary(entry.mount || entry.filesystem || 'mount')}</strong>
+                    <p>{String(entry.category || entry.fsType || 'storage')}</p>
+                  </div>
+                  <div className="dash2-list__actions">
+                    <StatusBadge tone="muted">{role}</StatusBadge>
+                    <StatusBadge tone="muted">{toPercent(entry.usePercent)}</StatusBadge>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </SectionCard>
 
-          <SectionCard title="Active sessions" subtitle="Current connected dashboard users and remote endpoints.">
-            {sessionStatus ? <p className="dash2-admin-note">{sessionStatus}</p> : null}
-            {users.length === 0 ? <EmptyState title="No sessions" message="No active sessions are currently reported." /> : (
-              <ul className="dash2-list">
-                {users.map((entry, index) => {
-                  const sessionId = String(entry.sessionId || '');
-                  const username = String(entry.username || 'user');
-                  const isCurrentUser = workspaceActions?.currentUsername && workspaceActions.currentUsername === username;
-                  return (
-                    <li key={`${sessionId || username}-${index}`}>
-                      <div>
-                        <strong>{username}</strong>
-                        <p>{String(entry.ip || 'ip')} · {String(entry.protocol || 'protocol')}:{String(entry.port || 'n/a')}</p>
-                      </div>
-                      <div className="dash2-list__actions">
-                        <StatusBadge tone={String(entry.status || '').toLowerCase() === 'active' ? 'ok' : 'muted'}>
-                          {String(entry.status || 'unknown')}
-                        </StatusBadge>
-                        <button
-                          className="ui-button"
-                          type="button"
-                          disabled={isCurrentUser || sessionBusy === sessionId}
-                          onClick={() => void handleDisconnect(sessionId)}
-                        >
-                          {sessionBusy === sessionId ? 'Disconnecting…' : isCurrentUser ? 'Current session' : 'Disconnect'}
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </SectionCard>
-        </div>
-      </div>
+      <SectionCard title="Active sessions" subtitle="Current connected dashboard users and remote endpoints.">
+        {sessionStatus ? <p className="dash2-admin-note">{sessionStatus}</p> : null}
+        {users.length === 0 ? <EmptyState title="No sessions" message="No active sessions are currently reported." /> : (
+          <ul className="dash2-list">
+            {users.map((entry, index) => {
+              const sessionId = String(entry.sessionId || '');
+              const username = String(entry.username || 'user');
+              const isCurrentUser = workspaceActions?.currentUsername && workspaceActions.currentUsername === username;
+              return (
+                <li key={`${sessionId || username}-${index}`}>
+                  <div>
+                    <strong>{username}</strong>
+                    <p>{String(entry.ip || 'ip')} · {String(entry.protocol || 'protocol')}:{String(entry.port || 'n/a')}</p>
+                  </div>
+                  <div className="dash2-list__actions">
+                    <StatusBadge tone={String(entry.status || '').toLowerCase() === 'active' ? 'ok' : 'muted'}>
+                      {String(entry.status || 'unknown')}
+                    </StatusBadge>
+                    <button
+                      className="ui-button"
+                      type="button"
+                      disabled={isCurrentUser || sessionBusy === sessionId}
+                      onClick={() => void handleDisconnect(sessionId)}
+                    >
+                      {sessionBusy === sessionId ? 'Disconnecting…' : isCurrentUser ? 'Current session' : 'Disconnect'}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </SectionCard>
     </>
   );
 }
@@ -339,6 +430,120 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
   const workflowTotal = Number(automation.total || 0) + 2;
   const mediaHealthAvailable = Boolean(mediaHealth.available);
   const mediaHealthStatus = String(mediaHealth.status || (mediaHealthAvailable ? 'working' : 'unavailable'));
+  const watchServiceKeys = asArray<unknown>(watch.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
+  const requestServiceKeys = asArray<unknown>(requests.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
+  const automationServiceKeys = asArray<unknown>(automation.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
+  const supportServiceKeys = asArray<unknown>(support.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
+  const subtitles = asRecord(mediaWorkflow.subtitles);
+  const servicesByKey = new Map(services.map((entry) => [String(entry.key || ''), entry]));
+  const arrServices = (['sonarr', 'radarr', 'prowlarr', 'bazarr'] as const).map((serviceKey) => {
+    const entry = servicesByKey.get(serviceKey);
+    const fallbackStatus = serviceKey === 'bazarr'
+      ? String(subtitles.status || 'unknown')
+      : String(automation.status || 'unknown');
+    return {
+      available: Boolean(entry?.available),
+      description: String(entry?.description || entry?.blocker || `${serviceKey} automation surface`),
+      key: serviceKey,
+      label: String(entry?.label || `${serviceKey.slice(0, 1).toUpperCase()}${serviceKey.slice(1)}`),
+      route: String(entry?.route || ''),
+      status: String(entry?.status || fallbackStatus || 'unknown'),
+    };
+  });
+  const watchLibraryRoots = asArray<unknown>(watch.libraryRoots);
+  const [arrSource, setArrSource] = useState('');
+  const [arrMediaType, setArrMediaType] = useState<'movies' | 'series'>('movies');
+  const [arrBusy, setArrBusy] = useState(false);
+  const [arrStatus, setArrStatus] = useState('');
+  const workflowCards = [
+    {
+      key: 'watch',
+      title: String(watch.label || 'Watch'),
+      status: String(watch.status || 'unknown'),
+      summary: String(watch.summary || 'Primary playback and library surface.'),
+      bullets: [
+        `Services: ${watchServiceKeys.join(', ') || 'jellyfin'}`,
+        `Library roots: ${watchLibraryRoots.length}`,
+        `Roots ready: ${watch.libraryRootReady === true ? 'yes' : watch.libraryRootReady === false ? 'no' : 'unknown'}`,
+        `Sample root: ${compactPathSummary(watchLibraryRoots[0])}`,
+      ],
+    },
+    {
+      key: 'requests',
+      title: String(requests.label || 'Requests'),
+      status: String(requests.status || 'unknown'),
+      summary: String(requests.summary || 'Request intake before automation lanes.'),
+      bullets: [
+        `Services: ${requestServiceKeys.join(', ') || 'none'}`,
+        `Portal ready: ${requests.blocker ? 'no' : 'yes'}`,
+        'Route: user request -> sonarr/radarr',
+        `Blocker: ${String(requests.blocker || 'none')}`,
+      ],
+    },
+    {
+      key: 'automation',
+      title: String(automation.label || 'Automation'),
+      status: String(automation.status || 'unknown'),
+      summary: String(automation.summary || 'Indexer and automation orchestration lane.'),
+      bullets: [
+        `Healthy: ${Number(automation.healthy || 0)}/${Math.max(Number(automation.total || 0), 0)}`,
+        `Services: ${automationServiceKeys.join(', ') || 'none'}`,
+        'Flow: indexers -> arr -> importer',
+        `Last state: ${String(automation.status || 'unknown')}`,
+      ],
+    },
+    {
+      key: 'support',
+      title: String(support.label || 'Support'),
+      status: String(support.status || 'unknown'),
+      summary: String(support.summary || 'Backing services for media metadata and jobs.'),
+      bullets: [
+        `Services: ${supportServiceKeys.join(', ') || 'none'}`,
+        `Telemetry status: ${String(support.status || 'unknown')}`,
+        'Role: queue + metadata persistence',
+        `Coverage: ${supportServiceKeys.length > 0 ? 'active backing lane' : 'missing support lane'}`,
+      ],
+    },
+    {
+      key: 'livetv',
+      title: 'Live TV',
+      status: String(liveTv.status || 'unknown'),
+      summary: String(liveTv.summary || 'Playlist + guide feed readiness for Jellyfin.'),
+      bullets: [
+        `Channels: ${Number(liveTv.channelCount || 0)}`,
+        `Playlist: ${liveTv.playlistConfigured ? compactPathSummary(liveTv.playlistSource) : 'not configured'}`,
+        `Guide: ${liveTv.guideConfigured ? compactPathSummary(liveTv.guideSource) : 'not configured'}`,
+        `Mapped in Jellyfin: ${liveTv.channelsMapped === true ? 'yes' : liveTv.channelsMapped === false ? 'no' : 'unknown'}`,
+      ],
+    },
+  ];
+
+  const handleAddArrTorrent = async () => {
+    const source = arrSource.trim();
+    if (!source) {
+      setArrStatus('Enter a torrent source (magnet URL, .torrent URL, or local path).');
+      return;
+    }
+
+    setArrBusy(true);
+    try {
+      const response = await addMediaTorrent({
+        source,
+        lane: 'arr',
+        mediaType: arrMediaType,
+      });
+      if (response.success === false) {
+        setArrStatus(String(response.error || 'Unable to queue ARR torrent.'));
+        return;
+      }
+      setArrSource('');
+      setArrStatus(String(response.message || `ARR queue request submitted (${arrMediaType}).`));
+    } catch (error) {
+      setArrStatus(toErrorMessage(error, 'Unable to queue ARR torrent'));
+    } finally {
+      setArrBusy(false);
+    }
+  };
 
   return (
     <>
@@ -349,15 +554,26 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
         <MetricTile label="Live TV" value={`${Number(liveTv.channelCount || 0)} channels`} helper={String(liveTv.summary || 'Live TV readiness')} />
       </MetricGrid>
 
-      <SectionCard title="Media workflow" subtitle="Unified watch → request → automate flow.">
-        <KeyValueList
-          rows={[
-            { label: 'Watch', value: <span className="dash2-small-copy">{String(watch.summary || 'N/A')}</span> },
-            { label: 'Requests', value: String(requests.summary || 'N/A') },
-            { label: 'Automation', value: String(automation.summary || 'N/A') },
-            { label: 'Support', value: String(support.summary || 'N/A') },
-          ]}
-        />
+      <SectionCard title="Media workflow" subtitle="Swipe cards left/right for watch → request → automate flow with stacked cascade preview.">
+        <div className="dash2-workflow-carousel" role="list" aria-label="Media workflow cards">
+          {workflowCards.map((entry, index) => (
+            <article key={entry.key} className="dash2-workflow-card" role="listitem">
+              <header className="dash2-workflow-card__header">
+                <div>
+                  <p className="dash2-workflow-card__step">Step {index + 1}</p>
+                  <h3>{entry.title}</h3>
+                </div>
+                <StatusBadge tone={toneFromStatus(entry.status)}>{entry.status}</StatusBadge>
+              </header>
+              <p className="dash2-workflow-card__summary">{entry.summary}</p>
+              <ul className="dash2-workflow-card__bullets">
+                {entry.bullets.map((bullet) => (
+                  <li key={`${entry.key}-${bullet}`}>{bullet}</li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
       </SectionCard>
 
       <SectionCard title="Media health dashboard" subtitle="Jellyfin-backed libraries, totals, and currently watching sessions.">
@@ -424,6 +640,62 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
         />
       </SectionCard>
 
+      <SectionCard title="ARR services" subtitle="Automation service status, quick links, and direct ARR torrent intake.">
+        {arrStatus ? <p className="dash2-admin-note">{arrStatus}</p> : null}
+        <div className="dash2-service-admin-grid">
+          {arrServices.map((entry) => (
+            <article key={entry.key} className="dash2-service-admin-card">
+              <div className="dash2-service-admin-card__header">
+                <strong>{entry.label}</strong>
+                <StatusBadge tone={toneFromStatus(entry.status)}>{entry.status}</StatusBadge>
+              </div>
+              <p className="dash2-small-copy">{entry.description}</p>
+              <div className="dash2-service-admin-card__meta">
+                <span>key: {entry.key}</span>
+                <span>{entry.available ? 'available' : 'unavailable'}</span>
+              </div>
+              {entry.route ? (
+                <div className="dash2-service-admin-card__actions dash2-service-admin-card__actions--compact">
+                  <a className="ui-button ui-button--primary" href={entry.route} target="_blank" rel="noreferrer">Open</a>
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+        <form
+          className="dash2-torrent-controls"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleAddArrTorrent();
+          }}
+        >
+          <div className="dash2-torrent-controls__row">
+            <label>
+              <span>Torrent source</span>
+              <input
+                className="ui-input"
+                type="text"
+                value={arrSource}
+                onChange={(event) => setArrSource(event.target.value)}
+                placeholder="magnet:?xt=... or .torrent URL/path"
+              />
+            </label>
+            <label>
+              <span>Media type</span>
+              <select className="ui-input" value={arrMediaType} onChange={(event) => setArrMediaType(event.target.value === 'series' ? 'series' : 'movies')}>
+                <option value="movies">Movies</option>
+                <option value="series">Series</option>
+              </select>
+            </label>
+          </div>
+          <div className="dash2-card__actions">
+            <button className="ui-button ui-button--primary" type="submit" disabled={arrBusy || !arrSource.trim()}>
+              {arrBusy ? 'Submitting…' : 'Add to ARR queue'}
+            </button>
+          </div>
+        </form>
+      </SectionCard>
+
       <SectionCard title="Media inventory" subtitle="Card-based status + quick links with duplicate surfaces merged into one list.">
         <div className="dash2-service-admin-grid">
           {services.map((entry, index) => {
@@ -465,7 +737,11 @@ function FilesWorkspace({
 }) {
   const drivesPayload = asRecord(payload.drives);
   const manifest = asRecord(drivesPayload.manifest);
-  const drives = asArray<Record<string, unknown>>(manifest.drives);
+  const drives: NormalizedDrive[] = dedupeDrives(asArray<Record<string, unknown>>(manifest.drives)).map((entry) => ({
+    ...entry,
+    state: normalizeDriveState(entry),
+  } as NormalizedDrive));
+  const mountedDriveCount = drives.filter((entry) => String(entry.state || '') === 'mounted').length;
   const shares = asArray<Record<string, unknown>>(payload.shares);
   const users = asArray<Record<string, unknown>>(payload.users);
   const protection = asRecord(payload.storageProtection);
@@ -521,6 +797,7 @@ function FilesWorkspace({
     <>
       <MetricGrid>
         <MetricTile label="Drives detected" value={drives.length} helper="Includes removable and internal roots" />
+        <MetricTile label="Mounted drives" value={mountedDriveCount} helper="Derived from manifest drive states" />
         <MetricTile label="Shares" value={shares.length} helper="Managed shares available to dashboard users" />
         <MetricTile label="Users" value={users.length} helper="Account inventory for permission policy" />
         <MetricTile label="Protection" value={String(protection.state || 'unknown')} helper={String(protection.reason || 'Storage watchdog state')} />
@@ -550,10 +827,10 @@ function FilesWorkspace({
             <li key={`${String(drive.device || drive.mountPoint || 'drive')}-${index}`}>
               <div>
                 <strong>{String(drive.dirName || drive.name || drive.letter || 'Drive')}</strong>
-                <p>{String(drive.mountPoint || 'mount unavailable')}</p>
+                <p>{compactPathSummary(drive.mountPoint || 'mount unavailable')}</p>
               </div>
-              <StatusBadge tone={String(drive.state || '').toLowerCase() === 'mounted' ? 'ok' : 'warn'}>
-                {String(drive.state || 'unknown')}
+              <StatusBadge tone={toneFromStatus(drive.state)}>
+                {String(drive.state || 'unmounted')}
               </StatusBadge>
             </li>
           ))}
@@ -573,8 +850,42 @@ function TransfersWorkspace({
   const defaults = asRecord(payload.ftpDefaults);
   const favourites = asArray<Record<string, unknown>>(payload.favourites);
   const services = asArray<Record<string, unknown>>(payload.services);
+  const mediaWorkflow = asRecord(payload.mediaWorkflow);
+  const downloads = asRecord(mediaWorkflow.downloads);
+  const categoryPaths = asRecord(downloads.categoryPaths);
+  const torrent = asRecord(payload.torrent);
+  const laneSummary = asRecord(torrent.laneSummary);
+  const standaloneLane = asRecord(laneSummary.standalone);
+  const qbitService = services.find((entry) => String(entry.key || '') === 'qbittorrent') || null;
+  const qbitStatus = String(qbitService?.status || torrent.status || 'unknown');
+  const qbitRoute = String(qbitService?.route || torrent.route || '');
+  const qbitSummary = String(
+    qbitService?.description
+    || qbitService?.blocker
+    || torrent.summary
+    || 'Dedicated torrent queue status'
+  );
+  const standaloneDestination = String(
+    torrent.standaloneDestination
+    || standaloneLane.savePath
+    || torrent.destinationPath
+    || torrent.defaultDestinationPath
+    || categoryPaths.manual
+    || downloads.defaultSavePath
+    || defaults.downloadRoot
+    || ''
+  );
+  const torrentServices = services.filter((entry) => {
+    const key = String(entry.key || '').toLowerCase();
+    const group = String(entry.group || '').toLowerCase();
+    return key === 'qbittorrent' || group === 'downloads';
+  });
+  const [activeTab, setActiveTab] = useState<'ftp' | 'torrent'>('ftp');
   const [favouriteBusyId, setFavouriteBusyId] = useState<number>(0);
   const [favouriteStatus, setFavouriteStatus] = useState('');
+  const [torrentSource, setTorrentSource] = useState('');
+  const [torrentBusy, setTorrentBusy] = useState(false);
+  const [torrentStatus, setTorrentStatus] = useState('');
 
   const handleToggleMount = async (favourite: Record<string, unknown>) => {
     const favouriteId = Number(favourite.id || 0);
@@ -600,44 +911,142 @@ function TransfersWorkspace({
     }
   };
 
+  const handleAddStandaloneTorrent = async () => {
+    const source = torrentSource.trim();
+    if (!source) {
+      setTorrentStatus('Enter a torrent source (magnet URL, .torrent URL, or local path).');
+      return;
+    }
+
+    setTorrentBusy(true);
+    try {
+      const response = await addMediaTorrent({
+        source,
+        lane: 'standalone',
+        destinationPath: standaloneDestination || undefined,
+      });
+      if (response.success === false) {
+        setTorrentStatus(String(response.error || 'Unable to add standalone torrent.'));
+        return;
+      }
+      setTorrentSource('');
+      setTorrentStatus(String(response.message || `Standalone torrent queued for ${standaloneDestination || 'configured destination'}.`));
+      workspaceActions?.onRefresh();
+    } catch (error) {
+      setTorrentStatus(toErrorMessage(error, 'Unable to add standalone torrent'));
+    } finally {
+      setTorrentBusy(false);
+    }
+  };
+
   return (
     <>
-      <MetricGrid>
-        <MetricTile label="FTP host" value={String(defaults.host || 'n/a')} helper={`Port ${String(defaults.port || '21')}`} />
-        <MetricTile label="Secure mode" value={Boolean(defaults.secure) ? 'Enabled' : 'Disabled'} helper="Client defaults" />
-        <MetricTile label="Saved remotes" value={favourites.length} helper="Configured favourite connections" />
-        <MetricTile label="Download root" value={String(defaults.downloadRoot || 'n/a')} />
-      </MetricGrid>
+      <div className="dash2-tab-switcher" role="tablist" aria-label="Transfers workspace tabs">
+        <button
+          className={`ui-button ${activeTab === 'ftp' ? 'dash2-tab-switcher__button--active' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'ftp'}
+          onClick={() => setActiveTab('ftp')}
+        >
+          FTP
+        </button>
+        <button
+          className={`ui-button ${activeTab === 'torrent' ? 'dash2-tab-switcher__button--active' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'torrent'}
+          onClick={() => setActiveTab('torrent')}
+        >
+          Torrent
+        </button>
+      </div>
 
-      <SectionCard title="FTP favourites" subtitle="Saved remote mounts and transfer targets.">
-        {favouriteStatus ? <p className="dash2-admin-note">{favouriteStatus}</p> : null}
-        {favourites.length === 0 ? <EmptyState title="No favourites" message="Create an FTP favourite from the transfer tools." /> : (
-          <ul className="dash2-list">
-            {favourites.map((item, index) => {
-              const mount = asRecord(item.mount);
-              const itemId = Number(item.id || 0);
-              return (
-                <li key={`${String(item.id || item.name || 'favourite')}-${index}`}>
-                  <div>
-                    <strong>{String(item.name || 'Remote')}</strong>
-                    <p>{String(item.host || 'host')}:{String(item.port || 21)} · {String(item.remotePath || '/')}</p>
-                  </div>
-                  <div className="dash2-list__actions">
-                    <StatusBadge tone={Boolean(mount.mounted) ? 'ok' : 'muted'}>{String(mount.state || 'unmounted')}</StatusBadge>
-                    <button className="ui-button" type="button" disabled={favouriteBusyId === itemId} onClick={() => void handleToggleMount(item)}>
-                      {favouriteBusyId === itemId ? 'Working…' : Boolean(mount.mounted) ? 'Unmount' : 'Mount'}
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </SectionCard>
+      {activeTab === 'ftp' ? (
+        <>
+          <MetricGrid>
+            <MetricTile label="FTP host" value={String(defaults.host || 'n/a')} helper={`Port ${String(defaults.port || '21')}`} />
+            <MetricTile label="Secure mode" value={Boolean(defaults.secure) ? 'Enabled' : 'Disabled'} helper="Client defaults" />
+            <MetricTile label="Saved remotes" value={favourites.length} helper="Configured favourite connections" />
+            <MetricTile label="Download root" value={String(defaults.downloadRoot || 'n/a')} />
+          </MetricGrid>
 
-      <SectionCard title="Transfer-related services" subtitle="Access and download surface status.">
-        <ServiceList items={toServiceListItems(services)} />
-      </SectionCard>
+          <SectionCard title="FTP favourites" subtitle="Saved remote mounts and transfer targets.">
+            {favouriteStatus ? <p className="dash2-admin-note">{favouriteStatus}</p> : null}
+            {favourites.length === 0 ? <EmptyState title="No favourites" message="Create an FTP favourite from the transfer tools." /> : (
+              <ul className="dash2-list">
+                {favourites.map((item, index) => {
+                  const mount = asRecord(item.mount);
+                  const itemId = Number(item.id || 0);
+                  return (
+                    <li key={`${String(item.id || item.name || 'favourite')}-${index}`}>
+                      <div>
+                        <strong>{String(item.name || 'Remote')}</strong>
+                        <p>{String(item.host || 'host')}:{String(item.port || 21)} · {String(item.remotePath || '/')}</p>
+                      </div>
+                      <div className="dash2-list__actions">
+                        <StatusBadge tone={Boolean(mount.mounted) ? 'ok' : 'muted'}>{String(mount.state || 'unmounted')}</StatusBadge>
+                        <button className="ui-button" type="button" disabled={favouriteBusyId === itemId} onClick={() => void handleToggleMount(item)}>
+                          {favouriteBusyId === itemId ? 'Working…' : Boolean(mount.mounted) ? 'Unmount' : 'Mount'}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </SectionCard>
+
+          <SectionCard title="Transfer-related services" subtitle="Access and download surface status.">
+            <ServiceList items={toServiceListItems(services)} />
+          </SectionCard>
+        </>
+      ) : (
+        <>
+          <MetricGrid>
+            <MetricTile label="qB status" value={<StatusBadge tone={toneFromStatus(qbitStatus)}>{qbitStatus}</StatusBadge>} helper={qbitSummary} />
+            <MetricTile label="Standalone destination" value={<span className="dash2-small-copy">{compactPathSummary(standaloneDestination)}</span>} helper="Manual torrent destination" />
+            <MetricTile label="Client" value={String(qbitService?.label || 'qBittorrent')} helper={qbitRoute || 'No route configured'} />
+            <MetricTile label="Queue source" value="/api/media/torrents/add" helper="Standalone add-torrent endpoint" />
+          </MetricGrid>
+
+          <SectionCard
+            title="Standalone add-torrent"
+            subtitle="Submit one-off torrents to qBittorrent using an explicit destination path."
+            actions={qbitRoute ? <a className="ui-button" href={qbitRoute} target="_blank" rel="noreferrer">Open qBittorrent</a> : null}
+          >
+            {torrentStatus ? <p className="dash2-admin-note">{torrentStatus}</p> : null}
+            <form
+              className="dash2-torrent-controls"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleAddStandaloneTorrent();
+              }}
+            >
+              <label>
+                <span>Torrent source</span>
+                <input
+                  className="ui-input"
+                  type="text"
+                  value={torrentSource}
+                  onChange={(event) => setTorrentSource(event.target.value)}
+                  placeholder="magnet:?xt=... or .torrent URL/path"
+                />
+              </label>
+              <p className="dash2-small-copy">Destination path: {standaloneDestination || 'Not configured'}</p>
+              <div className="dash2-card__actions">
+                <button className="ui-button ui-button--primary" type="submit" disabled={torrentBusy || !torrentSource.trim()}>
+                  {torrentBusy ? 'Submitting…' : 'Add torrent'}
+                </button>
+              </div>
+            </form>
+          </SectionCard>
+
+          <SectionCard title="Torrent services" subtitle="Standalone transfer service status.">
+            <ServiceList items={toServiceListItems(torrentServices)} />
+          </SectionCard>
+        </>
+      )}
     </>
   );
 }
@@ -650,6 +1059,7 @@ function AiWorkspace({
   workspaceActions?: WorkspaceActions;
 }) {
   const llm = asRecord(payload.llmState);
+  const monitor = asRecord(payload.monitor);
   const models = asArray<Record<string, unknown>>(llm.models);
   const online = asRecord(llm.online);
   const onlineModels = asArray<Record<string, unknown>>(online.models);
@@ -747,38 +1157,77 @@ function AiWorkspace({
 
     setChatBusy(true);
     setChatStatus('');
-    setChatTranscript((current) => [...current, { role: 'user', content: message, createdAt: new Date().toISOString() }]);
+    const createdAt = new Date().toISOString();
+    const pendingAssistantId = -Date.now();
+    setChatTranscript((current) => [
+      ...current,
+      { role: 'user', content: message, createdAt },
+      { id: pendingAssistantId, role: 'assistant', content: '', createdAt },
+    ]);
     setChatInput('');
 
     try {
-      const response = await sendLlmChat({
+      await sendLlmChatStream({
         message,
         mode: chatMode,
         conversationId: chatConversationId,
         onlineModelId: chatMode === 'online' ? onlineModelId || undefined : undefined,
+      }, {
+        onMeta: (meta) => {
+          if (Number.isInteger(meta.conversationId) && Number(meta.conversationId) > 0) {
+            setChatConversationId(Number(meta.conversationId));
+          }
+        },
+        onDelta: (delta) => {
+          if (!delta.text) {
+            return;
+          }
+          setChatTranscript((current) => current.map((entry) => (
+            entry.id === pendingAssistantId
+              ? { ...entry, content: `${entry.content}${delta.text}` }
+              : entry
+          )));
+        },
+        onDone: (done) => {
+          setChatTranscript((current) => current.map((entry) => (
+            entry.id === pendingAssistantId
+              ? {
+                  id: Number(done.assistantMessage?.id || 0) || undefined,
+                  role: String(done.assistantMessage?.role || 'assistant'),
+                  content: String(done.assistantMessage?.content || entry.content || 'No response text returned.'),
+                  createdAt: String(done.assistantMessage?.createdAt || entry.createdAt || new Date().toISOString()),
+                }
+              : entry
+          )));
+          if (Number.isInteger(done.conversationId) && Number(done.conversationId) > 0) {
+            setChatConversationId(Number(done.conversationId));
+          }
+        },
+        onError: (streamErr) => {
+          const errorMessage = String(streamErr.message || 'Chat request failed');
+          setChatStatus(errorMessage);
+          setChatTranscript((current) => current.map((entry) => (
+            entry.id === pendingAssistantId
+              ? {
+                  ...entry,
+                  content: `Error: ${errorMessage}`,
+                }
+              : entry
+          )));
+        },
       });
-
-      if (response.success === false || response.error) {
-        const errorMessage = String(response.error || 'Chat request failed');
-        setChatStatus(errorMessage);
-        setChatTranscript((current) => [...current, { role: 'assistant', content: `Error: ${errorMessage}`, createdAt: new Date().toISOString() }]);
-      } else {
-        const assistantText = String(response.assistantMessage?.content || '').trim() || 'No response text returned.';
-        setChatTranscript((current) => [...current, {
-          id: Number(response.assistantMessage?.id || 0) || undefined,
-          role: String(response.assistantMessage?.role || 'assistant'),
-          content: assistantText,
-          createdAt: String(response.assistantMessage?.createdAt || new Date().toISOString()),
-        }]);
-        if (Number.isInteger(response.conversationId) && Number(response.conversationId) > 0) {
-          setChatConversationId(Number(response.conversationId));
-        }
-        void loadConversations();
-      }
+      void loadConversations();
     } catch (error) {
       const errorMessage = toErrorMessage(error, 'Chat request failed');
       setChatStatus(errorMessage);
-      setChatTranscript((current) => [...current, { role: 'assistant', content: `Error: ${errorMessage}`, createdAt: new Date().toISOString() }]);
+      setChatTranscript((current) => current.map((entry) => (
+        entry.id === pendingAssistantId
+          ? {
+              ...entry,
+              content: `Error: ${errorMessage}`,
+            }
+          : entry
+      )));
     } finally {
       setChatBusy(false);
       workspaceActions?.onRefresh();
@@ -837,6 +1286,7 @@ function AiWorkspace({
         <MetricTile label="Active model" value={String(llm.activeModelId || 'none')} helper="Selected local or online model" />
         <MetricTile label="Installed models" value={models.filter((entry) => Boolean(entry.installed)).length} helper={`${models.length} total configured`} />
         <MetricTile label="Online provider" value={Boolean(online.available) ? 'Available' : 'Unavailable'} helper={String(online.error || 'Online model provider status')} />
+        <MetricTile label="Host CPU load" value={toPercent(monitor.cpuLoad)} helper={String(monitor.timestamp || 'Latest AI workspace sample')} />
       </MetricGrid>
 
       <SectionCard title="Legacy chatbox" subtitle="Conversation history, full threaded chat, and local/online routing controls.">

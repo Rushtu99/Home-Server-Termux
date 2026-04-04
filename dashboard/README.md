@@ -8,6 +8,8 @@ Common commands:
 npm install
 npm run dev
 npm run build
+npm test
+npm run test:coverage
 npx tsc --noEmit
 npm run build:demo
 ```

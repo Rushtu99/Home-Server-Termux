@@ -1,6 +1,7 @@
 'use client';
 
 import { appFetch } from '../demo-api';
+import { dispatchLlmStreamEvent, parseSseChunk, type LlmChatStreamHandlers } from './llm-stream';
 import type { UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
 
 const API = '/api';
@@ -83,6 +84,14 @@ export const mountFtpFavourite = (id: number) =>
 export const unmountFtpFavourite = (id: number) =>
   postJson<{ success?: boolean; error?: string }>(`${API}/ftp/favourites/${id}/unmount`);
 
+export const addMediaTorrent = (payload: {
+  source: string;
+  lane: 'arr' | 'standalone';
+  mediaType?: 'movies' | 'series' | 'manual';
+  destinationPath?: string;
+}) =>
+  postJson<{ success?: boolean; error?: string; message?: string; id?: string }>(`${API}/media/torrents/add`, payload);
+
 export const selectLlmModel = (modelId: string) =>
   postJson<{ success?: boolean; error?: string }>(`${API}/llm/models/select`, { modelId });
 
@@ -113,6 +122,78 @@ export const sendLlmChat = (payload: {
       modelId?: string;
     };
   }>(`${API}/llm/chat`, payload);
+
+type LlmChatStreamPayload = {
+  message: string;
+  mode: 'local' | 'online';
+  conversationId?: number | null;
+  onlineModelId?: string;
+};
+
+export const sendLlmChatStream = async (payload: LlmChatStreamPayload, handlers: LlmChatStreamHandlers) => {
+  const response = await appFetch(`${API}/llm/chat/stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  if (!response.body) {
+    throw new Error('Streaming response body is unavailable');
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = '';
+  let terminalSeen = false;
+
+  try {
+    while (!terminalSeen) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary >= 0) {
+        const raw = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf('\n\n');
+        if (!raw.trim()) {
+          continue;
+        }
+        terminalSeen = dispatchLlmStreamEvent(parseSseChunk(raw), handlers) || terminalSeen;
+      }
+    }
+
+    if (!terminalSeen) {
+      buffer += decoder.decode().replace(/\r/g, '');
+      for (const raw of buffer.split('\n\n')) {
+        if (!raw.trim()) {
+          continue;
+        }
+        terminalSeen = dispatchLlmStreamEvent(parseSseChunk(raw), handlers) || terminalSeen;
+        if (terminalSeen) {
+          break;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!terminalSeen) {
+    throw new Error('Stream ended before terminal event');
+  }
+};
 
 export const listLlmConversations = () =>
   fetchJson<{

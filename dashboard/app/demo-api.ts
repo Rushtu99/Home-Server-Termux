@@ -162,6 +162,21 @@ const jsonResponse = (body: unknown, status = 200) =>
     },
   });
 
+const sseResponse = (events: Array<{ event: string; data: Record<string, unknown> }>, status = 200) =>
+  new Response(
+    events
+      .map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`)
+      .join(''),
+    {
+      status,
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Content-Type': 'text/event-stream; charset=utf-8',
+      },
+    }
+  );
+
 const parseJsonBody = (init?: RequestInit) => {
   if (!init?.body || typeof init.body !== 'string') {
     return {};
@@ -756,6 +771,25 @@ const aggregateCatalogStatus = (entries: DemoServiceCatalogEntry[]) => {
   return 'unavailable';
 };
 
+const DEMO_TORRENT_ADD_ENDPOINT = '/api/media/torrents/add';
+const DEMO_TORRENT_LANES = {
+  arrMovies: {
+    category: 'movies',
+    savePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/movies',
+  },
+  arrSeries: {
+    category: 'series',
+    savePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/series',
+  },
+  standalone: {
+    category: 'standalone',
+    savePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/torrent/qbit',
+  },
+} as const;
+
+const isValidTorrentSource = (value: string) =>
+  /^magnet:\?xt=urn:btih:[a-f0-9]{32,40}/i.test(value) || /^https?:\/\/\S+$/i.test(value);
+
 const compactLibrarySummary = (roots: string[]) => {
   const labels = roots.map((entry) => entry.split('/').pop() || entry);
   return `Library roots ready (${roots.length}): ${labels.join(', ')} [vault + scratch]`;
@@ -765,17 +799,25 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
   const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
   const watchEntry = catalogByKey.get('jellyfin') || null;
   const requestEntry = catalogByKey.get('jellyseerr') || null;
+  const arrEntries = ['sonarr', 'radarr', 'prowlarr', 'bazarr']
+    .map((key) => catalogByKey.get(key))
+    .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
   const automationEntries = ['prowlarr', 'sonarr', 'radarr']
     .map((key) => catalogByKey.get(key))
     .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
   const subtitleEntry = catalogByKey.get('bazarr') || null;
+  const qbEntry = catalogByKey.get('qbittorrent') || null;
   const supportEntries = ['redis', 'postgres']
     .map((key) => catalogByKey.get(key))
     .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
   const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
   const primaryDownloadEntry = downloadEntries[0] || null;
   const libraryRoots = ['~/Drives/Media/movies', '~/Drives/Media/series'];
-  const downloadRoots = ['~/Drives/Media/downloads', '~/Drives/Media/downloads/manual'];
+  const downloadRoots = [
+    '~/Drives/Media/downloads',
+    '~/Drives/Media/downloads/manual',
+    DEMO_TORRENT_LANES.standalone.savePath,
+  ];
   const playlistSource = state.nodes.has('Media/iptv-cache/playlist.m3u') ? '~/Drives/Media/iptv-cache/playlist.m3u' : null;
   const guideSource = state.nodes.has('Media/iptv-epg/guide.xml') ? '~/Drives/Media/iptv-epg/guide.xml' : null;
   const channelCount = 42;
@@ -835,8 +877,9 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       qbitDefaultSavePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual',
       qbitCategoryPaths: {
         manual: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual',
-        movies: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/movies',
-        series: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/series',
+        movies: DEMO_TORRENT_LANES.arrMovies.savePath,
+        series: DEMO_TORRENT_LANES.arrSeries.savePath,
+        standalone: DEMO_TORRENT_LANES.standalone.savePath,
       },
       reviewQueueCount: 0,
       importStatus: {
@@ -930,6 +973,24 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       serviceKeys: supportEntries.map((entry) => entry.key),
       status: aggregateCatalogStatus(supportEntries),
       summary: 'Redis and PostgreSQL support the media workflow behind the scenes.',
+    },
+    arr: {
+      addEndpoint: DEMO_TORRENT_ADD_ENDPOINT,
+      mediaTypes: ['movies', 'series'],
+      qbServiceKey: qbEntry?.key || null,
+      qbStatus: qbEntry?.status || 'unavailable',
+      serviceKeys: arrEntries.map((entry) => entry.key),
+      services: arrEntries.map((entry) => clone(entry)),
+      sources: ['magnet', 'url'],
+      laneSummary: {
+        arr: 'ARR lane routes to movies/series categories for importer-managed library flow.',
+        standalone: `Standalone lane routes to ${DEMO_TORRENT_LANES.standalone.savePath} and stays outside auto-import lanes.`,
+      },
+      lanes: {
+        arrMovies: clone(DEMO_TORRENT_LANES.arrMovies),
+        arrSeries: clone(DEMO_TORRENT_LANES.arrSeries),
+        standalone: clone(DEMO_TORRENT_LANES.standalone),
+      },
     },
   };
 };
@@ -1062,7 +1123,10 @@ const buildUiBootstrapPayload = (state: DemoState) => {
   const serviceCatalog = buildServiceCatalog(state);
   const lifecycle = buildLifecycleSummary(serviceCatalog);
   const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
-  const transferService = serviceByKey.get('ftp');
+  const transferServices = ['ftp', 'qbittorrent']
+    .map((key) => serviceByKey.get(key))
+    .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
+  const canUseTransfersWorkspace = transferServices.some((entry) => Boolean(entry.available));
   const aiService = serviceByKey.get('llm');
   const terminalService = serviceByKey.get('ttyd');
   const canUseFilesWorkspace = state.shares.length > 0;
@@ -1075,7 +1139,7 @@ const buildUiBootstrapPayload = (state: DemoState) => {
       { key: 'overview', label: 'Overview', legacyTabs: ['home'], summary: 'System health, telemetry, and lifecycle status', available: true, status: 'working' },
       { key: 'media', label: 'Media', legacyTabs: ['media', 'downloads', 'arr'], summary: 'Jellyfin and automation workflow surfaces', available: true, status: lifecycle.state },
       { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, and filesystem management', available: canUseFilesWorkspace, status: canUseFilesWorkspace ? 'working' : 'blocked' },
-      { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools', available: Boolean(transferService?.available), status: transferService?.status || 'unavailable' },
+      { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools', available: canUseTransfersWorkspace, status: canUseTransfersWorkspace ? aggregateCatalogStatus(transferServices) : 'unavailable' },
       { key: 'ai', label: 'AI', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace', available: Boolean(aiService?.available), status: aiService?.status || 'unavailable' },
       { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface', available: Boolean(terminalService?.available), status: terminalService?.status || 'unavailable' },
       { key: 'admin', label: 'Admin', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations', available: true, status: lifecycle.state },
@@ -1087,7 +1151,7 @@ const buildUiBootstrapPayload = (state: DemoState) => {
       canManageUsers: state.sessionUser?.role === 'admin',
       canManageShares: state.sessionUser?.role === 'admin',
       canUseFilesWorkspace,
-      canUseTransfersWorkspace: Boolean(transferService?.available),
+      canUseTransfersWorkspace,
       canUseAiWorkspace: Boolean(aiService?.available),
       canUseTerminalWorkspace: Boolean(terminalService?.available),
     },
@@ -1132,13 +1196,20 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
   }
 
   if (workspaceKey === 'media') {
+    const mediaServices = serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(String(entry.group || '')));
+    const arrServices = serviceCatalog.filter((entry) => String(entry.group || '') === 'arr');
+    const combinedServices = [
+      ...mediaServices,
+      ...arrServices.filter((entry) => !mediaServices.some((existing) => existing.key === entry.key)),
+    ];
     return {
       generatedAt: nowIso(),
       workspaceKey,
       lifecycle: dashboard.lifecycle,
       mediaWorkflow: dashboard.mediaWorkflow,
       mediaHealth: buildDemoMediaHealth(state),
-      services: serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(String(entry.group || ''))),
+      services: combinedServices,
+      arr: (dashboard.mediaWorkflow as { arr?: unknown })?.arr || null,
     };
   }
 
@@ -1165,9 +1236,12 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
   }
 
   if (workspaceKey === 'transfers') {
+    const transferServices = serviceCatalog.filter((entry) => ['access', 'downloads'].includes(String(entry.group || '')));
+    const qbService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
     return {
       generatedAt: nowIso(),
       workspaceKey,
+      tabs: ['ftp', 'torrent'],
       ftpDefaults: {
         defaultName: state.ftpDefaults.defaultName,
         host: state.ftpDefaults.host,
@@ -1182,7 +1256,22 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
         },
       },
       favourites: clone(state.ftpFavourites),
-      services: serviceCatalog.filter((entry) => ['access', 'downloads'].includes(String(entry.group || ''))),
+      services: transferServices,
+      torrent: {
+        addEndpoint: DEMO_TORRENT_ADD_ENDPOINT,
+        available: Boolean(qbService?.available),
+        service: qbService ? clone(qbService) : null,
+        standaloneDestination: DEMO_TORRENT_LANES.standalone.savePath,
+        laneSummary: {
+          arr: `ARR lane -> ${DEMO_TORRENT_LANES.arrMovies.category}/${DEMO_TORRENT_LANES.arrSeries.category} categories (${DEMO_TORRENT_LANES.arrMovies.savePath}, ${DEMO_TORRENT_LANES.arrSeries.savePath})`,
+          standalone: `Standalone lane -> ${DEMO_TORRENT_LANES.standalone.savePath} (${DEMO_TORRENT_LANES.standalone.category})`,
+        },
+        lanes: {
+          arrMovies: clone(DEMO_TORRENT_LANES.arrMovies),
+          arrSeries: clone(DEMO_TORRENT_LANES.arrSeries),
+          standalone: clone(DEMO_TORRENT_LANES.standalone),
+        },
+      },
     };
   }
 
@@ -1191,6 +1280,10 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
       generatedAt: nowIso(),
       workspaceKey,
       llmState: buildLlmStatePayload(state),
+      monitor: {
+        cpuLoad: Number(telemetry.monitor?.cpuLoad || 0),
+        timestamp: nowIso(),
+      },
     };
   }
 
@@ -1504,6 +1597,65 @@ const handleFsUpload = async (state: DemoState, url: URL, init?: RequestInit) =>
   return jsonResponse({ path: targetPath, success: true });
 };
 
+const handleDemoAddTorrent = (state: DemoState, body: Record<string, unknown>) => {
+  const source = String(body.source || '').trim();
+  const lane = String(body.lane || '').trim().toLowerCase();
+  const mediaType = String(body.mediaType || '').trim().toLowerCase();
+  const simulation = String(body.simulate || body.demoCase || '').trim().toLowerCase();
+
+  if (!isValidTorrentSource(source)) {
+    return jsonResponse({ error: 'source must be a magnet link or http/https URL', code: 'invalid_source' }, 400);
+  }
+  if (lane !== 'arr' && lane !== 'standalone') {
+    return jsonResponse({ error: 'lane must be arr or standalone', code: 'invalid_lane' }, 400);
+  }
+  if (lane === 'arr' && mediaType !== 'movies' && mediaType !== 'series') {
+    return jsonResponse({ error: 'mediaType must be movies or series when lane=arr', code: 'invalid_media_type' }, 400);
+  }
+
+  if (simulation === 'blocked' || simulation === 'storage_blocked' || simulation === 'watchdog') {
+    return jsonResponse({
+      blockedBy: 'storage_watchdog',
+      code: 'storage_blocked',
+      error: 'qBittorrent start is blocked by storage watchdog',
+    }, 423);
+  }
+
+  if (simulation === 'auth' || simulation === 'auth_required') {
+    return jsonResponse({
+      code: 'qb_auth_required',
+      error: 'qBittorrent WebUI authentication is required',
+    }, 503);
+  }
+
+  if (simulation === 'unavailable' || simulation === 'service_unavailable' || !state.services.qbittorrent) {
+    return jsonResponse({
+      code: 'qb_service_unavailable',
+      error: 'qBittorrent service is unavailable',
+    }, 503);
+  }
+
+  const qb = lane === 'arr'
+    ? (mediaType === 'movies' ? DEMO_TORRENT_LANES.arrMovies : DEMO_TORRENT_LANES.arrSeries)
+    : DEMO_TORRENT_LANES.standalone;
+
+  const payload = {
+    success: true,
+    lane,
+    mediaType: lane === 'arr' ? mediaType : null,
+    source,
+    qb: clone(qb),
+    addedAt: nowIso(),
+  };
+
+  pushLog(state, 'info', 'Demo torrent add simulated', {
+    lane: payload.lane,
+    mediaType: payload.mediaType,
+    qb: payload.qb,
+  });
+  return jsonResponse(payload);
+};
+
 const handleDemoRequest = async (path: string, init?: RequestInit) => {
   const sessionError = !path.includes('/auth/login') && !path.includes('/auth/logout') ? requireSession(demoState) : null;
   if (sessionError) {
@@ -1547,6 +1699,9 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
   }
   if (pathname === '/api/services' && method === 'GET') {
     return jsonResponse(buildServiceResponse(demoState));
+  }
+  if (pathname === '/api/media/torrents/add' && method === 'POST') {
+    return handleDemoAddTorrent(demoState, body);
   }
   if (pathname === '/api/storage/protection' && method === 'GET') {
     const protection = buildMediaWorkflow(demoState, buildServiceCatalog(demoState)).storage?.protection || null;
@@ -1724,6 +1879,82 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
       conversation.updatedAt = nowIso();
     }
     return jsonResponse({ success: true, conversationId, assistantMessage, mode });
+  }
+  if (pathname === '/api/llm/chat/stream' && method === 'POST') {
+    const text = String(body.message || '').trim();
+    if (!text) {
+      return jsonResponse({ error: 'message is required' }, 400);
+    }
+    const mode = String(body.mode || 'local').toLowerCase() === 'online' ? 'online' : 'local';
+    let conversationId = Number(body.conversationId || 0);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      conversationId = Math.max(0, ...demoState.llmConversations.map((entry) => entry.id)) + 1;
+      demoState.llmConversations.unshift({
+        id: conversationId,
+        title: text.slice(0, 80),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      });
+      demoState.llmMessagesByConversation[conversationId] = [];
+    }
+    const activeModelId = mode === 'online'
+      ? String(body.onlineModelId || demoState.llmOnline.activeModelId || '').trim()
+      : demoState.llmActiveModelId;
+    if (!activeModelId) {
+      return jsonResponse({ error: mode === 'online' ? 'A valid online model is required.' : 'No active local model selected.' }, 400);
+    }
+
+    const userMessage = { id: Date.now(), role: 'user' as const, content: text, modelId: activeModelId, createdAt: nowIso() };
+    demoState.llmMessagesByConversation[conversationId] ||= [];
+    demoState.llmMessagesByConversation[conversationId].push(userMessage);
+
+    const assistantText = mode === 'online'
+      ? `Demo online reply: processed "${text.slice(0, 120)}" with ${activeModelId}.`
+      : `Demo local reply: processed "${text.slice(0, 120)}" with ${activeModelId}.`;
+    const assistantMessage = {
+      id: Date.now() + 1,
+      role: 'assistant' as const,
+      content: assistantText,
+      modelId: activeModelId,
+      createdAt: nowIso(),
+    };
+    demoState.llmMessagesByConversation[conversationId].push(assistantMessage);
+
+    const conversation = demoState.llmConversations.find((entry) => entry.id === conversationId);
+    if (conversation) {
+      conversation.updatedAt = nowIso();
+    }
+
+    const tokenChunks = assistantText
+      .split(/(\s+)/)
+      .filter((chunk) => chunk.length > 0);
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [
+      {
+        event: 'meta',
+        data: {
+          conversationId,
+          mode,
+          modelId: activeModelId,
+          startedAt: nowIso(),
+        },
+      },
+      ...tokenChunks.map((chunk, index) => ({
+        event: 'delta',
+        data: {
+          seq: index + 1,
+          text: chunk,
+        },
+      })),
+      {
+        event: 'done',
+        data: {
+          conversationId,
+          assistantMessage,
+        },
+      },
+    ];
+
+    return sseResponse(events);
   }
   if (pathname === '/api/openai/v1/models' && method === 'GET') {
     return jsonResponse({

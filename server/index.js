@@ -12,40 +12,20 @@ const { monitorEventLoopDelay } = require('node:perf_hooks');
 const jwt = require('jsonwebtoken');
 const ftp = require('basic-ftp');
 const { createAppDb, normalizeUsername, verifyPassword } = require('./app-db');
+const { parseDurationMs } = require('./lib/time');
+const {
+  buildStorageBlockReasonForService,
+  getStorageBlockForService,
+  normalizeStorageRoleState,
+  normalizeStringArray,
+} = require('./lib/storage-protection');
+const { buildQbittorrentWebUiUrl, extractQbittorrentSidCookie } = require('./lib/qb-webui');
+const { isValidTorrentSource } = require('./lib/torrent');
 
 const ENV_FILE = path.resolve(__dirname, '.env');
 if (typeof loadEnvFile === 'function' && fs.existsSync(ENV_FILE)) {
   loadEnvFile(ENV_FILE);
 }
-
-const parseDurationMs = (input, fallbackMs) => {
-  const value = String(input || '').trim();
-  if (!value) {
-    return fallbackMs;
-  }
-
-  if (/^\d+$/.test(value)) {
-    const numeric = Number(value);
-    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallbackMs;
-  }
-
-  const match = value.match(/^(\d+)(ms|s|m|h|d)$/i);
-  if (!match) {
-    return fallbackMs;
-  }
-
-  const amount = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  const multipliers = {
-    ms: 1,
-    s: 1000,
-    m: 60 * 1000,
-    h: 60 * 60 * 1000,
-    d: 24 * 60 * 60 * 1000,
-  };
-
-  return amount * multipliers[unit];
-};
 
 const app = express();
 app.disable('x-powered-by');
@@ -83,6 +63,8 @@ const MEDIA_DOWNLOADS_DIR = process.env.MEDIA_DOWNLOADS_DIR || path.join(MEDIA_S
 const MEDIA_DOWNLOADS_MOVIES_DIR = process.env.MEDIA_DOWNLOADS_MOVIES_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'movies');
 const MEDIA_DOWNLOADS_SERIES_DIR = process.env.MEDIA_DOWNLOADS_SERIES_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'series');
 const MEDIA_DOWNLOADS_MANUAL_DIR = process.env.MEDIA_DOWNLOADS_MANUAL_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'manual');
+const MEDIA_DOWNLOADS_TORRENT_DIR = process.env.MEDIA_DOWNLOADS_TORRENT_DIR || path.join(MEDIA_DOWNLOADS_DIR, 'torrent');
+const MEDIA_DOWNLOADS_TORRENT_QBIT_DIR = process.env.MEDIA_DOWNLOADS_TORRENT_QBIT_DIR || path.join(MEDIA_DOWNLOADS_TORRENT_DIR, 'qbit');
 const MEDIA_SMALL_DOWNLOADS_DIR = process.env.MEDIA_SMALL_DOWNLOADS_DIR || path.join(FILEBROWSER_ROOT, 'C', 'Download', 'Home-Server', 'small');
 const MEDIA_SMALL_DOWNLOADS_MAX_MB = Math.max(1, Number(process.env.MEDIA_SMALL_DOWNLOADS_MAX_MB || 256) || 256);
 const MEDIA_IMPORT_REVIEW_DIR = process.env.MEDIA_IMPORT_REVIEW_DIR || path.join(MEDIA_SCRATCH_ROOT, 'review');
@@ -184,6 +166,11 @@ const SYNCTHING_GUI_PORT = Number(process.env.SYNCTHING_GUI_PORT || 8384);
 const SAMBA_PORT = Number(process.env.SAMBA_PORT || 445);
 const JELLYFIN_PORT = Number(process.env.JELLYFIN_PORT || 8096);
 const QBITTORRENT_PORT = Number(process.env.QBITTORRENT_PORT || 8081);
+const QBITTORRENT_WEBUI_BASE_URL = String(process.env.QBITTORRENT_WEBUI_BASE_URL || `http://127.0.0.1:${QBITTORRENT_PORT}`).trim().replace(/\/+$/, '');
+const QBITTORRENT_WEBUI_USERNAME = String(process.env.QBITTORRENT_WEBUI_USERNAME || '').trim();
+const QBITTORRENT_WEBUI_PASSWORD = String(process.env.QBITTORRENT_WEBUI_PASSWORD || '').trim();
+const QBITTORRENT_WEBUI_TIMEOUT_MS = Math.max(1000, Number(process.env.QBITTORRENT_WEBUI_TIMEOUT_MS || 5000) || 5000);
+const QBITTORRENT_WEBUI_RETRY_COUNT = Math.max(0, Number(process.env.QBITTORRENT_WEBUI_RETRY_COUNT || 1) || 1);
 const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 const POSTGRES_PORT = Number(process.env.POSTGRES_PORT || 5432);
 const SONARR_PORT = Number(process.env.SONARR_PORT || 8989);
@@ -750,6 +737,18 @@ const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'downloads', 'f
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SERVICE_HISTORY_LIMIT = 400;
+const TORRENT_LANE_SET = new Set(['arr', 'standalone']);
+const TORRENT_ARR_MEDIA_TYPE_SET = new Set(['movies', 'series']);
+const TORRENT_LANE_MAPPING = {
+  arr: {
+    movies: { category: 'movies', savePath: MEDIA_DOWNLOADS_MOVIES_DIR },
+    series: { category: 'series', savePath: MEDIA_DOWNLOADS_SERIES_DIR },
+  },
+  standalone: {
+    category: 'standalone',
+    savePath: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+  },
+};
 
 eventLoopDelay.enable();
 
@@ -1004,6 +1003,7 @@ const probeQbittorrentConfig = () => withLocalProbeCache('qbittorrentConfig', 50
       moviesCategoryPath: MEDIA_DOWNLOADS_MOVIES_DIR,
       seriesCategoryPath: MEDIA_DOWNLOADS_SERIES_DIR,
       manualCategoryPath: MEDIA_DOWNLOADS_MANUAL_DIR,
+      standaloneCategoryPath: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
     };
   }
 
@@ -1015,6 +1015,7 @@ const probeQbittorrentConfig = () => withLocalProbeCache('qbittorrentConfig', 50
       moviesCategoryPath: readIniValue(configText, 'Categories\\movies\\SavePath') || MEDIA_DOWNLOADS_MOVIES_DIR,
       seriesCategoryPath: readIniValue(configText, 'Categories\\series\\SavePath') || MEDIA_DOWNLOADS_SERIES_DIR,
       manualCategoryPath: readIniValue(configText, 'Categories\\manual\\SavePath') || MEDIA_DOWNLOADS_MANUAL_DIR,
+      standaloneCategoryPath: readIniValue(configText, 'Categories\\standalone\\SavePath') || MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
     };
   } catch {
     return {
@@ -1023,6 +1024,7 @@ const probeQbittorrentConfig = () => withLocalProbeCache('qbittorrentConfig', 50
       moviesCategoryPath: MEDIA_DOWNLOADS_MOVIES_DIR,
       seriesCategoryPath: MEDIA_DOWNLOADS_SERIES_DIR,
       manualCategoryPath: MEDIA_DOWNLOADS_MANUAL_DIR,
+      standaloneCategoryPath: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
     };
   }
 });
@@ -1831,7 +1833,14 @@ const buildMediaWorkflowSnapshot = (catalog) => {
     MEDIA_SCRATCH_MUSIC_DIR,
     MEDIA_SCRATCH_AUDIOBOOKS_DIR,
   ];
-  const downloadRoots = [MEDIA_DOWNLOADS_DIR, MEDIA_DOWNLOADS_MOVIES_DIR, MEDIA_DOWNLOADS_SERIES_DIR, MEDIA_DOWNLOADS_MANUAL_DIR];
+  const downloadRoots = [
+    MEDIA_DOWNLOADS_DIR,
+    MEDIA_DOWNLOADS_MOVIES_DIR,
+    MEDIA_DOWNLOADS_SERIES_DIR,
+    MEDIA_DOWNLOADS_MANUAL_DIR,
+    MEDIA_DOWNLOADS_TORRENT_DIR,
+    MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+  ];
   const qbittorrentConfig = probeQbittorrentConfig();
   const importStatusRaw = readJsonFile(MEDIA_IMPORT_STATUS_FILE, null);
   const cleanupStatusRaw = readJsonFile(MEDIA_CLEANUP_STATUS_FILE, null);
@@ -1954,6 +1963,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
         manual: qbittorrentConfig.manualCategoryPath,
         movies: qbittorrentConfig.moviesCategoryPath,
         series: qbittorrentConfig.seriesCategoryPath,
+        standalone: qbittorrentConfig.standaloneCategoryPath,
       },
       downloadRoots,
       primaryServiceKey: primaryDownloadEntry?.key || null,
@@ -2006,6 +2016,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
         manual: qbittorrentConfig.manualCategoryPath,
         movies: qbittorrentConfig.moviesCategoryPath,
         series: qbittorrentConfig.seriesCategoryPath,
+        standalone: qbittorrentConfig.standaloneCategoryPath,
       },
       vault: vaultUsage ? {
         freeGb: Number(vaultUsage.freeGb.toFixed(2)),
@@ -2832,18 +2843,6 @@ const writeJsonFileAtomic = (filePath, payload) => {
   fs.renameSync(tmpPath, filePath);
 };
 
-const normalizeStringArray = (value) =>
-  (Array.isArray(value) ? value : [])
-    .map((entry) => String(entry || '').trim())
-    .filter(Boolean);
-
-const normalizeStorageRoleState = (value = {}) => ({
-  drives: normalizeStringArray(value?.drives),
-  healthy: value?.healthy !== false,
-  reason: String(value?.reason || ''),
-  roots: normalizeStringArray(value?.roots),
-});
-
 const readStorageProtectionState = () => {
   const raw = readJsonFile(STORAGE_WATCHDOG_STATE_FILE, null);
   const fallbackRole = {
@@ -2897,49 +2896,6 @@ const readStorageProtectionState = () => {
     stoppedByWatchdog,
     vault: normalizeStorageRoleState(raw.vault || {}),
     scratch: normalizeStorageRoleState(raw.scratch || {}),
-  };
-};
-
-const buildStorageBlockReasonForService = (serviceName, storageProtection) => {
-  const vaultHealthy = storageProtection?.vault?.healthy !== false;
-  const scratchHealthy = storageProtection?.scratch?.healthy !== false;
-
-  if (!vaultHealthy && !scratchHealthy) {
-    return 'Blocked by storage watchdog: vault and scratch are unavailable.';
-  }
-
-  if (!scratchHealthy && ['qbittorrent', 'media-workflow'].includes(serviceName)) {
-    const detail = storageProtection?.scratch?.reason || storageProtection?.reason || 'scratch storage unavailable';
-    return `Blocked by storage watchdog: ${detail}`;
-  }
-
-  if (!vaultHealthy && ['jellyfin', 'bazarr', 'media-workflow'].includes(serviceName)) {
-    const detail = storageProtection?.vault?.reason || storageProtection?.reason || 'vault storage unavailable';
-    return `Blocked by storage watchdog: ${detail}`;
-  }
-
-  if (storageProtection?.reason) {
-    return `Blocked by storage watchdog: ${storageProtection.reason}`;
-  }
-
-  return 'Blocked by storage watchdog: required media storage is unavailable.';
-};
-
-const getStorageBlockForService = (serviceName, storageProtection) => {
-  if (!storageProtection || !Array.isArray(storageProtection.blockedServices)) {
-    return { blocked: false, reason: '' };
-  }
-
-  if (!storageProtection.blockedServices.includes(serviceName)) {
-    return { blocked: false, reason: '' };
-  }
-
-  return {
-    blocked: true,
-    reason: buildStorageBlockReasonForService(serviceName, storageProtection),
-    resumeRequired: Boolean(storageProtection.resumeRequired)
-      && Array.isArray(storageProtection.stoppedByWatchdog)
-      && storageProtection.stoppedByWatchdog.includes(serviceName),
   };
 };
 
@@ -4631,6 +4587,133 @@ const withTimeoutSignal = (timeoutMs) => {
   };
 };
 
+const createQbWebUiError = (code, message, { transient = false } = {}) => {
+  const err = new Error(message);
+  err.code = code;
+  err.transient = transient;
+  return err;
+};
+
+const isTransientQbWebUiError = (error) => {
+  if (error?.transient === true) {
+    return true;
+  }
+  const message = String(error?.message || error || '').toLowerCase();
+  return (
+    message.includes('timeout')
+    || message.includes('timed out')
+    || message.includes('aborted')
+    || message.includes('econnrefused')
+    || message.includes('econnreset')
+    || message.includes('ehostunreach')
+    || message.includes('enetunreach')
+    || message.includes('fetch failed')
+  );
+};
+
+const fetchQbittorrentWebUi = async (pathname, options = {}) => {
+  const timeout = withTimeoutSignal(QBITTORRENT_WEBUI_TIMEOUT_MS);
+  try {
+    return await fetch(buildQbittorrentWebUiUrl(QBITTORRENT_WEBUI_BASE_URL, pathname), {
+      method: options.method || 'GET',
+      headers: options.headers || {},
+      body: options.body,
+      signal: timeout.signal,
+    });
+  } catch (error) {
+    throw createQbWebUiError(
+      'qb_service_unavailable',
+      `Unable to reach qBittorrent WebUI at ${QBITTORRENT_WEBUI_BASE_URL}`,
+      { transient: isTransientQbWebUiError(error) }
+    );
+  } finally {
+    timeout.clear();
+  }
+};
+
+const loginQbittorrentWebUi = async () => {
+  if (!QBITTORRENT_WEBUI_USERNAME || !QBITTORRENT_WEBUI_PASSWORD) {
+    return '';
+  }
+
+  const response = await fetchQbittorrentWebUi('/api/v2/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      username: QBITTORRENT_WEBUI_USERNAME,
+      password: QBITTORRENT_WEBUI_PASSWORD,
+    }).toString(),
+  });
+  const bodyText = (await response.text().catch(() => '')).trim();
+  if (response.status === 401 || response.status === 403 || /fails?/i.test(bodyText)) {
+    throw createQbWebUiError('qb_auth_required', 'qBittorrent WebUI authentication failed.');
+  }
+  if (!response.ok) {
+    throw createQbWebUiError('qb_service_unavailable', `qBittorrent WebUI login returned ${response.status}.`);
+  }
+
+  const sidCookie = extractQbittorrentSidCookie(response.headers);
+  if (!sidCookie) {
+    throw createQbWebUiError('qb_auth_required', 'qBittorrent WebUI did not return a valid session cookie.');
+  }
+
+  return sidCookie;
+};
+
+const addTorrentToQbittorrentWebUi = async ({ source, category, savePath }) => {
+  const credentialsConfigured = Boolean(QBITTORRENT_WEBUI_USERNAME && QBITTORRENT_WEBUI_PASSWORD);
+  const totalAttempts = Math.max(1, QBITTORRENT_WEBUI_RETRY_COUNT + 1);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      const sidCookie = credentialsConfigured ? await loginQbittorrentWebUi() : '';
+      const headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      };
+      if (sidCookie) {
+        headers.Cookie = sidCookie;
+      }
+
+      const response = await fetchQbittorrentWebUi('/api/v2/torrents/add', {
+        method: 'POST',
+        headers,
+        body: new URLSearchParams({
+          urls: source,
+          category,
+          savepath: savePath,
+          autoTMM: 'false',
+        }).toString(),
+      });
+      const bodyText = (await response.text().catch(() => '')).trim();
+      if (response.status === 401 || response.status === 403) {
+        throw createQbWebUiError(
+          'qb_auth_required',
+          credentialsConfigured
+            ? 'qBittorrent WebUI rejected configured credentials.'
+            : 'qBittorrent WebUI authentication is required but credentials are missing.'
+        );
+      }
+      if (!response.ok || /fails?/i.test(bodyText)) {
+        throw createQbWebUiError('qb_upstream_error', `qBittorrent WebUI add call failed (status ${response.status}).`);
+      }
+      return {
+        category,
+        savePath,
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isTransientQbWebUiError(error) || attempt >= totalAttempts) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || createQbWebUiError('qb_service_unavailable', 'qBittorrent WebUI request failed.');
+};
+
 const fetchOnlineModels = async ({ force = false } = {}) => {
   const configured = Boolean(ONLINE_LLM_BASE_URL && ONLINE_LLM_API_KEY);
   if (!configured) {
@@ -4716,7 +4799,7 @@ const fetchOnlineModels = async ({ force = false } = {}) => {
   }
 };
 
-const callOnlineChatCompletion = async (payload) => {
+const callOnlineChatCompletion = async (payload, { stream = false } = {}) => {
   const timeout = withTimeoutSignal(ONLINE_LLM_TIMEOUT_MS);
   try {
     const response = await fetch(buildOnlineLlmUrl('/chat/completions'), {
@@ -4728,6 +4811,9 @@ const callOnlineChatCompletion = async (payload) => {
       body: JSON.stringify(payload),
       signal: timeout.signal,
     });
+    if (stream) {
+      return response;
+    }
     const body = await response.json().catch(() => ({}));
     return { response, body };
   } finally {
@@ -5050,6 +5136,280 @@ const llmConversationDeleteHandler = (req, res) => {
   }
   appDb.deleteLlmConversation(conversationId);
   return res.json({ success: true, id: conversationId });
+};
+
+const readUpstreamErrorMessage = async (response, fallbackMessage) => {
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    const payload = await response.json().catch(() => ({}));
+    return String(payload?.error?.message || payload?.error || fallbackMessage);
+  }
+  const text = await response.text().catch(() => '');
+  return String(text || fallbackMessage);
+};
+
+const parseSseBlocks = (buffer) => {
+  const events = [];
+  let remaining = buffer;
+  let boundary = remaining.indexOf('\n\n');
+  while (boundary >= 0) {
+    const rawBlock = remaining.slice(0, boundary).replace(/\r/g, '');
+    remaining = remaining.slice(boundary + 2);
+    boundary = remaining.indexOf('\n\n');
+    if (!rawBlock.trim()) {
+      continue;
+    }
+
+    let eventName = 'message';
+    const dataLines = [];
+    for (const line of rawBlock.split('\n')) {
+      if (!line || line.startsWith(':')) {
+        continue;
+      }
+      if (line.startsWith('event:')) {
+        eventName = line.slice(6).trim() || 'message';
+        continue;
+      }
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    events.push({
+      data: dataLines.join('\n'),
+      event: eventName,
+    });
+  }
+
+  return { events, remaining };
+};
+
+const extractStreamDeltaText = (payload) => {
+  const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
+  if (choice && typeof choice === 'object') {
+    const delta = choice.delta;
+    if (typeof delta?.content === 'string') {
+      return delta.content;
+    }
+    if (Array.isArray(delta?.content)) {
+      return delta.content
+        .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+        .join('');
+    }
+    if (typeof choice.text === 'string') {
+      return choice.text;
+    }
+  }
+  if (typeof payload?.content === 'string') {
+    return payload.content;
+  }
+  return '';
+};
+
+const llmChatStreamHandler = async (req, res) => {
+  const text = String(req.body?.message || '').trim();
+  if (!text) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  const mode = String(req.body?.mode || 'local').trim().toLowerCase() === 'online' ? 'online' : 'local';
+  const llmState = await buildLlmState();
+  let selectedModelId = '';
+  if (mode === 'local') {
+    if (!llmState.available) {
+      return res.status(409).json({ error: llmState.blocker || 'LLM service is unavailable' });
+    }
+    if (!llmState.running) {
+      return res.status(409).json({ error: 'LLM service is stopped. Start Local LLM first.' });
+    }
+    if (!llmState.activeModel || !llmState.activeModel.installed) {
+      return res.status(409).json({ error: 'No active model is installed. Select and install a model first.' });
+    }
+    selectedModelId = llmState.activeModel.id;
+  } else {
+    const online = llmState.online || {};
+    if (!online.configured) {
+      return res.status(409).json({ error: 'Online provider is not configured.' });
+    }
+    if (!online.available) {
+      return res.status(409).json({ error: online.error || 'Online provider is unavailable.' });
+    }
+    const requestedOnlineModelId = String(req.body?.onlineModelId || req.body?.modelId || '').trim();
+    selectedModelId = requestedOnlineModelId || String(online.activeModelId || '');
+    if (!selectedModelId || !Array.isArray(online.models) || !online.models.some((entry) => entry.id === selectedModelId)) {
+      return res.status(400).json({ error: 'A valid online model is required.' });
+    }
+  }
+
+  let conversation = null;
+  const requestedConversationId = Number(req.body?.conversationId || 0);
+  if (Number.isInteger(requestedConversationId) && requestedConversationId > 0) {
+    const existing = appDb.getLlmConversation(requestedConversationId);
+    if (!existing || existing.userId !== req.session?.userId) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    conversation = existing;
+  } else {
+    conversation = appDb.createLlmConversation({
+      userId: req.session?.userId,
+      title: text.slice(0, 80),
+    });
+  }
+
+  appDb.appendLlmMessage({
+    conversationId: conversation.id,
+    role: 'user',
+    content: text,
+    modelId: selectedModelId,
+  });
+
+  const history = appDb.listLlmMessages(conversation.id);
+  const messages = [
+    { role: 'system', content: LLM_CHAT_SYSTEM_PROMPT },
+    ...history.map((entry) => ({ role: entry.role, content: entry.content })),
+  ];
+
+  const chatPayload = {
+    model: selectedModelId,
+    messages,
+    stream: true,
+    max_tokens: LLM_MAX_TOKENS,
+    temperature: LLM_TEMPERATURE,
+  };
+
+  const upstream = mode === 'online'
+    ? await callOnlineChatCompletion(chatPayload, { stream: true })
+    : await callLlmChatCompletion(chatPayload, { stream: true });
+
+  if (!upstream.ok) {
+    const errorMessage = await readUpstreamErrorMessage(upstream, 'LLM request failed');
+    return res.status(502).json({ error: errorMessage });
+  }
+
+  if (!upstream.body) {
+    return res.status(502).json({ error: 'Upstream stream is unavailable' });
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const emit = (eventName, payload) => {
+    if (res.writableEnded) {
+      return;
+    }
+    res.write(`event: ${eventName}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  let terminalSent = false;
+  const sendTerminal = (kind, payload) => {
+    if (terminalSent || res.writableEnded) {
+      return;
+    }
+    terminalSent = true;
+    emit(kind, payload);
+    res.end();
+  };
+
+  let clientDisconnected = false;
+  req.on('close', () => {
+    clientDisconnected = true;
+    if (typeof upstream.body.cancel === 'function') {
+      upstream.body.cancel().catch(() => {});
+    }
+  });
+
+  emit('meta', {
+    conversationId: conversation.id,
+    mode,
+    modelId: selectedModelId,
+    startedAt: new Date().toISOString(),
+  });
+
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let seq = 0;
+  let assistantText = '';
+
+  try {
+    while (!clientDisconnected) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const parsed = parseSseBlocks(buffer);
+      buffer = parsed.remaining;
+
+      for (const event of parsed.events) {
+        if (!event.data) {
+          continue;
+        }
+        if (event.data === '[DONE]') {
+          continue;
+        }
+
+        const payload = JSON.parse(event.data);
+        const delta = extractStreamDeltaText(payload);
+        if (!delta) {
+          continue;
+        }
+        seq += 1;
+        assistantText += delta;
+        emit('delta', {
+          seq,
+          text: delta,
+        });
+      }
+    }
+
+    if (clientDisconnected) {
+      return;
+    }
+
+    const normalizedAssistantText = assistantText.trim();
+    if (!normalizedAssistantText) {
+      sendTerminal('error', {
+        code: 'upstream_error',
+        message: 'LLM returned an empty response',
+      });
+      return;
+    }
+
+    let assistantMessage = null;
+    try {
+      assistantMessage = appDb.appendLlmMessage({
+        conversationId: conversation.id,
+        role: 'assistant',
+        content: normalizedAssistantText,
+        modelId: selectedModelId,
+      });
+    } catch {
+      sendTerminal('error', {
+        code: 'persistence_error',
+        message: 'Unable to persist streamed assistant message',
+      });
+      return;
+    }
+
+    sendTerminal('done', {
+      conversationId: conversation.id,
+      assistantMessage,
+    });
+  } catch (err) {
+    if (clientDisconnected) {
+      return;
+    }
+    sendTerminal('error', {
+      code: 'upstream_error',
+      message: String(err?.message || err || 'Stream failed'),
+    });
+  } finally {
+    reader.releaseLock();
+  }
 };
 
 const llmChatHandler = async (req, res) => {
@@ -5507,16 +5867,22 @@ const buildUiBootstrapPayload = async (sessionUser) => {
   const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
   const hasFilesAccess = await syncManagedShares().then((shares) => shares.length > 0).catch(() => false);
   const transferService = serviceByKey.get('ftp');
+  const torrentTransferService = serviceByKey.get('qbittorrent');
   const aiService = serviceByKey.get('llm');
   const terminalService = serviceByKey.get('ttyd');
+  const transferWorkspaceServices = [transferService, torrentTransferService].filter(Boolean);
+  const transferWorkspaceAvailable = transferWorkspaceServices.some((entry) => Boolean(entry?.available));
+  const transferWorkspaceStatus = transferWorkspaceServices.length > 0
+    ? aggregateCatalogStatus(transferWorkspaceServices)
+    : (transferWorkspaceAvailable ? 'working' : 'unavailable');
 
   const nav = uiNavBlueprint.map((entry) => {
     let available = true;
     let status = 'working';
 
     if (entry.key === 'transfers') {
-      available = Boolean(transferService?.available);
-      status = String(transferService?.status || (available ? 'working' : 'unavailable'));
+      available = transferWorkspaceAvailable;
+      status = String(transferWorkspaceStatus || (available ? 'working' : 'unavailable'));
     } else if (entry.key === 'ai') {
       available = Boolean(aiService?.available);
       status = String(aiService?.status || (available ? 'working' : 'unavailable'));
@@ -5547,7 +5913,7 @@ const buildUiBootstrapPayload = async (sessionUser) => {
       canManageUsers: sessionUser?.role === 'admin',
       canManageShares: sessionUser?.role === 'admin',
       canUseFilesWorkspace: hasFilesAccess || sessionUser?.role === 'admin',
-      canUseTransfersWorkspace: Boolean(transferService?.available),
+      canUseTransfersWorkspace: transferWorkspaceAvailable,
       canUseAiWorkspace: Boolean(aiService?.available),
       canUseTerminalWorkspace: Boolean(terminalService?.available),
     },
@@ -5627,6 +5993,8 @@ const uiWorkspacePayloadHandler = async (req, res) => {
     }
 
     if (workspaceKey === 'transfers') {
+      const qbittorrentConfig = probeQbittorrentConfig();
+      const qbittorrentService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
       return res.json({
         generatedAt: now,
         workspaceKey,
@@ -5639,17 +6007,44 @@ const uiWorkspacePayloadHandler = async (req, res) => {
           downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
           ftpMounting: getCloudMountCapability(),
         },
+        torrent: {
+          service: qbittorrentService,
+          standaloneDestination: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+          laneSummary: {
+            arr: {
+              movies: {
+                category: 'movies',
+                savePath: qbittorrentConfig.moviesCategoryPath || MEDIA_DOWNLOADS_MOVIES_DIR,
+              },
+              series: {
+                category: 'series',
+                savePath: qbittorrentConfig.seriesCategoryPath || MEDIA_DOWNLOADS_SERIES_DIR,
+              },
+            },
+            standalone: {
+              category: 'standalone',
+              savePath: qbittorrentConfig.standaloneCategoryPath || MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+            },
+          },
+        },
         favourites: appDb.listFtpFavourites().map(serializeFtpFavourite),
         services: transferEntries,
       });
     }
 
     if (workspaceKey === 'ai') {
-      const llmState = await buildLlmState();
+      const [llmState, monitor] = await Promise.all([
+        buildLlmState(),
+        getMonitorSnapshot(),
+      ]);
       return res.json({
         generatedAt: now,
         workspaceKey,
         llmState,
+        monitor: {
+          cpuLoad: Number(monitor.cpuLoad || 0),
+          timestamp: now,
+        },
       });
     }
 
@@ -7254,6 +7649,109 @@ const ftpMkdirHandler = async (req, res) => {
   }
 };
 
+const mediaTorrentAddHandler = async (req, res) => {
+  const source = String(req.body?.source || '').trim();
+  const lane = String(req.body?.lane || '').trim().toLowerCase();
+  const requestedMediaType = String(req.body?.mediaType || '').trim().toLowerCase();
+
+  if (!isValidTorrentSource(source)) {
+    pushAuditEvent(req, 'warn', 'Torrent add rejected', { code: 'invalid_source', lane, source });
+    return res.status(400).json({ error: 'source must be a magnet URI or http(s) URL', code: 'invalid_source' });
+  }
+  if (!TORRENT_LANE_SET.has(lane)) {
+    pushAuditEvent(req, 'warn', 'Torrent add rejected', { code: 'invalid_lane', lane });
+    return res.status(400).json({ error: 'lane must be arr or standalone', code: 'invalid_lane' });
+  }
+  if (lane === 'arr' && !TORRENT_ARR_MEDIA_TYPE_SET.has(requestedMediaType)) {
+    pushAuditEvent(req, 'warn', 'Torrent add rejected', { code: 'invalid_media_type', lane, mediaType: requestedMediaType || '' });
+    return res.status(400).json({ error: 'mediaType must be movies or series when lane=arr', code: 'invalid_media_type' });
+  }
+
+  const mediaType = lane === 'arr' ? requestedMediaType : null;
+  const mappedQb = lane === 'arr'
+    ? TORRENT_LANE_MAPPING.arr[mediaType]
+    : TORRENT_LANE_MAPPING.standalone;
+
+  try {
+    const storageProtection = readStorageProtectionState();
+    const storageBlock = getStorageBlockForService('qbittorrent', storageProtection);
+    if (storageBlock.blocked) {
+      const error = storageBlock.reason || 'Blocked by storage watchdog';
+      pushAuditEvent(req, 'warn', 'Torrent add blocked by storage watchdog', {
+        code: 'storage_blocked',
+        lane,
+        mediaType,
+        error,
+      });
+      return res.status(423).json({
+        error,
+        blockedBy: 'storage_watchdog',
+        code: 'storage_blocked',
+      });
+    }
+
+    const qbInstall = await resolveServiceInstall('qbittorrent', SERVICES.qbittorrent);
+    if (!qbInstall.available) {
+      const error = 'qBittorrent service is unavailable on this host';
+      pushAuditEvent(req, 'error', 'Torrent add failed', { code: 'qb_service_unavailable', lane, mediaType, error });
+      return res.status(503).json({ error, code: 'qb_service_unavailable' });
+    }
+
+    const qbHealth = await checkServiceHealth('qbittorrent', SERVICES.qbittorrent);
+    if (!qbHealth.running) {
+      const error = 'qBittorrent service is not reachable';
+      pushAuditEvent(req, 'error', 'Torrent add failed', { code: 'qb_service_unavailable', lane, mediaType, error });
+      return res.status(503).json({ error, code: 'qb_service_unavailable' });
+    }
+
+    await addTorrentToQbittorrentWebUi({
+      source,
+      category: mappedQb.category,
+      savePath: mappedQb.savePath,
+    });
+
+    const response = {
+      success: true,
+      lane,
+      mediaType,
+      source,
+      qb: {
+        category: mappedQb.category,
+        savePath: mappedQb.savePath,
+      },
+      addedAt: new Date().toISOString(),
+    };
+    pushAuditEvent(req, 'info', 'Torrent add succeeded', {
+      lane,
+      mediaType,
+      sourceType: source.toLowerCase().startsWith('magnet:') ? 'magnet' : 'url',
+      qb: response.qb,
+    });
+    return res.status(200).json(response);
+  } catch (err) {
+    const error = String(err?.message || err || 'qBittorrent add failed');
+    const code = String(err?.code || 'qb_service_unavailable');
+    const status = code === 'qb_upstream_error'
+      ? 502
+      : (code === 'qb_auth_required' || code === 'qb_service_unavailable')
+        ? 503
+        : 503;
+    const stableCode = code === 'qb_upstream_error'
+      ? 'qb_upstream_error'
+      : (code === 'qb_auth_required' ? 'qb_auth_required' : 'qb_service_unavailable');
+    pushAuditEvent(req, status >= 500 ? 'error' : 'warn', 'Torrent add failed', {
+      code: stableCode,
+      lane,
+      mediaType,
+      error,
+    });
+    return res.status(status).json({
+      error,
+      code: stableCode,
+    });
+  }
+};
+
 const registerDualRoute = (method, routePath, ...handlers) => {
   app[method](routePath, ...handlers);
   app[method](`/api${routePath}`, ...handlers);
@@ -7312,6 +7810,7 @@ registerDualRoute('post', '/ftp/list', requireAuth, requireAdmin, ftpListHandler
 registerDualRoute('post', '/ftp/download', requireAuth, requireAdmin, ftpDownloadHandler);
 registerDualRoute('post', '/ftp/upload', requireAuth, requireAdmin, ftpUploadHandler);
 registerDualRoute('post', '/ftp/mkdir', requireAuth, requireAdmin, ftpMkdirHandler);
+registerDualRoute('post', '/media/torrents/add', requireAuth, requireAdmin, mediaTorrentAddHandler);
 registerDualRoute('get', '/llm/state', requireAuth, requireAdmin, llmStateHandler);
 registerDualRoute('post', '/llm/models/select', requireAuth, requireAdmin, llmModelSelectHandler);
 registerDualRoute('post', '/llm/models/add-local', requireAuth, requireAdmin, llmModelAddLocalHandler);
@@ -7323,6 +7822,7 @@ registerDualRoute('get', '/llm/conversations', requireAuth, requireAdmin, llmCon
 registerDualRoute('get', '/llm/conversations/:id/messages', requireAuth, requireAdmin, llmConversationMessagesHandler);
 registerDualRoute('delete', '/llm/conversations/:id', requireAuth, requireAdmin, llmConversationDeleteHandler);
 registerDualRoute('post', '/llm/chat', requireAuth, requireAdmin, llmChatHandler);
+registerDualRoute('post', '/llm/chat/stream', requireAuth, requireAdmin, llmChatStreamHandler);
 registerDualRoute('get', '/openai/v1/models', requireAdminOrLlmKey, openAiModelsHandler);
 registerDualRoute('post', '/openai/v1/chat/completions', requireAdminOrLlmKey, openAiChatCompletionsHandler);
 

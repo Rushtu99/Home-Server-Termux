@@ -153,8 +153,10 @@ export default function DashboardV2() {
         const payload = await response.json().catch(() => ({} as Record<string, unknown>));
         throw new Error(String(payload.error || 'Login failed'));
       }
-
-      window.location.reload();
+      setLoginPassword('');
+      setLoginError('');
+      reloadBootstrap();
+      reloadWorkspace();
     } catch (error) {
       setLoginError(toErrorMessage(error, 'Login failed'));
     } finally {
@@ -296,7 +298,7 @@ export default function DashboardV2() {
       ) : null}
 
       <main className="dash2-main" id="app-main">
-        <header className="dash2-header">
+        <header className={`dash2-header ${authRequired ? 'dash2-header--auth' : ''}`}>
           <div>
             <h1>{activeWorkspaceTitle}</h1>
             <p>{activeWorkspaceSummary}</p>
@@ -309,59 +311,72 @@ export default function DashboardV2() {
                 aria-expanded={sidebarOpen}
                 aria-controls="app-main"
                 onClick={() => setSidebarOpen((current) => !current)}
+                aria-label={sidebarOpen ? 'Close workspace menu' : 'Open workspace menu'}
               >
-                {sidebarOpen ? 'Close menu' : 'Workspaces'}
+                <span className="dash2-sidebar-toggle__icon" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </span>
               </button>
             ) : null}
-            <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
-            <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleString() : 'Waiting for snapshot'}</span>
-            <label className="dash2-theme-picker">
-              <span>Theme</span>
-              <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
-                {THEME_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <button className="ui-button" type="button" onClick={handleRefresh} disabled={headerBusy}>
-              {headerBusy ? 'Refreshing…' : 'Refresh'}
-            </button>
-            <button className="ui-button" type="button" onClick={handleLogout} disabled={headerBusy}>
-              Log out
-            </button>
+            {authRequired ? (
+              <StatusBadge tone="warn">sign in required</StatusBadge>
+            ) : (
+              <>
+                <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
+                <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleString() : 'Waiting for snapshot'}</span>
+                <label className="dash2-theme-picker">
+                  <span>Theme</span>
+                  <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
+                    {THEME_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <button className="ui-button" type="button" onClick={handleRefresh} disabled={headerBusy}>
+                  {headerBusy ? 'Refreshing…' : 'Refresh'}
+                </button>
+                <button className="ui-button" type="button" onClick={handleLogout} disabled={headerBusy}>
+                  Log out
+                </button>
+              </>
+            )}
           </div>
         </header>
 
         {loadingBootstrap ? <LoadingState label="Loading dashboard bootstrap…" /> : null}
         {authRequired ? (
-          <section className="dash2-login-card">
-            <h2>Sign in to continue</h2>
-            <p>Dashboard v2 reads protected admin workspace snapshots.</p>
-            <form className="dash2-login-form" onSubmit={handleLogin}>
-              <label>
-                <span>Username</span>
-                <input
-                  className="ui-input"
-                  autoComplete="username"
-                  value={loginUsername}
-                  onChange={(event) => setLoginUsername(event.target.value)}
-                />
-              </label>
-              <label>
-                <span>Password</span>
-                <input
-                  className="ui-input"
-                  autoComplete="current-password"
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                />
-              </label>
-              <button className="ui-button ui-button--primary" type="submit" disabled={loginBusy}>
-                {loginBusy ? 'Signing in…' : 'Sign in'}
-              </button>
-            </form>
-            {loginError ? <ErrorState message={loginError} /> : null}
+          <section className="dash2-login-wrap">
+            <div className="dash2-login-card">
+              <h2>Sign in to continue</h2>
+              <p>Dashboard v2 reads protected admin workspace snapshots.</p>
+              <form className="dash2-login-form" onSubmit={handleLogin}>
+                <label>
+                  <span>Username</span>
+                  <input
+                    className="ui-input"
+                    autoComplete="username"
+                    value={loginUsername}
+                    onChange={(event) => setLoginUsername(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Password</span>
+                  <input
+                    className="ui-input"
+                    autoComplete="current-password"
+                    type="password"
+                    value={loginPassword}
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                  />
+                </label>
+                <button className="ui-button ui-button--primary" type="submit" disabled={loginBusy}>
+                  {loginBusy ? 'Signing in…' : 'Sign in'}
+                </button>
+              </form>
+              {loginError ? <ErrorState message={loginError} /> : null}
+            </div>
           </section>
         ) : null}
         {bootstrapError && !authRequired ? <ErrorState message={bootstrapError} /> : null}

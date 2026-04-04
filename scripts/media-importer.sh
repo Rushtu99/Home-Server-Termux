@@ -62,6 +62,8 @@ MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-$MEDIA_SCRATCH_ROOT/downloads}"
 MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-$MEDIA_DOWNLOADS_DIR/movies}"
 MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-$MEDIA_DOWNLOADS_DIR/series}"
 MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-$MEDIA_DOWNLOADS_DIR/manual}"
+MEDIA_DOWNLOADS_TORRENT_DIR="${MEDIA_DOWNLOADS_TORRENT_DIR:-$MEDIA_DOWNLOADS_DIR/torrent}"
+MEDIA_DOWNLOADS_TORRENT_QBIT_DIR="${MEDIA_DOWNLOADS_TORRENT_QBIT_DIR:-$MEDIA_DOWNLOADS_TORRENT_DIR/qbit}"
 MEDIA_SMALL_DOWNLOADS_DIR="${MEDIA_SMALL_DOWNLOADS_DIR:-$DRIVES_C_DIR/Download/Home-Server/small}"
 MEDIA_SMALL_DOWNLOADS_MAX_MB="${MEDIA_SMALL_DOWNLOADS_MAX_MB:-256}"
 MEDIA_IMPORT_REVIEW_DIR="${MEDIA_IMPORT_REVIEW_DIR:-$MEDIA_SCRATCH_ROOT/review}"
@@ -96,6 +98,8 @@ mkdir -p \
     "$MEDIA_DOWNLOADS_MOVIES_DIR" \
     "$MEDIA_DOWNLOADS_SERIES_DIR" \
     "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+    "$MEDIA_DOWNLOADS_TORRENT_DIR" \
+    "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR" \
     "$MEDIA_SMALL_DOWNLOADS_DIR" \
     "$MEDIA_QBIT_TMP_DIR" \
     "$MEDIA_TRANSCODE_DIR" \
@@ -616,6 +620,12 @@ process_source_path() {
         FAILED_COUNT=$((FAILED_COUNT + 1))
         log WARN "source missing: $entry"
         record_event "import" "missing-source" "$entry" "" "source missing"
+        return 0
+    fi
+
+    if path_within "$entry" "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR"; then
+        log INFO "source skipped (standalone qbit root): $entry"
+        record_event "import" "skip-standalone" "$entry" "" "source under standalone qbit root"
         return 0
     fi
 

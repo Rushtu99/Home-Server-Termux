@@ -42,6 +42,8 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   }, []);
 
   const reloadBootstrap = useCallback(() => {
+    setBootstrapError('');
+    setLoadingBootstrap(true);
     setBootstrapReloadTick((current) => current + 1);
   }, []);
 
@@ -57,7 +59,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     const params = new URLSearchParams(window.location.search);
     const mappedWorkspace = resolveWorkspaceFromQuery(params);
     setActiveWorkspaceState(mappedWorkspace);
-  }, [bootstrapReloadTick]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,7 +98,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       cancelled = true;
       window.clearInterval(bootstrapTimer);
     };
-  }, []);
+  }, [bootstrapReloadTick]);
 
   useEffect(() => {
     let cancelled = false;

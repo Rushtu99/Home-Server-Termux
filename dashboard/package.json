@@ -7,7 +7,10 @@
     "dev": "next dev --webpack --hostname ${FRONTEND_BIND_HOST:-127.0.0.1}",
     "build": "next build --webpack",
     "build:demo": "NEXT_PUBLIC_DEMO_MODE=true DEMO_EXPORT=true NEXT_PUBLIC_BASE_PATH=/Home-Server-Termux next build --webpack",
-    "start": "next start -H ${FRONTEND_BIND_HOST:-127.0.0.1}"
+    "start": "next start -H ${FRONTEND_BIND_HOST:-127.0.0.1}",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "axios": "^1.14.0",
@@ -17,12 +20,17 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
+    "jsdom": "^29.0.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.2"
   }
 }

@@ -67,6 +67,15 @@ for script in scripts/*.sh; do bash -n "$script"; done
 nginx -t -p "$(pwd)" -c "$(pwd)/nginx.conf"
 ```
 
+Unit tests:
+
+```bash
+npm --prefix server test
+npm --prefix server run test:coverage
+npm --prefix dashboard test
+npm --prefix dashboard run test:coverage
+```
+
 Useful runtime probes:
 
 ```bash
@@ -85,6 +94,7 @@ scripts/storage-watchdog-service.sh check-now
 - [Media and Storage](/data/data/com.termux/files/home/home-server/docs/media-storage.md)
 - [Live NAS Roadmap](/data/data/com.termux/files/home/home-server/docs/roadmap.md)
 - [Operations](/data/data/com.termux/files/home/home-server/docs/operations.md)
+- [Testing](/data/data/com.termux/files/home/home-server/docs/testing.md)
 - [Troubleshooting](/data/data/com.termux/files/home/home-server/docs/troubleshooting.md)
 
 ## Roadmap

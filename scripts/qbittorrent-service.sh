@@ -24,6 +24,8 @@ MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-$MEDIA_SCRATCH_ROOT/downloads}"
 MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-$MEDIA_DOWNLOADS_DIR/movies}"
 MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-$MEDIA_DOWNLOADS_DIR/series}"
 MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-$MEDIA_DOWNLOADS_DIR/manual}"
+MEDIA_DOWNLOADS_TORRENT_DIR="${MEDIA_DOWNLOADS_TORRENT_DIR:-$MEDIA_DOWNLOADS_DIR/torrent}"
+MEDIA_DOWNLOADS_TORRENT_QBIT_DIR="${MEDIA_DOWNLOADS_TORRENT_QBIT_DIR:-$MEDIA_DOWNLOADS_TORRENT_DIR/qbit}"
 MEDIA_QBIT_TMP_DIR="${MEDIA_QBIT_TMP_DIR:-$MEDIA_SCRATCH_ROOT/tmp/qbittorrent}"
 MEDIA_IMPORTER_CMD="${MEDIA_IMPORTER_CMD:-$PROJECT/scripts/media-importer.sh}"
 QBITTORRENT_HOME="${QBITTORRENT_HOME:-$MEDIA_SERVICES_HOME/qbittorrent}"
@@ -44,6 +46,8 @@ mkdir -p \
     "$MEDIA_DOWNLOADS_MOVIES_DIR" \
     "$MEDIA_DOWNLOADS_SERIES_DIR" \
     "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+    "$MEDIA_DOWNLOADS_TORRENT_DIR" \
+    "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR" \
     "$MEDIA_QBIT_TMP_DIR" \
     "$(dirname "$QBITTORRENT_CONFIG_PATH")"
 
@@ -126,6 +130,7 @@ EOF
     remove_config_key 'CategoriesmoviesSavePath'
     remove_config_key 'CategoriesseriesSavePath'
     remove_config_key 'CategoriesmanualSavePath'
+    remove_config_key 'CategoriesstandaloneSavePath'
     remove_config_key 'SessionTorrentFinishedCmdEnabled'
     remove_config_key 'SessionTorrentFinishedCmd'
 
@@ -137,6 +142,7 @@ EOF
     upsert_config_key 'Categories\movies\SavePath' "$MEDIA_DOWNLOADS_MOVIES_DIR"
     upsert_config_key 'Categories\series\SavePath' "$MEDIA_DOWNLOADS_SERIES_DIR"
     upsert_config_key 'Categories\manual\SavePath' "$MEDIA_DOWNLOADS_MANUAL_DIR"
+    upsert_config_key 'Categories\standalone\SavePath' "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR"
     if [ -x "$MEDIA_IMPORTER_CMD" ]; then
         upsert_config_key 'Session\TorrentFinishedCmdEnabled' "true"
         upsert_config_key 'Session\TorrentFinishedCmd' "$QBITTORRENT_FINISHED_CMD"
