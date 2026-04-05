@@ -194,6 +194,7 @@ const DRIVE_REFRESH_INTERVAL_MS = Math.max(60000, Number(process.env.DRIVE_REFRE
 const SSHD_BIND_HOST = process.env.SSHD_BIND_HOST || '127.0.0.1';
 const SSHD_PORT = Number(process.env.SSHD_PORT || 8022);
 const ENABLE_SSHD = process.env.ENABLE_SSHD === 'true';
+const SSHD_AUTH_MODE = String(process.env.SSHD_AUTH_MODE || 'password_and_key').trim().toLowerCase();
 const COPYPARTY_BASE_PATH = process.env.COPYPARTY_BASE_PATH || '/copyparty';
 const SYNCTHING_BASE_PATH = process.env.SYNCTHING_BASE_PATH || '/syncthing';
 const SYNCTHING_HOME = process.env.SYNCTHING_HOME || path.join(RUNTIME_DIR, 'syncthing');
@@ -269,7 +270,9 @@ const TAILSCALE_AUTH_KEY = String(process.env.TAILSCALE_AUTH_KEY || '').trim();
 const TAILSCALE_HOSTNAME = String(process.env.TAILSCALE_HOSTNAME || '').trim();
 const TAILSCALE_PID = process.env.TAILSCALE_PID_PATH || path.join(RUNTIME_DIR, 'tailscaled.pid');
 const TAILSCALE_SERVICE_CMD = process.env.TAILSCALE_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'tailscale-service.sh');
+const TAILSCALE_ROOT_CMD = process.env.TAILSCALE_ROOT_CMD || 'su -c tailscale';
 const HMSTX_CONTROL_CMD = process.env.HMSTX_CONTROL_CMD || path.join(ROOT_DIR, 'scripts', 'hmstx-control.sh');
+const TAILSCALE_HELPER_MODE = TAILSCALE_MODE === 'managed_daemon' || TAILSCALE_MODE === 'root_daemon';
 const LLM_CHAT_SYSTEM_PROMPT = process.env.LLM_CHAT_SYSTEM_PROMPT || 'You are a precise assistant running inside a private home server dashboard.';
 const BOOTSTRAP_DASHBOARD_USER = normalizeUsername(process.env.DASHBOARD_USER || 'admin') || 'admin';
 const BOOTSTRAP_DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
@@ -294,6 +297,14 @@ const MAX_ACTIVE_SESSIONS = Math.max(1, Number(process.env.MAX_ACTIVE_SESSIONS |
 const LOGIN_WINDOW_MS = parseDurationMs(process.env.LOGIN_WINDOW || '10m', 10 * 60 * 1000);
 const LOGIN_BLOCK_MS = parseDurationMs(process.env.LOGIN_BLOCK_DURATION || '15m', 15 * 60 * 1000);
 const LOGIN_MAX_ATTEMPTS = Math.max(1, Number(process.env.LOGIN_MAX_ATTEMPTS || 5));
+const UI_INITIAL_PARTIAL_SUCCESS = String(process.env.UI_INITIAL_PARTIAL_SUCCESS || 'true').toLowerCase() !== 'false';
+const UI_DEFER_HEAVY_DIAGNOSTICS = String(process.env.UI_DEFER_HEAVY_DIAGNOSTICS || 'true').toLowerCase() !== 'false';
+const UI_INITIAL_RETRY_AFTER_MS = Math.max(1000, Number(process.env.UI_INITIAL_RETRY_AFTER_MS || 5000) || 5000);
+const UI_DIAGNOSTIC_TIMEOUT_MS = Math.max(1000, Number(process.env.UI_DIAGNOSTIC_TIMEOUT_MS || 2500) || 2500);
+const UI_SERVICE_CATALOG_TTL_MS = Math.max(1000, Number(process.env.UI_SERVICE_CATALOG_TTL_MS || 15000) || 15000);
+const UI_SERVICE_CATALOG_MAX_STALE_MS = Math.max(UI_SERVICE_CATALOG_TTL_MS, Number(process.env.UI_SERVICE_CATALOG_MAX_STALE_MS || 120000) || 120000);
+const UI_NETWORK_EXPOSURE_TTL_MS = Math.max(1000, Number(process.env.UI_NETWORK_EXPOSURE_TTL_MS || 45000) || 45000);
+const UI_NETWORK_EXPOSURE_MAX_STALE_MS = Math.max(UI_NETWORK_EXPOSURE_TTL_MS, Number(process.env.UI_NETWORK_EXPOSURE_MAX_STALE_MS || 300000) || 300000);
 const NGINX_CMD = `nginx -p "${ROOT_DIR}" -c "${ROOT_DIR}/nginx.conf"`;
 const NGINX_MATCH = `nginx -p ${ROOT_DIR} -c ${ROOT_DIR}/nginx.conf`;
 const stopPidfileProcess = (pidPath, fallback = '') =>
@@ -597,7 +608,9 @@ const BASE_SERVICE_CATALOG_META = {
   },
   sshd: {
     controlMode: 'optional',
-    description: 'Shell access for maintenance and recovery.',
+    description: SSHD_AUTH_MODE === 'key_only'
+      ? 'Shell access for maintenance and recovery with public-key auth only.'
+      : 'Shell access for maintenance and recovery.',
     group: 'access',
     label: 'sshd',
     surface: 'home',
@@ -727,9 +740,11 @@ const getServiceCatalogMeta = () => {
   return {
     ...BASE_SERVICE_CATALOG_META,
     tailscale: {
-      controlMode: TAILSCALE_MODE === 'managed_daemon' ? 'optional' : 'external',
+      controlMode: TAILSCALE_HELPER_MODE ? 'optional' : 'external',
       description: TAILSCALE_MODE === 'managed_daemon'
         ? 'Private tailnet access to the gateway and SSH through a managed tailscaled instance.'
+        : TAILSCALE_MODE === 'root_daemon'
+        ? 'Private tailnet access to the gateway and SSH through the root-managed Tailscale daemon.'
         : 'Private tailnet access provided by the Tailscale Android app.',
       group: 'access',
       label: 'Tailscale',
@@ -926,9 +941,11 @@ const readCpuUsage = async () => {
   return Math.max(0, Math.min(100, (1 - idleDiff / totalDiff) * 100));
 };
 
-const runCommand = (cmd) =>
+const runCommand = (cmd, options = {}) =>
   new Promise((resolve, reject) => {
-    exec(cmd, { timeout: 15000, maxBuffer: 1024 * 1024, shell: EXEC_SHELL }, (err, stdout, stderr) => {
+    const timeout = Math.max(1000, Number(options.timeoutMs || 15000) || 15000);
+    const maxBuffer = Math.max(1024, Number(options.maxBuffer || 1024 * 1024) || 1024 * 1024);
+    exec(cmd, { timeout, maxBuffer, shell: EXEC_SHELL }, (err, stdout, stderr) => {
       if (err) {
         return reject(stderr?.trim() || stdout?.trim() || err.message);
       }
@@ -1315,7 +1332,7 @@ const getManageableServiceNames = async () => {
       continue;
     }
 
-    if (name === 'tailscale' && TAILSCALE_MODE !== 'managed_daemon') {
+    if (name === 'tailscale' && !TAILSCALE_HELPER_MODE) {
       continue;
     }
 
@@ -1341,7 +1358,7 @@ const resolveServiceInstall = async (serviceName, svc) => {
       };
     }
 
-    if (TAILSCALE_MODE !== 'managed_daemon') {
+    if (!TAILSCALE_HELPER_MODE) {
       return {
         available: false,
         label: 'TAILSCALE_MODE',
@@ -1833,55 +1850,97 @@ const buildServiceCatalog = async () => {
 
 const uiServiceCatalogCache = {
   expiresAt: 0,
+  staleUntil: 0,
   promise: null,
   value: null,
 };
 
-const getUiServiceCatalog = async ({ force = false } = {}) => {
+const getUiServiceCatalog = async ({ force = false, allowStale = true } = {}) => {
   const now = Date.now();
   if (!force && uiServiceCatalogCache.value && uiServiceCatalogCache.expiresAt > now) {
     return uiServiceCatalogCache.value;
   }
   if (!force && uiServiceCatalogCache.promise) {
+    if (allowStale && uiServiceCatalogCache.value && uiServiceCatalogCache.staleUntil > now) {
+      uiServiceCatalogCache.promise.catch(() => null);
+      return uiServiceCatalogCache.value;
+    }
     return uiServiceCatalogCache.promise;
   }
   uiServiceCatalogCache.promise = buildServiceCatalog()
     .then((value) => {
       uiServiceCatalogCache.value = value;
-      uiServiceCatalogCache.expiresAt = Date.now() + 2500;
+      uiServiceCatalogCache.expiresAt = Date.now() + UI_SERVICE_CATALOG_TTL_MS;
+      uiServiceCatalogCache.staleUntil = Date.now() + UI_SERVICE_CATALOG_MAX_STALE_MS;
       uiServiceCatalogCache.promise = null;
       return value;
     })
     .catch((error) => {
       uiServiceCatalogCache.promise = null;
+      if (!force && allowStale && uiServiceCatalogCache.value && uiServiceCatalogCache.staleUntil > Date.now()) {
+        return uiServiceCatalogCache.value;
+      }
       throw error;
     });
+  if (!force && allowStale && uiServiceCatalogCache.value && uiServiceCatalogCache.staleUntil > now) {
+    uiServiceCatalogCache.promise.catch(() => null);
+    return uiServiceCatalogCache.value;
+  }
   return uiServiceCatalogCache.promise;
 };
 
-const uiNetworkExposureCache = { expiresAt: 0, promise: null, value: null };
+const uiNetworkExposureCache = { expiresAt: 0, staleUntil: 0, promise: null, value: null };
+const EMPTY_NETWORK_EXPOSURE_SNAPSHOT = Object.freeze({
+  generatedAt: new Date(0).toISOString(),
+  remoteAccess: null,
+  tailscale: null,
+});
 
-const getNetworkExposureSnapshot = async ({ force = false } = {}) => {
+const getNetworkExposureSnapshot = async ({ force = false, allowStale = true } = {}) => {
   const now = Date.now();
   if (!force && uiNetworkExposureCache.value && uiNetworkExposureCache.expiresAt > now) {
     return uiNetworkExposureCache.value;
   }
   if (!force && uiNetworkExposureCache.promise) {
+    if (allowStale && uiNetworkExposureCache.value && uiNetworkExposureCache.staleUntil > now) {
+      uiNetworkExposureCache.promise.catch(() => null);
+      return uiNetworkExposureCache.value;
+    }
     return uiNetworkExposureCache.promise;
   }
 
-  uiNetworkExposureCache.promise = runCommand(`"${HMSTX_CONTROL_CMD}" audit --json`)
-    .then((output) => {
-      const parsed = JSON.parse(output || '{}');
-      uiNetworkExposureCache.value = parsed;
-      uiNetworkExposureCache.expiresAt = Date.now() + 3000;
-      uiNetworkExposureCache.promise = null;
-      return parsed;
-    })
-    .catch((error) => {
-      uiNetworkExposureCache.promise = null;
-      throw error;
-    });
+  const refreshExposure = () =>
+    runCommand(`"${HMSTX_CONTROL_CMD}" audit --json`, { timeoutMs: UI_DIAGNOSTIC_TIMEOUT_MS, maxBuffer: 512 * 1024 })
+      .then((output) => {
+        const parsed = JSON.parse(output || '{}');
+        uiNetworkExposureCache.value = parsed;
+        uiNetworkExposureCache.expiresAt = Date.now() + UI_NETWORK_EXPOSURE_TTL_MS;
+        uiNetworkExposureCache.staleUntil = Date.now() + UI_NETWORK_EXPOSURE_MAX_STALE_MS;
+        uiNetworkExposureCache.promise = null;
+        return parsed;
+      })
+      .catch((error) => {
+        uiNetworkExposureCache.promise = null;
+        if (!force && allowStale && uiNetworkExposureCache.value && uiNetworkExposureCache.staleUntil > Date.now()) {
+          return uiNetworkExposureCache.value;
+        }
+        throw error;
+      });
+
+  uiNetworkExposureCache.promise = refreshExposure();
+
+  if (!force && UI_DEFER_HEAVY_DIAGNOSTICS) {
+    if (allowStale && uiNetworkExposureCache.value && uiNetworkExposureCache.staleUntil > now) {
+      uiNetworkExposureCache.promise.catch(() => null);
+      return uiNetworkExposureCache.value;
+    }
+    uiNetworkExposureCache.promise.catch(() => null);
+    return {
+      ...EMPTY_NETWORK_EXPOSURE_SNAPSHOT,
+      generatedAt: new Date().toISOString(),
+      stale: true,
+    };
+  }
 
   return uiNetworkExposureCache.promise;
 };
@@ -3107,8 +3166,8 @@ const getDashboardSnapshot = async (sessionId) => {
     getMonitorSnapshot(),
     getStorageSnapshot(),
     getControlledServiceNames(),
-    getUiServiceCatalog(),
-    getNetworkExposureSnapshot(),
+    getUiServiceCatalog({ allowStale: true }).catch(() => []),
+    getNetworkExposureSnapshot({ allowStale: true }).catch(() => EMPTY_NETWORK_EXPOSURE_SNAPSHOT),
   ]);
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
 
@@ -3137,8 +3196,8 @@ const getDashboardSnapshot = async (sessionId) => {
 const getTelemetrySnapshot = async (sessionId) => {
   const [monitor, serviceCatalog, networkExposure] = await Promise.all([
     getMonitorSnapshot(),
-    getUiServiceCatalog(),
-    getNetworkExposureSnapshot(),
+    getUiServiceCatalog({ allowStale: true }).catch(() => []),
+    getNetworkExposureSnapshot({ allowStale: true }).catch(() => EMPTY_NETWORK_EXPOSURE_SNAPSHOT),
   ]);
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
 
@@ -6098,8 +6157,58 @@ const buildArrDiagnostics = (serviceCatalog) => {
   };
 };
 
+const buildUiInitialSectionMeta = (ok, payload, fallbackMessage) => ({
+  generatedAt: payload?.generatedAt || new Date().toISOString(),
+  ok,
+  retryable: !ok,
+  stale: Boolean(payload?.stale),
+  ...(ok ? {} : { error: { code: 'UNKNOWN', message: String(fallbackMessage || 'Unavailable') } }),
+});
+
+const buildMinimalUiBootstrapPayload = async (sessionUser) => {
+  const hasFilesAccess = await syncManagedShares().then((shares) => shares.length > 0).catch(() => false);
+  const lifecycle = {
+    state: 'degraded',
+    summary: 'Shared diagnostics are unavailable; showing the shell with minimal navigation metadata.',
+  };
+
+  return {
+    generatedAt: new Date().toISOString(),
+    user: sessionUser ? { role: sessionUser.role, username: sessionUser.username } : null,
+    lifecycle,
+    nav: uiNavBlueprint.map((entry) => ({
+      ...entry,
+      available: entry.key === 'files' ? hasFilesAccess || sessionUser?.role === 'admin' : true,
+      status: entry.key === 'files' ? (hasFilesAccess || sessionUser?.role === 'admin' ? 'working' : 'blocked') : 'degraded',
+    })),
+    legacyTabMap: LEGACY_TAB_TO_WORKSPACE,
+    capabilities: {
+      canAdmin: sessionUser?.role === 'admin',
+      canControlServices: sessionUser?.role === 'admin',
+      canManageUsers: sessionUser?.role === 'admin',
+      canManageShares: sessionUser?.role === 'admin',
+      canUseFilesWorkspace: hasFilesAccess || sessionUser?.role === 'admin',
+      canUseTransfersWorkspace: true,
+      canUseAiWorkspace: true,
+      canUseTerminalWorkspace: true,
+    },
+    serviceCounts: {
+      total: 0,
+      available: 0,
+      working: 0,
+      blocked: 0,
+      unavailable: 0,
+    },
+  };
+};
+
 const buildUiBootstrapPayload = async (sessionUser, serviceCatalogOverride = null) => {
-  const serviceCatalog = serviceCatalogOverride || await getUiServiceCatalog();
+  const serviceCatalog = Array.isArray(serviceCatalogOverride)
+    ? serviceCatalogOverride
+    : await getUiServiceCatalog({ allowStale: true }).catch(() => null);
+  if (!serviceCatalog) {
+    return buildMinimalUiBootstrapPayload(sessionUser);
+  }
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
   const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
   const hasFilesAccess = await syncManagedShares().then((shares) => shares.length > 0).catch(() => false);
@@ -6310,13 +6419,42 @@ const uiBootstrapHandler = async (req, res) => {
 
 const uiInitialHandler = async (req, res) => {
   const workspaceKey = normalizeUiWorkspaceKey(req.query.workspace || req.query.workspaceKey || '') || 'overview';
+  const requestId = crypto.randomUUID();
   try {
-    const serviceCatalog = await getUiServiceCatalog();
-    const [bootstrap, workspace] = await Promise.all([
+    const serviceCatalog = await getUiServiceCatalog({ allowStale: true }).catch(() => null);
+    if (!UI_INITIAL_PARTIAL_SUCCESS) {
+      const [bootstrap, workspace] = await Promise.all([
+        buildUiBootstrapPayload(req.session, serviceCatalog),
+        buildUiWorkspacePayload(req, workspaceKey, serviceCatalog),
+      ]);
+      return res.json({ bootstrap, workspace });
+    }
+
+    const [bootstrapResult, workspaceResult] = await Promise.allSettled([
       buildUiBootstrapPayload(req.session, serviceCatalog),
       buildUiWorkspacePayload(req, workspaceKey, serviceCatalog),
     ]);
-    res.json({ bootstrap, workspace });
+
+    const bootstrap = bootstrapResult.status === 'fulfilled' ? bootstrapResult.value : null;
+    const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null;
+    const bootstrapError = bootstrapResult.status === 'rejected' ? String(bootstrapResult.reason || 'Unable to build bootstrap payload') : '';
+    const workspaceError = workspaceResult.status === 'rejected' ? String(workspaceResult.reason || `Unable to build '${workspaceKey}' workspace payload`) : '';
+    const status = bootstrap && workspace ? 'ok' : bootstrap || workspace ? 'partial' : 'error';
+    const responseStatus = status === 'error' ? 503 : 200;
+
+    return res.status(responseStatus).json({
+      schemaVersion: 2,
+      status,
+      requestId,
+      requestedWorkspace: workspaceKey,
+      retryAfterMs: status === 'ok' ? 0 : UI_INITIAL_RETRY_AFTER_MS,
+      bootstrap,
+      workspace,
+      sections: {
+        bootstrap: buildUiInitialSectionMeta(Boolean(bootstrap), bootstrap, bootstrapError),
+        workspace: buildUiInitialSectionMeta(Boolean(workspace), workspace, workspaceError),
+      },
+    });
   } catch (err) {
     pushDebugEvent('error', 'UI initial snapshot failed', { error: String(err), workspaceKey }, true);
     res.status(500).json({ error: 'Unable to build initial UI payload' });

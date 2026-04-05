@@ -41,7 +41,53 @@ export type UiWorkspaceResponse = {
   [key: string]: unknown;
 };
 
-export type UiInitialResponse = {
+export type UiInitialSectionErrorCode =
+  | 'TIMEOUT'
+  | 'UPSTREAM_5XX'
+  | 'DEPENDENCY_FAILED'
+  | 'UNAUTHORIZED'
+  | 'UNKNOWN';
+
+export type UiInitialSectionMeta = {
+  ok: boolean;
+  retryable: boolean;
+  stale: boolean;
+  generatedAt?: string;
+  error?: {
+    code: UiInitialSectionErrorCode;
+    message: string;
+  };
+};
+
+export type UiInitialResponseLegacy = {
   bootstrap: UiBootstrapResponse;
   workspace: UiWorkspaceResponse;
+};
+
+export type UiInitialResponseV2 = {
+  schemaVersion: 2;
+  status: 'ok' | 'partial' | 'error';
+  requestId: string;
+  requestedWorkspace: WorkspaceKey;
+  bootstrap: UiBootstrapResponse | null;
+  workspace: UiWorkspaceResponse | null;
+  sections: {
+    bootstrap: UiInitialSectionMeta;
+    workspace: UiInitialSectionMeta;
+  };
+  retryAfterMs: number;
+};
+
+export type UiInitialResponse = UiInitialResponseLegacy | UiInitialResponseV2;
+
+export type NormalizedUiInitial = {
+  schemaVersion: 1 | 2;
+  status: 'ok' | 'partial' | 'error';
+  bootstrap: UiBootstrapResponse | null;
+  workspace: UiWorkspaceResponse | null;
+  sections: {
+    bootstrap: UiInitialSectionMeta;
+    workspace: UiInitialSectionMeta;
+  };
+  retryAfterMs: number;
 };

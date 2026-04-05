@@ -3,16 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchUiBootstrap, fetchUiInitialPayload, fetchWorkspacePayload } from './api';
 import { DEFAULT_WORKSPACE, resolveWorkspaceFromQuery } from './workspaceMap';
-import type { UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
+import type { NormalizedUiInitial, UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
 
 type UseWorkspaceDataResult = {
   activeWorkspace: WorkspaceKey;
+  displayedWorkspace: WorkspaceKey;
   bootstrap: UiBootstrapResponse | null;
   bootstrapError: string;
+  isWorkspaceStale: boolean;
   loadingBootstrap: boolean;
   markLoggedOut: () => void;
   reloadBootstrap: () => void;
   setActiveWorkspace: (workspace: WorkspaceKey) => void;
+  transitionLabel: string;
   reloadWorkspace: () => void;
   workspaceData: UiWorkspaceResponse | null;
   workspaceError: string;
@@ -21,8 +24,10 @@ type UseWorkspaceDataResult = {
 
 export function useWorkspaceData(): UseWorkspaceDataResult {
   const [activeWorkspace, setActiveWorkspaceState] = useState<WorkspaceKey>(DEFAULT_WORKSPACE);
+  const [displayedWorkspace, setDisplayedWorkspace] = useState<WorkspaceKey>(DEFAULT_WORKSPACE);
   const [bootstrap, setBootstrap] = useState<UiBootstrapResponse | null>(null);
   const [bootstrapError, setBootstrapError] = useState('');
+  const [isWorkspaceStale, setIsWorkspaceStale] = useState(false);
   const [loadingBootstrap, setLoadingBootstrap] = useState(true);
   const [bootstrapReloadTick, setBootstrapReloadTick] = useState(0);
   const [sessionInactive, setSessionInactive] = useState(false);
@@ -33,6 +38,51 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const workspaceRequestRef = useRef(0);
   const loadedWorkspaceKeyRef = useRef('');
   const workspaceCacheRef = useRef<Map<string, UiWorkspaceResponse>>(new Map());
+
+  const applyInitialPayload = useCallback(
+    (requestedWorkspace: WorkspaceKey, payload: NormalizedUiInitial) => {
+      if (!payload.bootstrap && payload.workspace) {
+        setBootstrap(null);
+        setBootstrapError(
+          payload.sections.bootstrap.error?.message || 'Unable to load workspace bootstrap'
+        );
+        setWorkspaceData(null);
+        setWorkspaceError('');
+        setIsWorkspaceStale(false);
+        setLoadingWorkspace(false);
+        return;
+      }
+
+      if (payload.bootstrap) {
+        setBootstrap(payload.bootstrap);
+        setBootstrapError('');
+        setSessionInactive(false);
+        if (typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          const mappedWorkspace = resolveWorkspaceFromQuery(params, payload.bootstrap.legacyTabMap);
+          setActiveWorkspaceState(mappedWorkspace);
+        }
+      }
+
+      if (payload.workspace) {
+        const resolvedWorkspace = String(payload.workspace.workspaceKey || requestedWorkspace) as WorkspaceKey;
+        workspaceCacheRef.current.set(resolvedWorkspace, payload.workspace);
+        loadedWorkspaceKeyRef.current = resolvedWorkspace;
+        setWorkspaceData(payload.workspace);
+        setDisplayedWorkspace(resolvedWorkspace);
+        setWorkspaceError('');
+        setIsWorkspaceStale(false);
+      } else if (payload.bootstrap) {
+        setWorkspaceError(
+          payload.sections.workspace.error?.message || `Unable to load ${requestedWorkspace} workspace`
+        );
+        setIsWorkspaceStale(Boolean(loadedWorkspaceKeyRef.current));
+      }
+
+      setLoadingWorkspace(false);
+    },
+    []
+  );
 
   const setActiveWorkspace = useCallback((workspace: WorkspaceKey) => {
     setActiveWorkspaceState(workspace);
@@ -61,6 +111,8 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     workspaceCacheRef.current.clear();
     setBootstrap(null);
     setBootstrapError('Login required');
+    setDisplayedWorkspace(DEFAULT_WORKSPACE);
+    setIsWorkspaceStale(false);
     setLoadingBootstrap(false);
     setWorkspaceData(null);
     setWorkspaceError('');
@@ -100,19 +152,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
         if (cancelled) {
           return;
         }
-        setBootstrap(payload.bootstrap);
-        setBootstrapError('');
-        setSessionInactive(false);
-        workspaceCacheRef.current.set(String(payload.workspace.workspaceKey || requestedWorkspace), payload.workspace);
-        loadedWorkspaceKeyRef.current = String(payload.workspace.workspaceKey || requestedWorkspace);
-        setWorkspaceData(payload.workspace);
-        setWorkspaceError('');
-        setLoadingWorkspace(false);
-        if (typeof window !== 'undefined') {
-          const params = new URLSearchParams(window.location.search);
-          const mappedWorkspace = resolveWorkspaceFromQuery(params, payload.bootstrap.legacyTabMap);
-          setActiveWorkspaceState(mappedWorkspace);
-        }
+        applyInitialPayload(requestedWorkspace, payload);
       } catch (error) {
         if (cancelled) {
           return;
@@ -160,6 +200,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   useEffect(() => {
     if (sessionInactive) {
       setLoadingWorkspace(false);
+      setIsWorkspaceStale(false);
       return;
     }
     let cancelled = false;
@@ -167,18 +208,18 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     const cachedWorkspace = workspaceCacheRef.current.get(activeWorkspace);
     if (cachedWorkspace) {
       setWorkspaceData(cachedWorkspace);
+      setDisplayedWorkspace(String(cachedWorkspace.workspaceKey || activeWorkspace) as WorkspaceKey);
+      setWorkspaceError('');
+      setIsWorkspaceStale(false);
       setLoadingWorkspace(false);
     }
 
     const loadWorkspace = async () => {
       const requestId = workspaceRequestRef.current + 1;
       workspaceRequestRef.current = requestId;
-      const shouldBlockRender = !cachedWorkspace && loadedWorkspaceKeyRef.current !== activeWorkspace;
-      if (shouldBlockRender) {
-        setLoadingWorkspace(true);
-      } else {
-        setLoadingWorkspace(true);
-      }
+      const hasDisplayedWorkspace = Boolean(workspaceData || loadedWorkspaceKeyRef.current);
+      setLoadingWorkspace(true);
+      setIsWorkspaceStale(hasDisplayedWorkspace && !cachedWorkspace);
       try {
         const payload = await fetchWorkspacePayload(activeWorkspace);
         if (cancelled || requestId !== workspaceRequestRef.current) {
@@ -187,12 +228,15 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
         workspaceCacheRef.current.set(String(payload.workspaceKey || activeWorkspace), payload);
         setWorkspaceData(payload);
         loadedWorkspaceKeyRef.current = String(payload.workspaceKey || activeWorkspace);
+        setDisplayedWorkspace(String(payload.workspaceKey || activeWorkspace) as WorkspaceKey);
         setWorkspaceError('');
+        setIsWorkspaceStale(false);
       } catch (error) {
         if (cancelled || requestId !== workspaceRequestRef.current) {
           return;
         }
         setWorkspaceError(String(error instanceof Error ? error.message : error || `Unable to load ${activeWorkspace} workspace`));
+        setIsWorkspaceStale(Boolean(loadedWorkspaceKeyRef.current));
       } finally {
         if (!cancelled && requestId === workspaceRequestRef.current) {
           setLoadingWorkspace(false);
@@ -214,15 +258,25 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     };
   }, [activeWorkspace, sessionInactive, workspaceReloadTick]);
 
+  const transitionLabel = useMemo(() => {
+    if (!isWorkspaceStale || displayedWorkspace === activeWorkspace) {
+      return '';
+    }
+    return `Loading ${activeWorkspace}, showing ${displayedWorkspace} snapshot`;
+  }, [activeWorkspace, displayedWorkspace, isWorkspaceStale]);
+
   return useMemo(
     () => ({
       activeWorkspace,
+      displayedWorkspace,
       bootstrap,
       bootstrapError,
+      isWorkspaceStale,
       loadingBootstrap,
       markLoggedOut,
       reloadBootstrap,
       setActiveWorkspace,
+      transitionLabel,
       reloadWorkspace,
       workspaceData,
       workspaceError,
@@ -230,14 +284,17 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     }),
     [
       activeWorkspace,
+      displayedWorkspace,
       bootstrap,
       bootstrapError,
+      isWorkspaceStale,
       loadingBootstrap,
       markLoggedOut,
       reloadBootstrap,
       loadingWorkspace,
       reloadWorkspace,
       setActiveWorkspace,
+      transitionLabel,
       workspaceData,
       workspaceError,
     ]

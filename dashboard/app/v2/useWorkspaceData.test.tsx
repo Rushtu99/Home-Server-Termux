@@ -68,4 +68,66 @@ describe('useWorkspaceData', () => {
     expect(result.current.loadingWorkspace).toBe(false);
     expect(result.current.activeWorkspace).toBe('overview');
   });
+
+  it('keeps the previous workspace visible when the next workspace fails during initial load', async () => {
+    fetchUiInitialPayload.mockResolvedValueOnce({
+      schemaVersion: 1,
+      status: 'ok',
+      retryAfterMs: 0,
+      bootstrap: {
+        lifecycle: { state: 'healthy' },
+        nav: [],
+        user: { username: 'admin' },
+        legacyTabMap: { media: 'media' },
+        capabilities: {},
+        generatedAt: new Date().toISOString(),
+      },
+      workspace: {
+        generatedAt: new Date().toISOString(),
+        workspaceKey: 'media',
+      },
+      sections: {
+        bootstrap: { ok: true, retryable: false, stale: false },
+        workspace: { ok: true, retryable: false, stale: false },
+      },
+    });
+    fetchUiBootstrap.mockResolvedValue({
+      lifecycle: { state: 'healthy' },
+      nav: [],
+      user: { username: 'admin' },
+      legacyTabMap: { media: 'media' },
+      capabilities: {},
+      generatedAt: new Date().toISOString(),
+    });
+    fetchWorkspacePayload.mockImplementation(async (workspace) => {
+      if (workspace === 'overview') {
+        throw new Error('workspace fetch failed');
+      }
+      return {
+        generatedAt: new Date().toISOString(),
+        workspaceKey: workspace,
+      };
+    });
+
+    const { result } = renderHook(() => useWorkspaceData());
+
+    await waitFor(() => {
+      expect(result.current.displayedWorkspace).toBe('media');
+      expect(result.current.workspaceData?.workspaceKey).toBe('media');
+    });
+
+    act(() => {
+      result.current.setActiveWorkspace('overview');
+    });
+
+    await waitFor(() => {
+      expect(result.current.workspaceError).toContain('workspace fetch failed');
+    });
+
+    expect(result.current.activeWorkspace).toBe('overview');
+    expect(result.current.displayedWorkspace).toBe('media');
+    expect(result.current.workspaceData?.workspaceKey).toBe('media');
+    expect(result.current.isWorkspaceStale).toBe(true);
+    expect(result.current.transitionLabel).toContain('Loading overview, showing media snapshot');
+  });
 });

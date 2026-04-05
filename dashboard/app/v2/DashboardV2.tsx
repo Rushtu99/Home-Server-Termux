@@ -7,6 +7,7 @@ import { ErrorState, LoadingState, StatusBadge } from './components';
 import { toErrorMessage } from './errors';
 import { controlService, lockServiceController, unlockServiceController } from './api';
 import { useWorkspaceData } from './useWorkspaceData';
+import { normalizeSafeNextPath } from './workspaceMap';
 import { WorkspaceViewport } from './workspaces';
 import type { UiNavItem, WorkspaceKey } from './types';
 
@@ -56,12 +57,15 @@ const fallbackNav: UiNavItem[] = [
 export default function DashboardV2() {
   const {
     activeWorkspace,
+    displayedWorkspace,
     bootstrap,
     bootstrapError,
+    isWorkspaceStale,
     loadingBootstrap,
     markLoggedOut,
     reloadBootstrap,
     setActiveWorkspace,
+    transitionLabel,
     reloadWorkspace,
     workspaceData,
     workspaceError,
@@ -80,6 +84,7 @@ export default function DashboardV2() {
   const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [theme, setTheme] = useState('dark');
   const [styleVariant, setStyleVariant] = useState('classic-v2');
+  const [loginNextPath, setLoginNextPath] = useState<string | null>(null);
 
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
@@ -139,6 +144,14 @@ export default function DashboardV2() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    setLoginNextPath(normalizeSafeNextPath(params.get('next')));
+  }, []);
+
+  useEffect(() => {
     if (!sidebarOpen) {
       return;
     }
@@ -175,6 +188,10 @@ export default function DashboardV2() {
       }
       setLoginPassword('');
       setLoginError('');
+      if (loginNextPath && typeof window !== 'undefined') {
+        window.location.assign(loginNextPath);
+        return;
+      }
       await Promise.all([reloadBootstrap(), reloadWorkspace()]);
     } catch (error) {
       setLoginError(toErrorMessage(error, 'Login failed'));
@@ -263,7 +280,7 @@ export default function DashboardV2() {
     }
   };
 
-  const hasActiveWorkspaceData = Boolean(workspaceData && workspaceData.workspaceKey === activeWorkspace);
+  const hasDisplayedWorkspaceData = Boolean(workspaceData && workspaceData.workspaceKey === displayedWorkspace);
   const activeWorkspaceTitle = nav.find((entry) => entry.key === activeWorkspace)?.label || 'Dashboard';
   const activeWorkspaceSummary = nav.find((entry) => entry.key === activeWorkspace)?.summary || 'Home server control workspace';
 
@@ -385,7 +402,11 @@ export default function DashboardV2() {
           <section className="dash2-login-wrap">
             <div className="dash2-login-card">
               <h2>Sign in to continue</h2>
-              <p>Dashboard v2 reads protected admin workspace snapshots.</p>
+              <p>
+                {loginNextPath
+                  ? `Sign in to continue to ${loginNextPath.replaceAll('/', '').replace(/^\w/, (char) => char.toUpperCase())}.`
+                  : 'Dashboard v2 reads protected admin workspace snapshots.'}
+              </p>
               <form className="dash2-login-form" onSubmit={handleLogin}>
                 <label>
                   <span>Username</span>
@@ -415,15 +436,19 @@ export default function DashboardV2() {
           </section>
         ) : null}
         {bootstrapError && !authRequired ? <ErrorState message={bootstrapError} /> : null}
-        {!authRequired && loadingWorkspace && !hasActiveWorkspaceData ? <LoadingState /> : null}
-        {!authRequired && workspaceError && !hasActiveWorkspaceData ? <ErrorState message={workspaceError} /> : null}
+        {!authRequired && loadingWorkspace && !hasDisplayedWorkspaceData ? <LoadingState /> : null}
+        {!authRequired && workspaceError && !hasDisplayedWorkspaceData ? <ErrorState message={workspaceError} /> : null}
 
-        {!authRequired && workspaceData && hasActiveWorkspaceData ? (
+        {!authRequired && workspaceData && hasDisplayedWorkspaceData ? (
           <section className="dash2-content">
-            {loadingWorkspace ? <p className="dash2-admin-note">Refreshing workspace data…</p> : null}
+            {transitionLabel ? <p className="dash2-admin-note">{transitionLabel}…</p> : null}
+            {!transitionLabel && loadingWorkspace ? <p className="dash2-admin-note">Refreshing workspace data…</p> : null}
+            {isWorkspaceStale && activeWorkspace === displayedWorkspace ? (
+              <p className="dash2-admin-note">Showing the last successful snapshot while the workspace refresh completes.</p>
+            ) : null}
             {workspaceError ? <ErrorState message={workspaceError} /> : null}
             <WorkspaceViewport
-              workspace={activeWorkspace}
+              workspace={displayedWorkspace}
               payload={workspaceData}
               adminActions={{
                 adminPassword,

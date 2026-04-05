@@ -2,13 +2,66 @@
 
 import { appFetch } from '../demo-api';
 import { dispatchLlmStreamEvent, parseSseChunk, type LlmChatStreamHandlers } from './llm-stream';
-import type { UiBootstrapResponse, UiInitialResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
+import type {
+  NormalizedUiInitial,
+  UiBootstrapResponse,
+  UiInitialResponse,
+  UiInitialResponseLegacy,
+  UiInitialResponseV2,
+  UiWorkspaceResponse,
+  WorkspaceKey,
+} from './types';
 
 const API = '/api';
 
 const parseError = async (response: Response) => {
   const payload = await response.json().catch(() => ({} as Record<string, unknown>));
   return String(payload?.error || `Request failed with ${response.status}`);
+};
+
+const buildOkSection = (generatedAt?: string) => ({
+  ok: true,
+  retryable: false,
+  stale: false,
+  ...(generatedAt ? { generatedAt } : {}),
+});
+
+export const parseUiInitialResponse = (payload: UiInitialResponse): NormalizedUiInitial => {
+  const candidate = payload as Partial<UiInitialResponseV2>;
+  if (candidate?.schemaVersion === 2) {
+    return {
+      schemaVersion: 2,
+      status: candidate.status || 'error',
+      bootstrap: candidate.bootstrap || null,
+      workspace: candidate.workspace || null,
+      sections: {
+        bootstrap: candidate.sections?.bootstrap || {
+          ok: Boolean(candidate.bootstrap),
+          retryable: false,
+          stale: false,
+        },
+        workspace: candidate.sections?.workspace || {
+          ok: Boolean(candidate.workspace),
+          retryable: false,
+          stale: false,
+        },
+      },
+      retryAfterMs: Number(candidate.retryAfterMs || 0),
+    };
+  }
+
+  const legacy = payload as UiInitialResponseLegacy;
+  return {
+    schemaVersion: 1,
+    status: 'ok',
+    bootstrap: legacy.bootstrap || null,
+    workspace: legacy.workspace || null,
+    sections: {
+      bootstrap: buildOkSection(legacy.bootstrap?.generatedAt),
+      workspace: buildOkSection(legacy.workspace?.generatedAt),
+    },
+    retryAfterMs: 0,
+  };
 };
 
 const fetchJson = async <T>(url: string): Promise<T> => {
@@ -22,7 +75,7 @@ const fetchJson = async <T>(url: string): Promise<T> => {
 export const fetchUiBootstrap = () => fetchJson<UiBootstrapResponse>(`${API}/ui/bootstrap`);
 
 export const fetchUiInitialPayload = (workspace: WorkspaceKey) =>
-  fetchJson<UiInitialResponse>(`${API}/ui/initial?workspace=${encodeURIComponent(workspace)}`);
+  fetchJson<UiInitialResponse>(`${API}/ui/initial?workspace=${encodeURIComponent(workspace)}`).then(parseUiInitialResponse);
 
 export const fetchWorkspacePayload = (workspace: WorkspaceKey) =>
   fetchJson<UiWorkspaceResponse>(`${API}/ui/workspaces/${workspace}`);
