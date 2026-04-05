@@ -22,7 +22,16 @@ Core ports and bind hosts:
 - `LLM_BIND_HOST`, `LLM_PORT`
 - service-specific bind hosts and ports for Jellyfin, qBittorrent, ARR services, Redis, PostgreSQL, and Syncthing
 
-The intended public surface is still nginx on `:8088`.
+The intended public surface is still nginx on `:8088`. For remote access, prefer Tailscale and keep the tailnet entrypoints limited to the gateway on `:8088` and SSH on `:8022`.
+
+Tailscale settings:
+- `TAILSCALE_MODE=disabled|android_app|managed_daemon`
+- `TAILSCALE_DNS_NAME`, `TAILSCALE_IP` for stable app-mode links
+- `TAILSCALE_GATEWAY_PORT`, `TAILSCALE_SSH_PORT`
+- `TAILSCALE_EXPOSE_GATEWAY`, `TAILSCALE_EXPOSE_SSH`
+- managed mode only: `TAILSCALE_BIN`, `TAILSCALED_BIN`, `TAILSCALE_STATE_DIR`, `TAILSCALE_SOCKET`, `TAILSCALE_STATE_PATH`, `TAILSCALE_AUTH_KEY`, `TAILSCALE_HOSTNAME`
+
+On this Android/Termux host, `android_app` is the primary supported mode. `managed_daemon` requires both CLI binaries and a working `/dev/net/tun`; otherwise it should be treated as unsupported and the UI will report degraded remote access.
 
 ## Storage and Media Layout
 

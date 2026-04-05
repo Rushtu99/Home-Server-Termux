@@ -5,13 +5,17 @@ import './globals.css';
 const themeBootScript = `
 (() => {
   try {
-    const stored = localStorage.getItem('hmstx-theme');
-    const theme = stored === 'light' || stored === 'contrast' || stored === 'dark'
-      ? stored
+    const storedTheme = localStorage.getItem('hmstx-theme');
+    const theme = ['light', 'contrast', 'dark', 'forest-green', 'crimson-red', 'neon-orange', 'radiant-yellow', 'puffy-pink', 'purple-haze'].includes(storedTheme || '')
+      ? storedTheme
       : 'dark';
+    const storedStyle = localStorage.getItem('hmstx-style');
+    const style = storedStyle === 'filesystem' ? 'filesystem' : 'classic-v2';
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.style = style;
   } catch {
     document.documentElement.dataset.theme = 'dark';
+    document.documentElement.dataset.style = 'classic-v2';
   }
 })();
 `;

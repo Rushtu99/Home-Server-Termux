@@ -40,3 +40,8 @@ export type UiWorkspaceResponse = {
   workspaceKey: WorkspaceKey;
   [key: string]: unknown;
 };
+
+export type UiInitialResponse = {
+  bootstrap: UiBootstrapResponse;
+  workspace: UiWorkspaceResponse;
+};

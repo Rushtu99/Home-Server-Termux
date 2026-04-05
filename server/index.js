@@ -253,6 +253,23 @@ const CODEX_REVAMPED_BIND_HOST = process.env.CODEX_REVAMPED_BIND_HOST || '127.0.
 const CODEX_REVAMPED_PORT = Number(process.env.CODEX_REVAMPED_PORT || 2455);
 const CODEX_REVAMPED_PID = process.env.CODEX_REVAMPED_PID_PATH || path.join(RUNTIME_DIR, 'codex-revamped.pid');
 const CODEX_REVAMPED_LOG = process.env.CODEX_REVAMPED_LOG_PATH || path.join(ROOT_DIR, 'logs', 'codex-revamped.log');
+const TAILSCALE_MODE = String(process.env.TAILSCALE_MODE || 'disabled').trim().toLowerCase();
+const TAILSCALE_DNS_NAME = String(process.env.TAILSCALE_DNS_NAME || '').trim();
+const TAILSCALE_IP = String(process.env.TAILSCALE_IP || '').trim();
+const TAILSCALE_GATEWAY_PORT = Math.max(1, Number(process.env.TAILSCALE_GATEWAY_PORT || 8088) || 8088);
+const TAILSCALE_SSH_PORT = Math.max(1, Number(process.env.TAILSCALE_SSH_PORT || 8022) || 8022);
+const TAILSCALE_EXPOSE_GATEWAY = String(process.env.TAILSCALE_EXPOSE_GATEWAY || 'true').toLowerCase() === 'true';
+const TAILSCALE_EXPOSE_SSH = String(process.env.TAILSCALE_EXPOSE_SSH || 'true').toLowerCase() === 'true';
+const TAILSCALE_BIN = process.env.TAILSCALE_BIN || 'tailscale';
+const TAILSCALED_BIN = process.env.TAILSCALED_BIN || 'tailscaled';
+const TAILSCALE_STATE_DIR = process.env.TAILSCALE_STATE_DIR || path.join(RUNTIME_DIR, 'tailscale');
+const TAILSCALE_SOCKET = process.env.TAILSCALE_SOCKET || path.join(TAILSCALE_STATE_DIR, 'tailscaled.sock');
+const TAILSCALE_STATE_PATH = process.env.TAILSCALE_STATE_PATH || path.join(TAILSCALE_STATE_DIR, 'tailscaled.state');
+const TAILSCALE_AUTH_KEY = String(process.env.TAILSCALE_AUTH_KEY || '').trim();
+const TAILSCALE_HOSTNAME = String(process.env.TAILSCALE_HOSTNAME || '').trim();
+const TAILSCALE_PID = process.env.TAILSCALE_PID_PATH || path.join(RUNTIME_DIR, 'tailscaled.pid');
+const TAILSCALE_SERVICE_CMD = process.env.TAILSCALE_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'tailscale-service.sh');
+const HMSTX_CONTROL_CMD = process.env.HMSTX_CONTROL_CMD || path.join(ROOT_DIR, 'scripts', 'hmstx-control.sh');
 const LLM_CHAT_SYSTEM_PROMPT = process.env.LLM_CHAT_SYSTEM_PROMPT || 'You are a precise assistant running inside a private home server dashboard.';
 const BOOTSTRAP_DASHBOARD_USER = normalizeUsername(process.env.DASHBOARD_USER || 'admin') || 'admin';
 const BOOTSTRAP_DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin123';
@@ -548,11 +565,21 @@ const SERVICES = {
     binary: 'codex-lb',
     installCheckPaths: [CODEX_REVAMPED_CMD],
   },
+  tailscale: {
+    start: `"${TAILSCALE_SERVICE_CMD}" start`,
+    stop: `"${TAILSCALE_SERVICE_CMD}" stop`,
+    restart: `"${TAILSCALE_SERVICE_CMD}" restart`,
+    check: `"${TAILSCALE_SERVICE_CMD}" status`,
+    host: '127.0.0.1',
+    port: 0,
+    binary: TAILSCALE_BIN,
+    installCheckPaths: [TAILSCALE_SERVICE_CMD],
+  },
 };
 
 // The dashboard renders service tabs from this catalog instead of inferring
 // labels, grouping, or control rules in the client.
-const SERVICE_CATALOG_META = {
+const BASE_SERVICE_CATALOG_META = {
   nginx: {
     controlMode: 'always_on',
     description: 'Single public gateway for the dashboard and companion services.',
@@ -595,6 +622,7 @@ const SERVICE_CATALOG_META = {
     description: 'Device sync and backup across phones, laptops, and shares.',
     group: 'access',
     label: 'Syncthing',
+    route: '/syncthing/',
     surface: 'home',
   },
   samba: {
@@ -691,6 +719,25 @@ const SERVICE_CATALOG_META = {
   },
 };
 
+const getServiceCatalogMeta = () => {
+  if (TAILSCALE_MODE === 'disabled') {
+    return BASE_SERVICE_CATALOG_META;
+  }
+
+  return {
+    ...BASE_SERVICE_CATALOG_META,
+    tailscale: {
+      controlMode: TAILSCALE_MODE === 'managed_daemon' ? 'optional' : 'external',
+      description: TAILSCALE_MODE === 'managed_daemon'
+        ? 'Private tailnet access to the gateway and SSH through a managed tailscaled instance.'
+        : 'Private tailnet access provided by the Tailscale Android app.',
+      group: 'access',
+      label: 'Tailscale',
+      surface: 'home',
+    },
+  };
+};
+
 /* ---------------- HELPERS ---------------- */
 
 const debugEvents = [];
@@ -731,6 +778,7 @@ const OPTIONAL_SERVICE_NAMES = [
   'sshd',
   'llm',
   'codex_revamped',
+  'tailscale',
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
 const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
@@ -906,6 +954,16 @@ const fileIsExecutable = (filePath) => {
     return false;
   }
 };
+
+const pathExists = (targetPath) => {
+  try {
+    return fs.existsSync(targetPath);
+  } catch {
+    return false;
+  }
+};
+
+const readFirstLine = (value = '') => String(value || '').split(/\r?\n/, 1)[0]?.trim() || '';
 
 const firstExistingFile = (directoryPath, extensions) => {
   try {
@@ -1257,6 +1315,10 @@ const getManageableServiceNames = async () => {
       continue;
     }
 
+    if (name === 'tailscale' && TAILSCALE_MODE !== 'managed_daemon') {
+      continue;
+    }
+
     if (name === 'ftp' && !(await detectFtpProvider())) {
       continue;
     }
@@ -1271,6 +1333,21 @@ const getManageableServiceNames = async () => {
 };
 
 const resolveServiceInstall = async (serviceName, svc) => {
+  if (serviceName === 'tailscale') {
+    if (TAILSCALE_MODE === 'android_app') {
+      return {
+        available: true,
+        label: 'Tailscale Android app',
+      };
+    }
+
+    if (TAILSCALE_MODE !== 'managed_daemon') {
+      return {
+        available: false,
+        label: 'TAILSCALE_MODE',
+      };
+    }
+  }
   if (Array.isArray(svc.installCheckPaths) && svc.installCheckPaths.length > 0) {
     const missing = svc.installCheckPaths.filter((candidate) => !fs.existsSync(candidate));
 
@@ -1673,6 +1750,10 @@ const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
   if (name === 'sshd' && !ENABLE_SSHD) {
     available = false;
     blocker = 'Disabled in single-port mode.';
+  } else if (name === 'tailscale' && TAILSCALE_MODE === 'android_app') {
+    available = true;
+    running = Boolean(TAILSCALE_DNS_NAME || TAILSCALE_IP);
+    blocker = running ? '' : 'Set TAILSCALE_DNS_NAME or TAILSCALE_IP for stable tailnet links.';
   } else if (name === 'ftp' && !(await detectFtpProvider())) {
     available = false;
     blocker = 'Requires python3 + pyftpdlib or busybox ftpd.';
@@ -1693,6 +1774,9 @@ const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
   let status = !available
     ? 'unavailable'
     : (running ? 'working' : meta.controlMode === 'optional' ? 'stopped' : 'stalled');
+  if (name === 'tailscale' && TAILSCALE_MODE === 'android_app') {
+    status = running ? 'external' : 'degraded';
+  }
   const storageBlock = getStorageBlockForService(name, storageProtection);
   if (storageBlock.blocked) {
     status = 'blocked';
@@ -1740,14 +1824,66 @@ const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
 };
 
 const buildServiceCatalog = async () => {
-  const entries = [];
   const storageProtection = readStorageProtectionState();
+  const entries = await Promise.all(
+    Object.entries(getServiceCatalogMeta()).map(([name, meta]) => inspectServiceCatalogEntry(name, meta, storageProtection))
+  );
+  return entries;
+};
 
-  for (const [name, meta] of Object.entries(SERVICE_CATALOG_META)) {
-    entries.push(await inspectServiceCatalogEntry(name, meta, storageProtection));
+const uiServiceCatalogCache = {
+  expiresAt: 0,
+  promise: null,
+  value: null,
+};
+
+const getUiServiceCatalog = async ({ force = false } = {}) => {
+  const now = Date.now();
+  if (!force && uiServiceCatalogCache.value && uiServiceCatalogCache.expiresAt > now) {
+    return uiServiceCatalogCache.value;
+  }
+  if (!force && uiServiceCatalogCache.promise) {
+    return uiServiceCatalogCache.promise;
+  }
+  uiServiceCatalogCache.promise = buildServiceCatalog()
+    .then((value) => {
+      uiServiceCatalogCache.value = value;
+      uiServiceCatalogCache.expiresAt = Date.now() + 2500;
+      uiServiceCatalogCache.promise = null;
+      return value;
+    })
+    .catch((error) => {
+      uiServiceCatalogCache.promise = null;
+      throw error;
+    });
+  return uiServiceCatalogCache.promise;
+};
+
+const uiNetworkExposureCache = { expiresAt: 0, promise: null, value: null };
+
+const getNetworkExposureSnapshot = async ({ force = false } = {}) => {
+  const now = Date.now();
+  if (!force && uiNetworkExposureCache.value && uiNetworkExposureCache.expiresAt > now) {
+    return uiNetworkExposureCache.value;
+  }
+  if (!force && uiNetworkExposureCache.promise) {
+    return uiNetworkExposureCache.promise;
   }
 
-  return entries;
+  uiNetworkExposureCache.promise = runCommand(`"${HMSTX_CONTROL_CMD}" audit --json`)
+    .then((output) => {
+      const parsed = JSON.parse(output || '{}');
+      uiNetworkExposureCache.value = parsed;
+      uiNetworkExposureCache.expiresAt = Date.now() + 3000;
+      uiNetworkExposureCache.promise = null;
+      return parsed;
+    })
+    .catch((error) => {
+      uiNetworkExposureCache.promise = null;
+      throw error;
+    });
+
+  return uiNetworkExposureCache.promise;
 };
 
 const buildServiceGroups = (catalog) =>
@@ -2722,7 +2858,7 @@ const collectServicesSnapshot = async () => {
   const result = {};
   const storageProtection = readStorageProtectionState();
 
-  for (const name of Object.keys(SERVICE_CATALOG_META)) {
+  for (const name of Object.keys(getServiceCatalogMeta())) {
     if (name === 'sshd' && !ENABLE_SSHD) {
       continue;
     }
@@ -2966,12 +3102,13 @@ const getDriveSnapshot = async () => {
 };
 
 const getDashboardSnapshot = async (sessionId) => {
-  const [services, monitor, storage, controlledServiceNames, serviceCatalog] = await Promise.all([
+  const [services, monitor, storage, controlledServiceNames, serviceCatalog, networkExposure] = await Promise.all([
     getServicesSnapshot(),
     getMonitorSnapshot(),
     getStorageSnapshot(),
     getControlledServiceNames(),
-    buildServiceCatalog(),
+    getUiServiceCatalog(),
+    getNetworkExposureSnapshot(),
   ]);
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
 
@@ -2986,6 +3123,9 @@ const getDashboardSnapshot = async (sessionId) => {
     connections: getConnectionsSnapshot(),
     networkDevices: getNetworkDevicesSnapshot(),
     storage,
+    networkExposure,
+    remoteAccess: networkExposure.remoteAccess || null,
+    tailscale: networkExposure.tailscale || null,
     serviceController: {
       locked: !isServiceControllerUnlocked(sessionId),
       optionalServices: controlledServiceNames,
@@ -2995,9 +3135,10 @@ const getDashboardSnapshot = async (sessionId) => {
 };
 
 const getTelemetrySnapshot = async (sessionId) => {
-  const [monitor, serviceCatalog] = await Promise.all([
+  const [monitor, serviceCatalog, networkExposure] = await Promise.all([
     getMonitorSnapshot(),
-    buildServiceCatalog(),
+    getUiServiceCatalog(),
+    getNetworkExposureSnapshot(),
   ]);
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
 
@@ -3009,6 +3150,9 @@ const getTelemetrySnapshot = async (sessionId) => {
     lifecycle,
     serviceGroups: buildServiceGroups(serviceCatalog),
     mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
+    networkExposure,
+    remoteAccess: networkExposure.remoteAccess || null,
+    tailscale: networkExposure.tailscale || null,
     serviceController: {
       locked: !isServiceControllerUnlocked(sessionId),
       optionalServices: serviceCatalog
@@ -5903,8 +6047,59 @@ const normalizeUiWorkspaceKey = (value = '') => {
   return UI_WORKSPACES.includes(key) ? key : '';
 };
 
-const buildUiBootstrapPayload = async (sessionUser) => {
-  const serviceCatalog = await buildServiceCatalog();
+const buildQbittorrentUiDiagnostics = async (serviceCatalog) => {
+  const qbService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
+  const config = probeQbittorrentConfig();
+  let webUiReachable = false;
+  let authRequired = false;
+  let version = '';
+  let error = '';
+
+  try {
+    const response = await fetchQbittorrentWebUi('/api/v2/app/version');
+    webUiReachable = response.ok || response.status === 401 || response.status === 403;
+    authRequired = response.status === 401 || response.status === 403;
+    if (response.ok) {
+      version = (await response.text().catch(() => '')).trim();
+    }
+  } catch (diagnosticError) {
+    error = String(diagnosticError?.message || diagnosticError || 'Unable to reach qBittorrent WebUI');
+  }
+
+  return {
+    authConfigured: Boolean(QBITTORRENT_WEBUI_USERNAME && QBITTORRENT_WEBUI_PASSWORD),
+    authRequired,
+    baseUrl: QBITTORRENT_WEBUI_BASE_URL,
+    categories: {
+      manual: config.manualCategoryPath,
+      movies: config.moviesCategoryPath,
+      series: config.seriesCategoryPath,
+      standalone: config.standaloneCategoryPath,
+    },
+    defaultSavePath: config.defaultSavePath,
+    error,
+    serviceStatus: qbService ? qbService.status : 'unknown',
+    tempPath: config.tempPath,
+    version,
+    webUiReachable,
+  };
+};
+
+const buildArrDiagnostics = (serviceCatalog) => {
+  const serviceKeys = ['sonarr', 'radarr', 'prowlarr', 'bazarr'];
+  const services = serviceKeys
+    .map((key) => serviceCatalog.find((entry) => entry.key === key))
+    .filter(Boolean);
+  return {
+    healthy: services.filter((entry) => entry.status === 'working').length,
+    serviceKeys,
+    services,
+    total: services.length,
+  };
+};
+
+const buildUiBootstrapPayload = async (sessionUser, serviceCatalogOverride = null) => {
+  const serviceCatalog = serviceCatalogOverride || await getUiServiceCatalog();
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
   const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
   const hasFilesAccess = await syncManagedShares().then((shares) => shares.length > 0).catch(() => false);
@@ -5969,6 +6164,140 @@ const buildUiBootstrapPayload = async (sessionUser) => {
   };
 };
 
+const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride = null) => {
+  const serviceCatalog = serviceCatalogOverride || await getUiServiceCatalog();
+  const now = new Date().toISOString();
+  const mediaEntries = serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(entry.group));
+  const transferEntries = serviceCatalog.filter((entry) => ['access', 'downloads'].includes(entry.group));
+
+  if (workspaceKey === 'overview') {
+    const [telemetry, connections, storage, drives] = await Promise.all([
+      getTelemetrySnapshot(req.session?.id),
+      Promise.resolve(getConnectionsSnapshot()),
+      getStorageSnapshot(),
+      getDriveSnapshot(),
+    ]);
+    return {
+      generatedAt: now,
+      workspaceKey,
+      telemetry,
+      connections,
+      storage,
+      drives,
+    };
+  }
+
+  if (workspaceKey === 'media') {
+    const [mediaHealth, qbDiagnostics] = await Promise.all([
+      getJellyfinMediaHealthSnapshot(),
+      buildQbittorrentUiDiagnostics(serviceCatalog),
+    ]);
+    return {
+      generatedAt: now,
+      workspaceKey,
+      arrDiagnostics: buildArrDiagnostics(serviceCatalog),
+      lifecycle: buildStackLifecycleSummary(serviceCatalog),
+      mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
+      mediaHealth,
+      qbDiagnostics,
+      services: mediaEntries,
+    };
+  }
+
+  if (workspaceKey === 'files') {
+    const [drives, shares, users] = await Promise.all([
+      getDriveSnapshot(),
+      syncManagedShares(),
+      Promise.resolve(appDb.listUsers()),
+    ]);
+    return {
+      generatedAt: now,
+      workspaceKey,
+      drives,
+      storageProtection: readStorageProtectionState(),
+      shares,
+      users,
+    };
+  }
+
+  if (workspaceKey === 'transfers') {
+    const qbittorrentConfig = probeQbittorrentConfig();
+    const qbittorrentService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
+    return {
+      generatedAt: now,
+      workspaceKey,
+      arrDiagnostics: buildArrDiagnostics(serviceCatalog),
+      ftpDefaults: {
+        defaultName: DEFAULT_PS4_FTP_NAME,
+        host: process.env.FTP_CLIENT_HOST || DEFAULT_PS4_HOST,
+        port: Number(process.env.FTP_CLIENT_PORT || DEFAULT_PS4_PORT),
+        user: process.env.FTP_CLIENT_USER || DEFAULT_PS4_USER,
+        secure: process.env.FTP_CLIENT_SECURE === 'true',
+        downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
+        ftpMounting: getCloudMountCapability(),
+      },
+      qbDiagnostics: await buildQbittorrentUiDiagnostics(serviceCatalog),
+      torrent: {
+        service: qbittorrentService,
+        standaloneDestination: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+        laneSummary: {
+          arr: {
+            movies: {
+              category: 'movies',
+              savePath: qbittorrentConfig.moviesCategoryPath || MEDIA_DOWNLOADS_MOVIES_DIR,
+            },
+            series: {
+              category: 'series',
+              savePath: qbittorrentConfig.seriesCategoryPath || MEDIA_DOWNLOADS_SERIES_DIR,
+            },
+          },
+          standalone: {
+            category: 'standalone',
+            savePath: qbittorrentConfig.standaloneCategoryPath || MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+          },
+        },
+      },
+      favourites: appDb.listFtpFavourites().map(serializeFtpFavourite),
+      services: transferEntries,
+    };
+  }
+
+  if (workspaceKey === 'ai') {
+    const [llmState, monitor] = await Promise.all([
+      buildLlmState(),
+      getMonitorSnapshot(),
+    ]);
+    return {
+      generatedAt: now,
+      workspaceKey,
+      llmState,
+      monitor: {
+        cpuLoad: Number(monitor.cpuLoad || 0),
+        timestamp: now,
+      },
+    };
+  }
+
+  if (workspaceKey === 'terminal') {
+    return {
+      generatedAt: now,
+      workspaceKey,
+      terminal: serviceCatalog.find((entry) => entry.key === 'ttyd') || null,
+    };
+  }
+
+  const [dashboard, services] = await Promise.all([
+    getDashboardSnapshot(req.session?.id),
+    getServicesSnapshot(),
+  ]);
+  return {
+    generatedAt: now,
+    workspaceKey,
+    dashboard,
+    services,
+  };
+};
+
 const uiBootstrapHandler = async (req, res) => {
   try {
     const payload = await buildUiBootstrapPayload(req.session);
@@ -5979,6 +6308,21 @@ const uiBootstrapHandler = async (req, res) => {
   }
 };
 
+const uiInitialHandler = async (req, res) => {
+  const workspaceKey = normalizeUiWorkspaceKey(req.query.workspace || req.query.workspaceKey || '') || 'overview';
+  try {
+    const serviceCatalog = await getUiServiceCatalog();
+    const [bootstrap, workspace] = await Promise.all([
+      buildUiBootstrapPayload(req.session, serviceCatalog),
+      buildUiWorkspacePayload(req, workspaceKey, serviceCatalog),
+    ]);
+    res.json({ bootstrap, workspace });
+  } catch (err) {
+    pushDebugEvent('error', 'UI initial snapshot failed', { error: String(err), workspaceKey }, true);
+    res.status(500).json({ error: 'Unable to build initial UI payload' });
+  }
+};
+
 const uiWorkspacePayloadHandler = async (req, res) => {
   const workspaceKey = normalizeUiWorkspaceKey(req.params.workspaceKey || '');
   if (!workspaceKey) {
@@ -5986,128 +6330,8 @@ const uiWorkspacePayloadHandler = async (req, res) => {
   }
 
   try {
-    const serviceCatalog = await buildServiceCatalog();
-    const now = new Date().toISOString();
-    const mediaEntries = serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(entry.group));
-    const transferEntries = serviceCatalog.filter((entry) => ['access', 'downloads'].includes(entry.group));
-
-    if (workspaceKey === 'overview') {
-      const [telemetry, connections, storage] = await Promise.all([
-        getTelemetrySnapshot(req.session?.id),
-        Promise.resolve(getConnectionsSnapshot()),
-        getStorageSnapshot(),
-      ]);
-      return res.json({
-        generatedAt: now,
-        workspaceKey,
-        telemetry,
-        connections,
-        storage,
-      });
-    }
-
-    if (workspaceKey === 'media') {
-      const mediaHealth = await getJellyfinMediaHealthSnapshot();
-      return res.json({
-        generatedAt: now,
-        workspaceKey,
-        lifecycle: buildStackLifecycleSummary(serviceCatalog),
-        mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
-        mediaHealth,
-        services: mediaEntries,
-      });
-    }
-
-    if (workspaceKey === 'files') {
-      const [drives, shares, users] = await Promise.all([
-        getDriveSnapshot(),
-        syncManagedShares(),
-        Promise.resolve(appDb.listUsers()),
-      ]);
-      return res.json({
-        generatedAt: now,
-        workspaceKey,
-        drives,
-        storageProtection: readStorageProtectionState(),
-        shares,
-        users,
-      });
-    }
-
-    if (workspaceKey === 'transfers') {
-      const qbittorrentConfig = probeQbittorrentConfig();
-      const qbittorrentService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
-      return res.json({
-        generatedAt: now,
-        workspaceKey,
-        ftpDefaults: {
-          defaultName: DEFAULT_PS4_FTP_NAME,
-          host: process.env.FTP_CLIENT_HOST || DEFAULT_PS4_HOST,
-          port: Number(process.env.FTP_CLIENT_PORT || DEFAULT_PS4_PORT),
-          user: process.env.FTP_CLIENT_USER || DEFAULT_PS4_USER,
-          secure: process.env.FTP_CLIENT_SECURE === 'true',
-          downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
-          ftpMounting: getCloudMountCapability(),
-        },
-        torrent: {
-          service: qbittorrentService,
-          standaloneDestination: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
-          laneSummary: {
-            arr: {
-              movies: {
-                category: 'movies',
-                savePath: qbittorrentConfig.moviesCategoryPath || MEDIA_DOWNLOADS_MOVIES_DIR,
-              },
-              series: {
-                category: 'series',
-                savePath: qbittorrentConfig.seriesCategoryPath || MEDIA_DOWNLOADS_SERIES_DIR,
-              },
-            },
-            standalone: {
-              category: 'standalone',
-              savePath: qbittorrentConfig.standaloneCategoryPath || MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
-            },
-          },
-        },
-        favourites: appDb.listFtpFavourites().map(serializeFtpFavourite),
-        services: transferEntries,
-      });
-    }
-
-    if (workspaceKey === 'ai') {
-      const [llmState, monitor] = await Promise.all([
-        buildLlmState(),
-        getMonitorSnapshot(),
-      ]);
-      return res.json({
-        generatedAt: now,
-        workspaceKey,
-        llmState,
-        monitor: {
-          cpuLoad: Number(monitor.cpuLoad || 0),
-          timestamp: now,
-        },
-      });
-    }
-
-    if (workspaceKey === 'terminal') {
-      return res.json({
-        generatedAt: now,
-        workspaceKey,
-        terminal: serviceCatalog.find((entry) => entry.key === 'ttyd') || null,
-      });
-    }
-
-    const [dashboard, services] = await Promise.all([
-      getDashboardSnapshot(req.session?.id),
-      getServicesSnapshot(),
-    ]);
-    return res.json({
-      generatedAt: now,
-      workspaceKey,
-      dashboard,
-      services,
-    });
+    const payload = await buildUiWorkspacePayload(req, workspaceKey);
+    return res.json(payload);
   } catch (err) {
     pushDebugEvent('error', 'UI workspace payload failed', { error: String(err), workspaceKey }, true);
     return res.status(500).json({ error: `Unable to build '${workspaceKey}' workspace payload` });
@@ -7807,7 +8031,16 @@ registerDualRoute('post', '/control', requireAuth, requireAdmin, controlHandler)
 registerDualRoute('get', '/monitor', requireAuth, requireAdmin, monitorHandler);
 registerDualRoute('get', '/dashboard', requireAuth, requireAdmin, dashboardHandler);
 registerDualRoute('get', '/ui/bootstrap', requireAuth, requireAdmin, uiBootstrapHandler);
+registerDualRoute('get', '/ui/initial', requireAuth, requireAdmin, uiInitialHandler);
 registerDualRoute('get', '/ui/workspaces/:workspaceKey', requireAuth, requireAdmin, uiWorkspacePayloadHandler);
+registerDualRoute('get', '/system/network/exposure', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    res.json(await getNetworkExposureSnapshot({ force: String(req.query.force || '') === 'true' }));
+  } catch (err) {
+    pushAuditEvent(req, 'error', 'Network exposure audit failed', { error: String(err) });
+    res.status(500).json({ error: 'Unable to build network exposure audit' });
+  }
+});
 registerDualRoute('get', '/connections', requireAuth, requireAdmin, connectionsHandler);
 registerDualRoute('post', '/connections/:id/disconnect', requireAuth, requireAdmin, disconnectConnectionHandler);
 registerDualRoute('get', '/storage', requireAuth, requireAdmin, storageHandler);

@@ -21,7 +21,7 @@ describe('dashboard-utils', () => {
     expect(normalizeDrivePayload({
       refreshIntervalMs: 1000,
       events: [],
-      manifest: { drives: [] },
+      manifest: { generatedAt: null, intervalMs: 1000, drives: [] },
     }).refreshIntervalMs).toBe(60000);
   });
 });

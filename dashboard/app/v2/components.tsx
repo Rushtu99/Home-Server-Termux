@@ -62,7 +62,8 @@ export function ErrorState({ message }: { message: string }) {
 export function LoadingState({ label = 'Loading workspace…' }: { label?: string }) {
   return (
     <div className="dash2-loading" role="status" aria-live="polite">
-      {label}
+      <span className="dash2-spinner" aria-hidden="true" />
+      <span>{label}</span>
     </div>
   );
 }

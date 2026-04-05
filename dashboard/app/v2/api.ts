@@ -2,7 +2,7 @@
 
 import { appFetch } from '../demo-api';
 import { dispatchLlmStreamEvent, parseSseChunk, type LlmChatStreamHandlers } from './llm-stream';
-import type { UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
+import type { UiBootstrapResponse, UiInitialResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
 
 const API = '/api';
 
@@ -20,6 +20,9 @@ const fetchJson = async <T>(url: string): Promise<T> => {
 };
 
 export const fetchUiBootstrap = () => fetchJson<UiBootstrapResponse>(`${API}/ui/bootstrap`);
+
+export const fetchUiInitialPayload = (workspace: WorkspaceKey) =>
+  fetchJson<UiInitialResponse>(`${API}/ui/initial?workspace=${encodeURIComponent(workspace)}`);
 
 export const fetchWorkspacePayload = (workspace: WorkspaceKey) =>
   fetchJson<UiWorkspaceResponse>(`${API}/ui/workspaces/${workspace}`);

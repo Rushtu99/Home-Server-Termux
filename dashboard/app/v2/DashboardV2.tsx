@@ -11,6 +11,7 @@ import { WorkspaceViewport } from './workspaces';
 import type { UiNavItem, WorkspaceKey } from './types';
 
 const THEME_STORAGE_KEY = 'hmstx-theme';
+const STYLE_STORAGE_KEY = 'hmstx-style';
 const THEME_OPTIONS = [
   { value: 'dark', label: 'Dark' },
   { value: 'light', label: 'Light' },
@@ -21,6 +22,11 @@ const THEME_OPTIONS = [
   { value: 'radiant-yellow', label: 'Radiant Yellow' },
   { value: 'puffy-pink', label: 'Puffy Pink' },
   { value: 'purple-haze', label: 'Purple Haze' },
+] as const;
+
+const STYLE_OPTIONS = [
+  { value: 'classic-v2', label: 'Style 1' },
+  { value: 'filesystem', label: 'Style 2 (Filesystem)' },
 ] as const;
 
 const statusTone = (status: string) => {
@@ -73,6 +79,7 @@ export default function DashboardV2() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [theme, setTheme] = useState('dark');
+  const [styleVariant, setStyleVariant] = useState('classic-v2');
 
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
@@ -90,8 +97,12 @@ export default function DashboardV2() {
     const initial = THEME_OPTIONS.some((entry) => entry.value === stored)
       ? String(stored)
       : 'dark';
+    const storedStyle = window.localStorage.getItem(STYLE_STORAGE_KEY);
+    const initialStyle = STYLE_OPTIONS.some((entry) => entry.value === storedStyle) ? String(storedStyle) : 'classic-v2';
     setTheme(initial);
+    setStyleVariant(initialStyle);
     document.documentElement.dataset.theme = initial;
+    document.documentElement.dataset.style = initialStyle;
   }, []);
 
   useEffect(() => {
@@ -101,6 +112,14 @@ export default function DashboardV2() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    document.documentElement.dataset.style = styleVariant;
+    window.localStorage.setItem(STYLE_STORAGE_KEY, styleVariant);
+  }, [styleVariant]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -156,8 +175,7 @@ export default function DashboardV2() {
       }
       setLoginPassword('');
       setLoginError('');
-      reloadBootstrap();
-      reloadWorkspace();
+      await Promise.all([reloadBootstrap(), reloadWorkspace()]);
     } catch (error) {
       setLoginError(toErrorMessage(error, 'Login failed'));
     } finally {
@@ -306,11 +324,7 @@ export default function DashboardV2() {
 
       <main className="dash2-main" id="app-main">
         <header className={`dash2-header ${authRequired ? 'dash2-header--auth' : ''}`}>
-          <div>
-            <h1>{activeWorkspaceTitle}</h1>
-            <p>{activeWorkspaceSummary}</p>
-          </div>
-          <div className="dash2-header__meta">
+          <div className="dash2-header__lead">
             {isNarrowScreen ? (
               <button
                 className="ui-button dash2-sidebar-toggle"
@@ -327,6 +341,12 @@ export default function DashboardV2() {
                 </span>
               </button>
             ) : null}
+            <div className="dash2-header__copy">
+              <h1>{authRequired ? 'HmSTx Dashboard' : activeWorkspaceTitle}</h1>
+              <p>{authRequired ? 'Admin workspace sign-in is required.' : activeWorkspaceSummary}</p>
+            </div>
+          </div>
+          <div className="dash2-header__meta">
             {authRequired ? (
               <StatusBadge tone="warn">sign in required</StatusBadge>
             ) : (
@@ -337,6 +357,14 @@ export default function DashboardV2() {
                   <span>Theme</span>
                   <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
                     {THEME_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="dash2-theme-picker">
+                  <span>Style</span>
+                  <select className="ui-input" value={styleVariant} onChange={(event) => setStyleVariant(event.target.value)}>
+                    {STYLE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>

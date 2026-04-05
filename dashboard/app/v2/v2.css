@@ -2,8 +2,8 @@
   min-height: 100dvh;
   display: grid;
   grid-template-columns: 236px 1fr;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--background);
+  color: var(--foreground);
 }
 
 .dash2-sidebar {
@@ -246,7 +246,7 @@
 }
 
 .dash2-graph-card strong {
-  color: var(--text);
+  color: var(--foreground);
 }
 
 .dash2-graph-card svg {
@@ -413,6 +413,27 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
   padding: 8px 10px;
+}
+
+.dash2-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash2-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
+  animation: dash2-spin 0.7s linear infinite;
+}
+
+@keyframes dash2-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .dash2-login-wrap {
@@ -709,7 +730,7 @@
   margin: 0;
   font-size: 13px;
   line-height: 1.45;
-  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  color: color-mix(in srgb, var(--foreground) 88%, var(--muted));
 }
 
 .dash2-workflow-card__bullets {
@@ -798,6 +819,156 @@
 .dash2-admin-note {
   font-size: 11px;
   color: var(--muted);
+}
+
+.dash2-header__lead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dash2-header__copy {
+  min-width: 0;
+}
+
+.dash2-header__copy h1,
+.dash2-header__copy p {
+  overflow-wrap: anywhere;
+}
+
+.dash2-header--auth {
+  align-items: center;
+  padding: 6px 8px;
+}
+
+.dash2-header--auth .dash2-header__copy h1 {
+  font-size: 18px;
+}
+
+.dash2-header--auth .dash2-header__copy p {
+  font-size: 12px;
+}
+
+.dash2-login-wrap {
+  min-height: calc(100dvh - 140px);
+}
+
+.dash2-login-card {
+  width: min(100%, 400px);
+  justify-self: center;
+}
+
+.dash2-graph-card--legacy {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, transparent);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.dash2-graph-card--legacy header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash2-graph-card--legacy canvas {
+  width: 100%;
+  height: 144px;
+  display: block;
+}
+
+.dash2-drive-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.dash2-drive-card {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, transparent);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.dash2-drive-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dash2-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dash2-chat-log__message {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
+.dash2-chat-log__chunk {
+  display: inline;
+  animation: hmstx-rise 180ms ease;
+}
+
+html[data-low-power="true"] .dash2-chat-log__chunk {
+  animation: none;
+}
+
+html[data-style="filesystem"] .dash2-header,
+html[data-style="filesystem"] .dash2-card,
+html[data-style="filesystem"] .dash2-nav__item,
+html[data-style="filesystem"] .dash2-chatbox-rail,
+html[data-style="filesystem"] .dash2-chatbox-thread,
+html[data-style="filesystem"] .dash2-workflow-card,
+html[data-style="filesystem"] .dash2-drive-card,
+html[data-style="filesystem"] .dash2-service-admin-card,
+html[data-style="filesystem"] .dash2-media-health-card,
+html[data-style="filesystem"] .dash2-graph-card--legacy,
+html[data-style="filesystem"] .dash2-loading,
+html[data-style="filesystem"] .dash2-empty,
+html[data-style="filesystem"] .dash2-error,
+html[data-style="filesystem"] .dash2-login-card {
+  border-radius: 6px;
+}
+
+html[data-style="filesystem"] .dash2-main,
+html[data-style="filesystem"] .dash2-sidebar {
+  padding: 10px;
+  gap: 10px;
+}
+
+html[data-style="filesystem"] .dash2-card__header,
+html[data-style="filesystem"] .dash2-card__body,
+html[data-style="filesystem"] .dash2-workflow-card,
+html[data-style="filesystem"] .dash2-chatbox-thread,
+html[data-style="filesystem"] .dash2-chatbox-rail,
+html[data-style="filesystem"] .dash2-drive-card,
+html[data-style="filesystem"] .dash2-media-health-card,
+html[data-style="filesystem"] .dash2-login-card {
+  padding: 8px;
+}
+
+html[data-style="filesystem"] .dash2-nav__item small {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+html[data-style="filesystem"] .dash2-workflow-card__summary,
+html[data-style="filesystem"] .dash2-chat-log__entry p,
+html[data-style="filesystem"] .dash2-list li p {
+  font-size: 12px;
+}
+
+html[data-style="filesystem"] .dash2-chatbox-layout {
+  gap: 10px;
 }
 
 @media (max-width: 980px) {

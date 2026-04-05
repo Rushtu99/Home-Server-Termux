@@ -8,6 +8,7 @@ Use the repo-level control script for normal operator actions:
 bash scripts/hmstx-control.sh preflight
 bash scripts/hmstx-control.sh start
 bash scripts/hmstx-control.sh status
+bash scripts/hmstx-control.sh audit --json
 bash scripts/hmstx-control.sh restart
 bash scripts/hmstx-control.sh stop
 ```
@@ -15,6 +16,7 @@ bash scripts/hmstx-control.sh stop
 - `preflight` checks the host before booting the stack.
 - `start` brings the managed stack up.
 - `status` reports the current lifecycle state and major blockers.
+- `audit` reports core ports, gateway exposure, unauthenticated route behavior, and Tailscale/remote-access metadata.
 - `restart` performs a clean stop/start cycle.
 - `stop` shuts the stack down cleanly.
 
