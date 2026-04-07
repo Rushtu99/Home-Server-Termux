@@ -4,6 +4,38 @@ set -euo pipefail
 
 USER_HOME="${HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
+SERVER_ENV_FILE="${SERVER_ENV_FILE:-$PROJECT/server/.env}"
+load_shell_env_file() {
+    local env_file="$1"
+    local line="" key="" value=""
+
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            continue
+        fi
+
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+
+        export "$key=$value"
+    done < "$env_file"
+}
+
+load_shell_env_file "$SERVER_ENV_FILE"
+
 if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
     . "$PROJECT/scripts/drive-common.sh"
 fi
@@ -100,7 +132,19 @@ remove_config_key() {
 }
 
 list_matching_pids() {
-    pgrep -af "qbittorrent-nox" | awk '!/pgrep -af/ { print $1 }' || true
+    local line=""
+    local pid=""
+    local args=""
+
+    pgrep -af "qbittorrent-nox" 2>/dev/null | while IFS= read -r line; do
+        pid="${line%% *}"
+        args="${line#"$pid "}"
+        case "$args" in
+            *"--profile=$QBITTORRENT_HOME"*)
+                printf '%s\n' "$pid"
+                ;;
+        esac
+    done || true
 }
 
 read_pid() {
