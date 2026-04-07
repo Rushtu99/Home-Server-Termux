@@ -38,10 +38,34 @@ Small downloads directory:
 [scripts/qbittorrent-service.sh](../scripts/qbittorrent-service.sh) now enforces managed paths:
 - default save path: `downloads/manual`
 - category paths: `downloads/movies`, `downloads/series`, `downloads/manual`
+- standalone torrent lane: `downloads/torrent/qbit`
 - temp path: `tmp/qbittorrent`
 - finish hook: calls the importer with the completed path
 
 The hook is a backstop, not the only mechanism. A sweeper also runs on an interval.
+
+## ARR/qB Runtime and Path Mapping
+
+[scripts/configure-arr-stack.sh](../scripts/configure-arr-stack.sh) is the canonical repair script for the automated torrent pipeline. It starts the qBittorrent + ARR services it needs, then re-applies the expected root folders, download client wiring, and remote path mappings.
+
+Current expected mapping model:
+- qBittorrent writes into the Termux scratch tree under `~/Drives/E/SCRATCH/HmSTxScratch/downloads/...`
+- Sonarr and Radarr run inside the Debian proot and therefore see the same storage as `/mnt/termux-drives/...`
+- the script programs remote path mappings so ARR imports from the chroot-visible download paths back into the host-visible scratch paths
+- Sonarr tracks the vault `series` library and Radarr tracks the vault `movies` library
+
+Use this after reinstalling ARR apps, moving drive roots, or noticing completed torrents that never import:
+
+```bash
+scripts/configure-arr-stack.sh
+```
+
+Successful runs reconcile:
+- Sonarr root folder → `/mnt/termux-drives/D/VAULT/Media/series`
+- Radarr root folder → `/mnt/termux-drives/D/VAULT/Media/movies`
+- Sonarr remote path mapping → `/mnt/termux-drives/E/SCRATCH/HmSTxScratch/downloads/series/`
+- Radarr remote path mapping → `/mnt/termux-drives/E/SCRATCH/HmSTxScratch/downloads/movies/`
+- qBittorrent download client entries for Sonarr and Radarr
 
 ## Importer
 
@@ -70,6 +94,24 @@ Manual routing details:
 - qBittorrent still downloads into the scratch workspace first
 - media imports land in vault
 - tiny manual items can be offloaded into `~/Drives/C/Download/Home-Server/small`
+
+## Jellyseerr
+
+Jellyseerr is optional and is not installed by default. `scripts/install-media-automation.sh` leaves `INSTALL_JELLYSEERR=0` unless you opt in.
+
+Install or rebuild it with:
+
+```bash
+INSTALL_JELLYSEERR=1 scripts/install-media-automation.sh
+```
+
+Runtime notes:
+- the wrapper is [scripts/jellyseerr-service.sh](../scripts/jellyseerr-service.sh)
+- the managed app root is `~/services/jellyseerr/app`
+- the service expects build output at `~/services/jellyseerr/app/dist/index.js`
+- nginx proxies it at `/requests/`
+
+If Jellyseerr is missing or unbuilt, the dashboard intentionally reports the request portal as blocked/unavailable instead of pretending the media automation lane itself is broken.
 
 ## Jellyfin Libraries
 
