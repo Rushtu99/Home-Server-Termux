@@ -356,8 +356,8 @@ export default function DashboardV2() {
     <div className="dash2-shell">
       <aside className={`dash2-sidebar ${sidebarOpen ? 'dash2-sidebar--open' : ''}`} aria-label="Dashboard workspaces">
         <div className="dash2-brand">
-          <strong>HmSTx v2</strong>
-          <span>Operations dashboard</span>
+          <strong>HmSTx</strong>
+          <span>Dashboard</span>
         </div>
 
         <nav className="dash2-nav">
@@ -471,7 +471,7 @@ export default function DashboardV2() {
                     aria-haspopup="menu"
                     onClick={() => setUtilityMenuOpen((current) => !current)}
                   >
-                    Account
+                    Preferences
                   </button>
                   {utilityMenuOpen ? (
                     <div className="dash2-utility-menu__panel" role="menu" aria-label="Theme and account">
