@@ -132,7 +132,19 @@ remove_config_key() {
 }
 
 list_matching_pids() {
-    pgrep -af "qbittorrent-nox" | awk '!/pgrep -af/ { print $1 }' || true
+    local line=""
+    local pid=""
+    local args=""
+
+    pgrep -af "qbittorrent-nox" 2>/dev/null | while IFS= read -r line; do
+        pid="${line%% *}"
+        args="${line#"$pid "}"
+        case "$args" in
+            *"--profile=$QBITTORRENT_HOME"*)
+                printf '%s\n' "$pid"
+                ;;
+        esac
+    done || true
 }
 
 read_pid() {
