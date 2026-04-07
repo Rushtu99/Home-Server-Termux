@@ -69,11 +69,20 @@ Most helpers share a simple contract:
 ```bash
 scripts/jellyfin-service.sh start
 scripts/qbittorrent-service.sh restart
+scripts/jellyseerr-service.sh status
 scripts/llm-service.sh status
 scripts/storage-watchdog-service.sh check-now
 ```
 
 Use the wrappers instead of launching raw binaries by hand. That preserves pid files, logs, and managed paths.
+
+When the ARR/qB pipeline drifts, run the stack-specific repair pass instead of hand-editing download client settings inside the web UIs:
+
+```bash
+scripts/configure-arr-stack.sh
+```
+
+That script restores the expected qBittorrent save paths plus the Sonarr/Radarr remote path mappings for this Termux + proot layout.
 
 ## Static Validation
 
@@ -92,6 +101,10 @@ After startup:
 ```bash
 curl -I http://127.0.0.1:8088/
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/api/auth/me
+scripts/qbittorrent-service.sh status --json
+scripts/sonarr-service.sh status --json
+scripts/radarr-service.sh status --json
+scripts/jellyseerr-service.sh status --json
 scripts/media-importer.sh status --json
 scripts/storage-watchdog-service.sh check-now
 ```

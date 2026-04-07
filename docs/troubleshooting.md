@@ -58,6 +58,42 @@ Look for:
 
 If qBittorrent completed items are not triggering imports, inspect the managed qBittorrent config and confirm the finish command was written by the wrapper.
 
+## ARR/qB Path Mappings Drift Or Imports Stall
+
+Re-apply the managed wiring first:
+
+```bash
+scripts/configure-arr-stack.sh
+```
+
+Then verify the service wrappers still agree with the repo-managed layout:
+- qBittorrent default save path should resolve to `~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual`
+- qBittorrent temp path should resolve to `~/Drives/E/SCRATCH/HmSTxScratch/tmp/qbittorrent`
+- Sonarr should import from the `series` lane
+- Radarr should import from the `movies` lane
+
+If this keeps drifting, re-check `MEDIA_VAULT_ROOT`, `MEDIA_SCRATCH_ROOT`, and the `/mnt/termux-drives` bind mount inside the proot environment.
+
+## Jellyseerr Fails To Start
+
+Check:
+
+```bash
+scripts/jellyseerr-service.sh status --json
+tail -n 100 logs/jellyseerr.log
+```
+
+Common causes:
+- Jellyseerr was never installed because `INSTALL_JELLYSEERR` was left at `0`
+- `~/services/jellyseerr/app/dist/index.js` is missing because the install/build step failed
+- the local Node runtime is too old for the pinned Jellyseerr release
+
+Repair by re-running the installer with Jellyseerr enabled:
+
+```bash
+INSTALL_JELLYSEERR=1 scripts/install-media-automation.sh
+```
+
 ## Local LLM Fails To Start
 
 Check:

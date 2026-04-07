@@ -52,6 +52,9 @@ Key storage env vars:
 - `MEDIA_VAULT_DRIVES`, `MEDIA_SCRATCH_DRIVES`
 - `MEDIA_VAULT_ROOT`, `MEDIA_SCRATCH_ROOT`
 - `MEDIA_VAULT_ROOTS`, `MEDIA_SCRATCH_ROOTS`
+- `MEDIA_DOWNLOADS_DIR`, `MEDIA_DOWNLOADS_MOVIES_DIR`, `MEDIA_DOWNLOADS_SERIES_DIR`
+- `MEDIA_DOWNLOADS_MANUAL_DIR`, `MEDIA_DOWNLOADS_TORRENT_DIR`, `MEDIA_DOWNLOADS_TORRENT_QBIT_DIR`
+- `MEDIA_QBIT_TMP_DIR`
 - `MEDIA_LAYOUT_STRICT`
 - `MEDIA_PREFLIGHT_FAIL_CLOSED`
 - `MEDIA_IMPORT_ABORT_FREE_GB`
@@ -59,6 +62,8 @@ Key storage env vars:
 - `MEDIA_SCRATCH_WARN_USED_PERCENT`
 - `MEDIA_SCRATCH_RETENTION_DAYS`
 - `MEDIA_SCRATCH_CLEANUP_ENABLED`
+
+Keep the qBittorrent download and temp paths on the scratch root. `scripts/configure-arr-stack.sh` programs Sonarr and Radarr remote path mappings from the chroot-visible `/mnt/termux-drives/...` paths back to these Termux-host paths, so drift here will break automated imports.
 
 Status artifacts:
 - `MEDIA_IMPORT_STATUS_FILE`
@@ -73,9 +78,15 @@ Status artifacts:
 The backend and startup script resolve helpers from env, so you can override paths if needed:
 - `JELLYFIN_SERVICE_CMD`
 - `QBITTORRENT_SERVICE_CMD`
+- `SONARR_SERVICE_CMD`
+- `RADARR_SERVICE_CMD`
+- `PROWLARR_SERVICE_CMD`
+- `BAZARR_SERVICE_CMD`
+- `JELLYSEERR_SERVICE_CMD`
 - `MEDIA_IMPORTER_CMD`
 - `MEDIA_WORKFLOW_SERVICE_CMD`
 - `STORAGE_WATCHDOG_SERVICE_CMD`
+- `TAILSCALE_SERVICE_CMD`
 - `LLM_SERVICE_CMD`
 - `LLM_MODEL_PULL_CMD`
 
