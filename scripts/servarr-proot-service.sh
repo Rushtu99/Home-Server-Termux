@@ -4,6 +4,38 @@ set -euo pipefail
 
 USER_HOME="${HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
+SERVER_ENV_FILE="${SERVER_ENV_FILE:-$PROJECT/server/.env}"
+load_shell_env_file() {
+    local env_file="$1"
+    local line="" key="" value=""
+
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            continue
+        fi
+
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+
+        export "$key=$value"
+    done < "$env_file"
+}
+
+load_shell_env_file "$SERVER_ENV_FILE"
+
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
 LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
 PROOT_DISTRO_ALIAS="${PROOT_DISTRO_ALIAS:-debian-hs}"
@@ -129,17 +161,41 @@ ensure_config() {
     local url_base=""
 
     mkdir -p "$(dirname "$APP_CONFIG_PATH")"
-    [ -f "$APP_CONFIG_PATH" ] && return 0
-
     url_base="${APP_URL_BASE#/}"
-    cat > "$APP_CONFIG_PATH" <<EOF
-<Config>
-  <BindAddress>$APP_BIND_HOST</BindAddress>
-  <Port>$APP_PORT</Port>
-  <UrlBase>$url_base</UrlBase>
-  <LaunchBrowser>False</LaunchBrowser>
-</Config>
-EOF
+    python3 - "$APP_CONFIG_PATH" "$APP_BIND_HOST" "$APP_PORT" "$url_base" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+bind_host = sys.argv[2]
+port = sys.argv[3]
+url_base = sys.argv[4]
+
+if config_path.exists():
+    try:
+        root = ET.fromstring(config_path.read_text())
+    except ET.ParseError:
+        root = ET.Element("Config")
+else:
+    root = ET.Element("Config")
+
+if root.tag != "Config":
+    root = ET.Element("Config")
+
+def set_child(name: str, value: str) -> None:
+    node = root.find(name)
+    if node is None:
+        node = ET.SubElement(root, name)
+    node.text = value
+
+set_child("BindAddress", bind_host)
+set_child("Port", port)
+set_child("UrlBase", url_base)
+set_child("LaunchBrowser", "False")
+
+ET.ElementTree(root).write(config_path, encoding="unicode")
+PY
 }
 
 start_service() {
