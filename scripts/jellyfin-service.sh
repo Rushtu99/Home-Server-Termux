@@ -66,18 +66,51 @@ JELLYFIN_FFMPEG_BIN="${JELLYFIN_FFMPEG_BIN:-/data/data/com.termux/files/usr/opt/
 JELLYFIN_CACHE_DIR="${JELLYFIN_CACHE_DIR:-${MEDIA_TRANSCODE_DIR:-$JELLYFIN_HOME/cache}}"
 JELLYFIN_MISC_CACHE_DIR="${JELLYFIN_MISC_CACHE_DIR:-${MEDIA_MISC_CACHE_DIR:-$JELLYFIN_HOME/cache}}"
 JELLYFIN_LIBRARY_SYNC_CMD="${JELLYFIN_LIBRARY_SYNC_CMD:-$PROJECT/scripts/jellyfin-library-sync.sh}"
+JELLYFIN_TMUX_SESSION="${JELLYFIN_TMUX_SESSION:-hmstx-jellyfin}"
 SERVICE_NAME="jellyfin"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYFIN_CACHE_DIR" "$JELLYFIN_MISC_CACHE_DIR" "$JELLYFIN_HOME/config" "$JELLYFIN_HOME/data"
 
+list_matching_pids() {
+    pgrep -af "jellyfin.dll|jellyfin --service" | awk '!/pgrep -af/ && !/jellyfin-service.sh/ { print $1 }' || true
+}
+
+tmux_session_exists() {
+    command -v tmux >/dev/null 2>&1 && tmux has-session -t "$JELLYFIN_TMUX_SESSION" 2>/dev/null
+}
+
+read_pid() {
+    local pid=""
+
+    if [ -f "$JELLYFIN_PID_PATH" ]; then
+        pid="$(tr -d '[:space:]' < "$JELLYFIN_PID_PATH" 2>/dev/null || true)"
+    fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        printf '%s\n' "$pid"
+        return 0
+    fi
+
+    pid="$(list_matching_pids | head -n 1)"
+    if [ -n "$pid" ]; then
+        printf '%s\n' "$pid" > "$JELLYFIN_PID_PATH"
+        printf '%s\n' "$pid"
+        return 0
+    fi
+
+    return 1
+}
+
 is_running() {
     local pid=""
-    [ -f "$JELLYFIN_PID_PATH" ] || return 1
-    pid="$(cat "$JELLYFIN_PID_PATH" 2>/dev/null || true)"
+    pid="$(read_pid || true)"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 start_service() {
+    local command_str=""
+    local pid=""
+    local launch_script=""
+
     [ -n "$JELLYFIN_BIN" ] || {
         echo "jellyfin-server is not installed" >&2
         return 1
@@ -91,60 +124,71 @@ start_service() {
         "$JELLYFIN_LIBRARY_SYNC_CMD" sync >> "$JELLYFIN_LOG_PATH" 2>&1 || true
     fi
 
-    if command -v setsid >/dev/null 2>&1; then
-        setsid env \
-            HOME="$JELLYFIN_HOME" \
-            XDG_CACHE_HOME="$JELLYFIN_MISC_CACHE_DIR" \
-            XDG_CONFIG_HOME="$JELLYFIN_HOME/config" \
-            JELLYFIN_DATA_DIR="$JELLYFIN_HOME/data" \
-            JELLYFIN_CACHE_DIR="$JELLYFIN_CACHE_DIR" \
-            DOTNET_ROOT="$JELLYFIN_DOTNET_ROOT" \
-            ASPNETCORE_URLS="http://$JELLYFIN_BIND_HOST:$JELLYFIN_PORT" \
-            "$JELLYFIN_BIN" \
-            --service \
-            --datadir "$JELLYFIN_HOME/data" \
-            --cachedir "$JELLYFIN_CACHE_DIR" \
-            --configdir "$JELLYFIN_HOME/config" \
-            --logdir "$LOG_DIR" \
-            --webdir "$JELLYFIN_WEB_DIR" \
-            --ffmpeg "$JELLYFIN_FFMPEG_BIN" \
-            > "$JELLYFIN_LOG_PATH" 2>&1 < /dev/null &
+    rm -f "$JELLYFIN_PID_PATH"
+    launch_script="$RUNTIME_DIR/jellyfin-launch.sh"
+
+    printf -v command_str '%q ' \
+        env \
+        HOME="$JELLYFIN_HOME" \
+        XDG_CACHE_HOME="$JELLYFIN_MISC_CACHE_DIR" \
+        XDG_CONFIG_HOME="$JELLYFIN_HOME/config" \
+        JELLYFIN_DATA_DIR="$JELLYFIN_HOME/data" \
+        JELLYFIN_CACHE_DIR="$JELLYFIN_CACHE_DIR" \
+        DOTNET_ROOT="$JELLYFIN_DOTNET_ROOT" \
+        ASPNETCORE_URLS="http://$JELLYFIN_BIND_HOST:$JELLYFIN_PORT" \
+        "$JELLYFIN_BIN" \
+        --service \
+        --datadir "$JELLYFIN_HOME/data" \
+        --cachedir "$JELLYFIN_CACHE_DIR" \
+        --configdir "$JELLYFIN_HOME/config" \
+        --logdir "$LOG_DIR" \
+        --webdir "$JELLYFIN_WEB_DIR" \
+        --ffmpeg "$JELLYFIN_FFMPEG_BIN"
+
+    cat > "$launch_script" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+exec ${command_str} >> "$JELLYFIN_LOG_PATH" 2>&1
+EOF
+    chmod +x "$launch_script"
+
+    if command -v tmux >/dev/null 2>&1; then
+        tmux kill-session -t "$JELLYFIN_TMUX_SESSION" 2>/dev/null || true
+        tmux new-session -d -s "$JELLYFIN_TMUX_SESSION" "$launch_script"
     else
-        nohup env \
-            HOME="$JELLYFIN_HOME" \
-            XDG_CACHE_HOME="$JELLYFIN_MISC_CACHE_DIR" \
-            XDG_CONFIG_HOME="$JELLYFIN_HOME/config" \
-            JELLYFIN_DATA_DIR="$JELLYFIN_HOME/data" \
-            JELLYFIN_CACHE_DIR="$JELLYFIN_CACHE_DIR" \
-            DOTNET_ROOT="$JELLYFIN_DOTNET_ROOT" \
-            ASPNETCORE_URLS="http://$JELLYFIN_BIND_HOST:$JELLYFIN_PORT" \
-            "$JELLYFIN_BIN" \
-            --service \
-            --datadir "$JELLYFIN_HOME/data" \
-            --cachedir "$JELLYFIN_CACHE_DIR" \
-            --configdir "$JELLYFIN_HOME/config" \
-            --logdir "$LOG_DIR" \
-            --webdir "$JELLYFIN_WEB_DIR" \
-            --ffmpeg "$JELLYFIN_FFMPEG_BIN" \
-            > "$JELLYFIN_LOG_PATH" 2>&1 &
+        nohup "$launch_script" < /dev/null &
+        printf '%s\n' "$!" > "$JELLYFIN_PID_PATH"
     fi
-    printf '%s\n' "$!" > "$JELLYFIN_PID_PATH"
+    sleep 2
+    pid="$(read_pid || true)"
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$JELLYFIN_PID_PATH"
+        return 1
+    fi
 }
 
 stop_service() {
     local pid=""
 
-    if [ ! -f "$JELLYFIN_PID_PATH" ]; then
-        return 0
-    fi
-
-    pid="$(cat "$JELLYFIN_PID_PATH" 2>/dev/null || true)"
+    pid="$(read_pid || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         kill "$pid" >/dev/null 2>&1 || true
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then
             kill -9 "$pid" >/dev/null 2>&1 || true
         fi
+    fi
+
+    list_matching_pids | while read -r extra_pid; do
+        [ -n "$extra_pid" ] || continue
+        kill "$extra_pid" >/dev/null 2>&1 || true
+        sleep 1
+        if kill -0 "$extra_pid" 2>/dev/null; then
+            kill -9 "$extra_pid" >/dev/null 2>&1 || true
+        fi
+    done
+
+    if tmux_session_exists; then
+        tmux kill-session -t "$JELLYFIN_TMUX_SESSION" 2>/dev/null || true
     fi
 
     rm -f "$JELLYFIN_PID_PATH"

@@ -18,6 +18,7 @@ INSTALL_RADARR="${INSTALL_RADARR:-1}"
 INSTALL_PROWLARR="${INSTALL_PROWLARR:-1}"
 INSTALL_BAZARR="${INSTALL_BAZARR:-0}"
 INSTALL_JELLYSEERR="${INSTALL_JELLYSEERR:-0}"
+CONFIGURE_ARR_STACK="${CONFIGURE_ARR_STACK:-1}"
 
 mkdir -p "$MEDIA_SERVICES_HOME" "$RELEASES_DIR"
 
@@ -112,9 +113,14 @@ install_jellyseerr() {
 
     package_manager="$(node -p "require('./package.json').packageManager || ''" 2>/dev/null || true)"
     if [ -n "$package_manager" ] && printf '%s' "$package_manager" | grep -q '^pnpm@'; then
-        corepack enable
-        CYPRESS_INSTALL_BINARY=0 corepack pnpm install --frozen-lockfile --config.engine-strict=false
-        CYPRESS_INSTALL_BINARY=0 corepack pnpm build --config.engine-strict=false
+        if command -v corepack >/dev/null 2>&1; then
+            corepack enable
+            CYPRESS_INSTALL_BINARY=0 corepack pnpm install --frozen-lockfile --config.engine-strict=false
+            CYPRESS_INSTALL_BINARY=0 corepack pnpm build --config.engine-strict=false
+        else
+            CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 install --frozen-lockfile --config.engine-strict=false
+            CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 build --config.engine-strict=false
+        fi
     else
         CYPRESS_INSTALL_BINARY=0 npm install --legacy-peer-deps
         npm run build
@@ -127,3 +133,4 @@ install_debian
 [ "$INSTALL_PROWLARR" = "1" ] && install_servarr_app prowlarr "https://github.com/Prowlarr/Prowlarr/releases/download/$PROWLARR_VERSION/Prowlarr.master.${PROWLARR_VERSION#v}.linux-core-arm64.tar.gz" "Prowlarr"
 [ "$INSTALL_BAZARR" = "1" ] && install_bazarr
 [ "$INSTALL_JELLYSEERR" = "1" ] && install_jellyseerr
+[ "$CONFIGURE_ARR_STACK" = "1" ] && "$USER_HOME/home-server/scripts/configure-arr-stack.sh"

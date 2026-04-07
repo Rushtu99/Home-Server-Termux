@@ -140,6 +140,44 @@ export const mountFtpFavourite = (id: number) =>
 export const unmountFtpFavourite = (id: number) =>
   postJson<{ success?: boolean; error?: string }>(`${API}/ftp/favourites/${id}/unmount`);
 
+export const listFtpDefaults = () =>
+  fetchJson<Record<string, unknown>>(`${API}/ftp/defaults`);
+
+export const listFtpFavourites = () =>
+  fetchJson<{ favourites: Array<Record<string, unknown>> }>(`${API}/ftp/favourites`);
+
+export const createFtpFavourite = (payload: Record<string, unknown>) =>
+  postJson<{ success?: boolean; error?: string; favourite?: Record<string, unknown> }>(`${API}/ftp/favourites`, payload);
+
+export const updateFtpFavourite = (id: number, payload: Record<string, unknown>) => {
+  return (async () => {
+    const response = await appFetch(`${API}/ftp/favourites/${id}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await parseError(response));
+    }
+    return response.json() as Promise<{ success?: boolean; error?: string; favourite?: Record<string, unknown> }>;
+  })();
+};
+
+export const deleteFtpFavourite = (id: number) =>
+  deleteJson<{ success?: boolean; error?: string }>(`${API}/ftp/favourites/${id}`);
+
+export const listFtpDirectory = (payload: Record<string, unknown>) =>
+  postJson<Record<string, unknown>>(`${API}/ftp/list`, payload);
+
+export const uploadToFtp = (payload: Record<string, unknown>) =>
+  postJson<Record<string, unknown>>(`${API}/ftp/upload`, payload);
+
+export const createFtpDirectory = (payload: Record<string, unknown>) =>
+  postJson<Record<string, unknown>>(`${API}/ftp/mkdir`, payload);
+
 export const addMediaTorrent = (payload: {
   source: string;
   lane: 'arr' | 'standalone';
@@ -159,6 +197,16 @@ export const selectOnlineModel = (modelId: string) =>
 
 export const disconnectConnection = (sessionId: string) =>
   postJson<{ success?: boolean; error?: string }>(`${API}/connections/${encodeURIComponent(sessionId)}/disconnect`);
+
+export const fetchLogsSnapshot = () =>
+  fetchJson<{
+    entries?: Array<{ id?: string; level?: string; message?: string; timestamp?: string; meta?: unknown }>;
+    markdown?: string;
+    verboseLoggingEnabled?: boolean;
+  }>(`${API}/logs`);
+
+export const updateVerboseLogging = (enabled: boolean) =>
+  postJson<{ success?: boolean; verboseLoggingEnabled?: boolean; markdown?: string }>(`${API}/logging`, { enabled });
 
 export const sendLlmChat = (payload: {
   message: string;

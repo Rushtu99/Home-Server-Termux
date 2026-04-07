@@ -5,9 +5,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addMediaTorrent,
   checkDrives,
+  createFtpDirectory,
+  createFtpFavourite,
+  deleteFtpFavourite as removeFtpFavourite,
   deleteLlmConversation,
   disconnectConnection,
+  fetchLogsSnapshot,
   getLlmConversationMessages,
+  listFtpDefaults,
+  listFtpDirectory,
+  listFtpFavourites,
   listLlmConversations,
   mountFtpFavourite,
   recheckStorageProtection,
@@ -17,6 +24,9 @@ import {
   selectLlmModel,
   selectOnlineModel,
   unmountFtpFavourite,
+  updateFtpFavourite,
+  updateVerboseLogging,
+  uploadToFtp,
 } from './api';
 import { EmptyState, KeyValueList, MetricGrid, MetricTile, SectionCard, ServiceList, StatusBadge } from './components';
 import { toErrorMessage } from './errors';
@@ -314,6 +324,46 @@ const renderAnimatedAssistantText = (content: string) => {
   );
 };
 
+function LocalTabBar({
+  label,
+  items,
+  activeKey,
+  onChange,
+}: {
+  label: string;
+  items: Array<{ key: string; label: string }>;
+  activeKey: string;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <div className="dash2-tab-switcher" role="tablist" aria-label={label}>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className={`ui-button ${activeKey === item.key ? 'dash2-tab-switcher__button--active' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={activeKey === item.key}
+          onClick={() => onChange(item.key)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const createTransferDraft = (defaults: Record<string, unknown> = {}) => ({
+  host: String(defaults.host || ''),
+  mountName: String(defaults.mountName || defaults.defaultName || ''),
+  name: String(defaults.name || defaults.defaultName || ''),
+  password: '',
+  port: String(defaults.port || 21),
+  remotePath: String(defaults.remotePath || '/'),
+  secure: Boolean(defaults.secure),
+  username: String(defaults.username || defaults.user || 'anonymous'),
+});
+
 function OverviewWorkspace({
   payload,
   workspaceActions,
@@ -540,16 +590,14 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
   const libraries = asArray<Record<string, unknown>>(mediaHealth.libraries);
   const activeSessions = asArray<Record<string, unknown>>(mediaHealth.activeSessions);
   const services = asArray<Record<string, unknown>>(payload.services);
-  const workflowReady = Number(automation.healthy || 0) + (String(requests.status || '') === 'working' ? 1 : 0) + (String(watch.status || '') === 'working' ? 1 : 0);
-  const workflowTotal = Number(automation.total || 0) + 2;
   const mediaHealthAvailable = Boolean(mediaHealth.available);
   const mediaHealthStatus = String(mediaHealth.status || (mediaHealthAvailable ? 'working' : 'unavailable'));
   const watchServiceKeys = asArray<unknown>(watch.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
   const requestServiceKeys = asArray<unknown>(requests.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
   const automationServiceKeys = asArray<unknown>(automation.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
-  const supportServiceKeys = asArray<unknown>(support.serviceKeys).map((entry) => String(entry || '')).filter(Boolean);
   const subtitles = asRecord(mediaWorkflow.subtitles);
   const servicesByKey = new Map(services.map((entry) => [String(entry.key || ''), entry]));
+  const visibleInventory = services.filter((entry) => String(entry.key || '') !== 'postgres');
   const arrServices = (['sonarr', 'radarr', 'prowlarr', 'bazarr'] as const).map((serviceKey) => {
     const entry = servicesByKey.get(serviceKey);
     const fallbackStatus = serviceKey === 'bazarr'
@@ -564,73 +612,10 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
       status: String(entry?.status || fallbackStatus || 'unknown'),
     };
   });
-  const watchLibraryRoots = asArray<unknown>(watch.libraryRoots);
   const [arrSource, setArrSource] = useState('');
   const [arrMediaType, setArrMediaType] = useState<'movies' | 'series'>('movies');
   const [arrBusy, setArrBusy] = useState(false);
   const [arrStatus, setArrStatus] = useState('');
-  const workflowCards = [
-    {
-      key: 'watch',
-      title: String(watch.label || 'Watch'),
-      status: String(watch.status || 'unknown'),
-      summary: compactWorkflowSummary(watch.summary, 'Primary playback and library surface.'),
-      bullets: [
-        `Services: ${watchServiceKeys.join(', ') || 'jellyfin'}`,
-        `Library roots: ${watchLibraryRoots.length}`,
-        `Roots ready: ${watch.libraryRootReady === true ? 'yes' : watch.libraryRootReady === false ? 'no' : 'unknown'}`,
-        `Sample root: ${compactPathSummary(watchLibraryRoots[0])}`,
-      ],
-    },
-    {
-      key: 'requests',
-      title: String(requests.label || 'Requests'),
-      status: String(requests.status || 'unknown'),
-      summary: compactWorkflowSummary(requests.summary, 'Request intake before automation lanes.'),
-      bullets: [
-        `Services: ${requestServiceKeys.join(', ') || 'none'}`,
-        `Portal ready: ${requests.blocker ? 'no' : 'yes'}`,
-        'Route: user request -> sonarr/radarr',
-        `Blocker: ${String(requests.blocker || 'none')}`,
-      ],
-    },
-    {
-      key: 'automation',
-      title: String(automation.label || 'Automation'),
-      status: String(automation.status || 'unknown'),
-      summary: compactWorkflowSummary(automation.summary, 'Indexer and automation orchestration lane.'),
-      bullets: [
-        `Healthy: ${Number(automation.healthy || 0)}/${Math.max(Number(automation.total || 0), 0)}`,
-        `Services: ${automationServiceKeys.join(', ') || 'none'}`,
-        'Flow: indexers -> arr -> importer',
-        `Last state: ${String(automation.status || 'unknown')}`,
-      ],
-    },
-    {
-      key: 'support',
-      title: String(support.label || 'Support'),
-      status: String(support.status || 'unknown'),
-      summary: compactWorkflowSummary(support.summary, 'Backing services for media metadata and jobs.'),
-      bullets: [
-        `Services: ${supportServiceKeys.join(', ') || 'none'}`,
-        `Telemetry status: ${String(support.status || 'unknown')}`,
-        'Role: queue + metadata persistence',
-        `Coverage: ${supportServiceKeys.length > 0 ? 'active backing lane' : 'missing support lane'}`,
-      ],
-    },
-    {
-      key: 'livetv',
-      title: 'Live TV',
-      status: String(liveTv.status || 'unknown'),
-      summary: compactWorkflowSummary(liveTv.summary, 'Playlist + guide feed readiness for Jellyfin.'),
-      bullets: [
-        `Channels: ${Number(liveTv.channelCount || 0)}`,
-        `Playlist: ${liveTv.playlistConfigured ? compactPathSummary(liveTv.playlistSource) : 'not configured'}`,
-        `Guide: ${liveTv.guideConfigured ? compactPathSummary(liveTv.guideSource) : 'not configured'}`,
-        `Mapped in Jellyfin: ${liveTv.channelsMapped === true ? 'yes' : liveTv.channelsMapped === false ? 'no' : 'unknown'}`,
-      ],
-    },
-  ];
 
   const handleAddArrTorrent = async () => {
     const source = arrSource.trim();
@@ -663,33 +648,23 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
     <>
       <MetricGrid>
         <MetricTile label="Watch surface" value={String(watch.label || 'Jellyfin')} helper={compactWorkflowSummary(watch.summary, 'Primary playback surface')} />
-        <MetricTile label="Workflow health" value={`${Math.max(workflowReady, 0)}/${Math.max(workflowTotal, 0)}`} helper={compactWorkflowSummary(automation.summary, 'Automation lane status')} />
+        <MetricTile label="Requests" value={String(requests.status || 'unknown')} helper={compactWorkflowSummary(requests.summary, 'Request intake status')} />
         <MetricTile label="Library list" value={libraries.length} helper={mediaHealthAvailable ? 'Live Jellyfin library roots' : 'Jellyfin health API unavailable'} />
         <MetricTile label="ARR healthy" value={`${Number(arrDiagnostics.healthy || 0)}/${Number(arrDiagnostics.total || arrServices.length)}`} helper="Automation services" />
         <MetricTile label="qB WebUI" value={qbDiagnostics.webUiReachable ? 'reachable' : 'offline'} helper={String(qbDiagnostics.error || qbDiagnostics.baseUrl || 'Torrent client diagnostic')} />
         <MetricTile label="Live TV" value={`${Number(liveTv.channelCount || 0)} channels`} helper={compactWorkflowSummary(liveTv.summary, 'Live TV readiness')} />
       </MetricGrid>
 
-      <SectionCard title="Media workflow" subtitle="Playback, requests, automation, support, and live TV readiness in one lane view.">
-        <div className="dash2-workflow-carousel" role="list" aria-label="Media workflow cards">
-          {workflowCards.map((entry, index) => (
-            <article key={entry.key} className="dash2-workflow-card" role="listitem">
-              <header className="dash2-workflow-card__header">
-                <div>
-                  <p className="dash2-workflow-card__step">Stage {index + 1}</p>
-                  <h3>{entry.title}</h3>
-                </div>
-                <StatusBadge tone={toneFromStatus(entry.status)}>{entry.status}</StatusBadge>
-              </header>
-              <p className="dash2-workflow-card__summary">{entry.summary}</p>
-              <ul className="dash2-workflow-card__bullets">
-                {entry.bullets.map((bullet) => (
-                  <li key={`${entry.key}-${bullet}`}>{bullet}</li>
-                ))}
-              </ul>
-            </article>
-          ))}
-        </div>
+      <SectionCard title="Media overview" subtitle="Playback, requests, automation, subtitles, and Live TV without the old workflow walkthrough card.">
+        <KeyValueList
+          rows={[
+            { label: 'Watch', value: `${String(watch.status || 'unknown')} · ${watchServiceKeys.join(', ') || 'jellyfin'}` },
+            { label: 'Requests', value: `${String(requests.status || 'unknown')} · ${requestServiceKeys.join(', ') || 'none'}` },
+            { label: 'Automation', value: `${Number(automation.healthy || 0)}/${Math.max(Number(automation.total || 0), 0)} healthy · ${automationServiceKeys.join(', ') || 'none'}` },
+            { label: 'Subtitles', value: `${String(subtitles.status || 'unknown')} · ${compactWorkflowSummary(subtitles.summary, 'Subtitle sync lane')}` },
+            { label: 'Workflow help', value: 'See Admin → Help for the operator workflow and recovery steps.' },
+          ]}
+        />
       </SectionCard>
 
       <SectionCard title="Media health dashboard" subtitle="Jellyfin-backed libraries, totals, and currently watching sessions.">
@@ -823,9 +798,9 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
         </form>
       </SectionCard>
 
-      <SectionCard title="Media inventory" subtitle="Card-based status + quick links with duplicate surfaces merged into one list.">
+      <SectionCard title="Media inventory" subtitle="Media-facing services only. PostgreSQL is intentionally excluded from this view.">
         <div className="dash2-service-admin-grid">
-          {services.map((entry, index) => {
+          {visibleInventory.map((entry, index) => {
             const route = String(entry.route || '');
             const status = String(entry.status || 'unknown');
             return (
@@ -977,9 +952,6 @@ function TransfersWorkspace({
   const defaults = asRecord(payload.ftpDefaults);
   const favourites = asArray<Record<string, unknown>>(payload.favourites);
   const services = asArray<Record<string, unknown>>(payload.services);
-  const mediaWorkflow = asRecord(payload.mediaWorkflow);
-  const downloads = asRecord(mediaWorkflow.downloads);
-  const categoryPaths = asRecord(downloads.categoryPaths);
   const torrent = asRecord(payload.torrent);
   const qbDiagnostics = asRecord(payload.qbDiagnostics);
   const qbCategoryPaths = asRecord(qbDiagnostics.categories);
@@ -1000,8 +972,6 @@ function TransfersWorkspace({
     || standaloneLane.savePath
     || torrent.destinationPath
     || torrent.defaultDestinationPath
-    || categoryPaths.manual
-    || downloads.defaultSavePath
     || defaults.downloadRoot
     || ''
   );
@@ -1010,12 +980,202 @@ function TransfersWorkspace({
     const group = String(entry.group || '').toLowerCase();
     return key === 'qbittorrent' || group === 'downloads';
   });
-  const [activeTab, setActiveTab] = useState<'ftp' | 'torrent'>('ftp');
+  const [activeTab, setActiveTab] = useState<'connect' | 'favourites' | 'torrent'>('connect');
   const [favouriteBusyId, setFavouriteBusyId] = useState<number>(0);
   const [favouriteStatus, setFavouriteStatus] = useState('');
+  const [ftpDefaultsState, setFtpDefaultsState] = useState<Record<string, unknown>>(defaults);
+  const [ftpFavouritesState, setFtpFavouritesState] = useState<Array<Record<string, unknown>>>(favourites);
+  const [ftpDraft, setFtpDraft] = useState(() => createTransferDraft(defaults));
+  const [ftpEditingId, setFtpEditingId] = useState<number | null>(null);
+  const [ftpBusy, setFtpBusy] = useState(false);
+  const [ftpStatus, setFtpStatus] = useState('');
+  const [ftpEntries, setFtpEntries] = useState<Array<Record<string, unknown>>>([]);
+  const [ftpPath, setFtpPath] = useState('/');
+  const [ftpUploadLocalPath, setFtpUploadLocalPath] = useState('');
+  const [ftpUploadRemotePath, setFtpUploadRemotePath] = useState('');
+  const [ftpFolderName, setFtpFolderName] = useState('');
+  const [activeFavouriteId, setActiveFavouriteId] = useState<number | null>(null);
   const [torrentSource, setTorrentSource] = useState('');
   const [torrentBusy, setTorrentBusy] = useState(false);
   const [torrentStatus, setTorrentStatus] = useState('');
+
+  useEffect(() => {
+    setFtpDefaultsState(defaults);
+    setFtpFavouritesState(favourites);
+    if (!ftpEditingId) {
+      setFtpDraft((current) => ({
+        ...current,
+        host: String(defaults.host || current.host || ''),
+        port: String(defaults.port || current.port || 21),
+        username: String(defaults.user || current.username || 'anonymous'),
+        secure: Boolean(defaults.secure),
+        name: String(defaults.defaultName || current.name || ''),
+        mountName: String(defaults.defaultName || current.mountName || ''),
+      }));
+    }
+  }, [defaults, favourites, ftpEditingId]);
+
+  const reloadTransferState = useCallback(async () => {
+    try {
+      const [nextDefaults, nextFavourites] = await Promise.all([
+        listFtpDefaults(),
+        listFtpFavourites(),
+      ]);
+      setFtpDefaultsState(asRecord(nextDefaults));
+      setFtpFavouritesState(asArray<Record<string, unknown>>(nextFavourites.favourites));
+    } catch (error) {
+      setFtpStatus(toErrorMessage(error, 'Unable to refresh transfer state'));
+    }
+  }, []);
+
+  const ftpPayload = useCallback((pathOverride?: string, favouriteIdOverride?: number | null) => ({
+    favouriteId: favouriteIdOverride ?? activeFavouriteId ?? undefined,
+    host: ftpDraft.host.trim(),
+    password: ftpDraft.password,
+    port: Number(ftpDraft.port || 21) || 21,
+    remotePath: pathOverride || ftpPath || '/',
+    secure: ftpDraft.secure,
+    username: ftpDraft.username.trim() || 'anonymous',
+  }), [activeFavouriteId, ftpDraft, ftpPath]);
+
+  const loadDirectory = useCallback(async (pathOverride?: string, favouriteIdOverride?: number | null) => {
+    if (!ftpDraft.host.trim() && !favouriteIdOverride && !activeFavouriteId) {
+      setFtpStatus('Enter a host or choose a saved favourite first.');
+      return;
+    }
+    setFtpBusy(true);
+    try {
+      const response = await listFtpDirectory(ftpPayload(pathOverride, favouriteIdOverride));
+      const entries = asArray<Record<string, unknown>>(response.entries);
+      const nextPath = String(response.path || pathOverride || ftpPath || '/');
+      setFtpEntries(entries);
+      setFtpPath(nextPath);
+      setFtpStatus(`Connected to ${ftpDraft.host || 'remote host'} at ${nextPath}`);
+      if (favouriteIdOverride !== undefined) {
+        setActiveFavouriteId(favouriteIdOverride ?? null);
+      }
+    } catch (error) {
+      setFtpStatus(toErrorMessage(error, 'Unable to browse remote path'));
+    } finally {
+      setFtpBusy(false);
+    }
+  }, [activeFavouriteId, ftpDraft.host, ftpPath, ftpPayload]);
+
+  const resetDraft = useCallback(() => {
+    setFtpEditingId(null);
+    setActiveFavouriteId(null);
+    setFtpDraft(createTransferDraft(ftpDefaultsState));
+  }, [ftpDefaultsState]);
+
+  const applyFavourite = useCallback((favourite: Record<string, unknown>) => {
+    setActiveFavouriteId(Number(favourite.id || 0) || null);
+    setFtpDraft({
+      host: String(favourite.host || ''),
+      mountName: String(favourite.mountName || favourite.name || ''),
+      name: String(favourite.name || ''),
+      password: '',
+      port: String(favourite.port || 21),
+      remotePath: String(favourite.remotePath || '/'),
+      secure: Boolean(favourite.secure),
+      username: String(favourite.username || 'anonymous'),
+    });
+    setFtpPath(String(favourite.remotePath || '/'));
+  }, []);
+
+  const saveFavourite = async () => {
+    if (!ftpDraft.name.trim() || !ftpDraft.host.trim()) {
+      setFtpStatus('Display name and host are required.');
+      return;
+    }
+    setFtpBusy(true);
+    try {
+      const payload = {
+        host: ftpDraft.host.trim(),
+        mountName: ftpDraft.mountName.trim() || ftpDraft.name.trim(),
+        name: ftpDraft.name.trim(),
+        password: ftpDraft.password,
+        port: Number(ftpDraft.port || 21) || 21,
+        remotePath: ftpDraft.remotePath.trim() || '/',
+        secure: ftpDraft.secure,
+        username: ftpDraft.username.trim() || 'anonymous',
+      };
+      const response = ftpEditingId
+        ? await updateFtpFavourite(ftpEditingId, payload)
+        : await createFtpFavourite(payload);
+      if (response.success === false) {
+        setFtpStatus(String(response.error || 'Unable to save favourite'));
+        return;
+      }
+      setFtpStatus(ftpEditingId ? 'Favourite updated.' : 'Favourite saved.');
+      setFtpEditingId(null);
+      setFtpDraft((current) => ({ ...current, password: '' }));
+      await reloadTransferState();
+    } catch (error) {
+      setFtpStatus(toErrorMessage(error, 'Unable to save favourite'));
+    } finally {
+      setFtpBusy(false);
+    }
+  };
+
+  const deleteFavourite = async (item: Record<string, unknown>) => {
+    const itemId = Number(item.id || 0);
+    if (itemId <= 0) {
+      return;
+    }
+    setFavouriteBusyId(itemId);
+    try {
+      const response = await removeFtpFavourite(itemId);
+      setFavouriteStatus(response.success === false ? String(response.error || 'Delete failed') : 'Favourite deleted.');
+      if (activeFavouriteId === itemId) {
+        resetDraft();
+      }
+      await reloadTransferState();
+    } catch (error) {
+      setFavouriteStatus(toErrorMessage(error, 'Unable to delete favourite'));
+    } finally {
+      setFavouriteBusyId(0);
+    }
+  };
+
+  const createFolder = async () => {
+    if (!ftpFolderName.trim()) {
+      setFtpStatus('Enter a folder name first.');
+      return;
+    }
+    setFtpBusy(true);
+    try {
+      const remotePath = `${ftpPath.replace(/\/$/, '')}/${ftpFolderName.trim()}`.replace(/\/+/g, '/');
+      const response = await createFtpDirectory(ftpPayload(remotePath));
+      setFtpStatus(`Created ${String(response.remotePath || remotePath)}`);
+      setFtpFolderName('');
+      await loadDirectory(ftpPath);
+    } catch (error) {
+      setFtpStatus(toErrorMessage(error, 'Unable to create remote folder'));
+    } finally {
+      setFtpBusy(false);
+    }
+  };
+
+  const uploadFile = async () => {
+    if (!ftpUploadLocalPath.trim() || !ftpUploadRemotePath.trim()) {
+      setFtpStatus('Set both local and remote upload paths.');
+      return;
+    }
+    setFtpBusy(true);
+    try {
+      const response = await uploadToFtp({
+        ...ftpPayload(),
+        localPath: ftpUploadLocalPath.trim(),
+        remotePath: ftpUploadRemotePath.trim(),
+      });
+      setFtpStatus(`Uploaded ${String(response.localPath || ftpUploadLocalPath)} to ${String(response.remotePath || ftpUploadRemotePath)}`);
+      await loadDirectory(ftpPath);
+    } catch (error) {
+      setFtpStatus(toErrorMessage(error, 'Unable to upload file'));
+    } finally {
+      setFtpBusy(false);
+    }
+  };
 
   const handleToggleMount = async (favourite: Record<string, unknown>) => {
     const favouriteId = Number(favourite.id || 0);
@@ -1071,41 +1231,85 @@ function TransfersWorkspace({
 
   return (
     <>
-      <div className="dash2-tab-switcher" role="tablist" aria-label="Transfers workspace tabs">
-        <button
-          className={`ui-button ${activeTab === 'ftp' ? 'dash2-tab-switcher__button--active' : ''}`}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'ftp'}
-          onClick={() => setActiveTab('ftp')}
-        >
-          FTP
-        </button>
-        <button
-          className={`ui-button ${activeTab === 'torrent' ? 'dash2-tab-switcher__button--active' : ''}`}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'torrent'}
-          onClick={() => setActiveTab('torrent')}
-        >
-          Torrent
-        </button>
-      </div>
+      <LocalTabBar
+        label="Transfers workspace tabs"
+        items={[
+          { key: 'connect', label: 'Connect' },
+          { key: 'favourites', label: 'Favourites' },
+          { key: 'torrent', label: 'Torrent' },
+        ]}
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as 'connect' | 'favourites' | 'torrent')}
+      />
 
-      {activeTab === 'ftp' ? (
+      {activeTab === 'connect' ? (
         <>
           <MetricGrid>
-            <MetricTile label="FTP host" value={String(defaults.host || 'n/a')} helper={`Port ${String(defaults.port || '21')}`} />
-            <MetricTile label="Secure mode" value={Boolean(defaults.secure) ? 'Enabled' : 'Disabled'} helper="Client defaults" />
-            <MetricTile label="Saved remotes" value={favourites.length} helper="Configured favourite connections" />
-            <MetricTile label="Download root" value={String(defaults.downloadRoot || 'n/a')} />
+            <MetricTile label="FTP host" value={String(ftpDraft.host || ftpDefaultsState.host || 'n/a')} helper={`Port ${String(ftpDraft.port || ftpDefaultsState.port || '21')}`} />
+            <MetricTile label="Secure mode" value={ftpDraft.secure ? 'Enabled' : 'Disabled'} helper="Connection mode" />
+            <MetricTile label="Saved remotes" value={ftpFavouritesState.length} helper="Configured favourite connections" />
+            <MetricTile label="Download root" value={String(ftpDefaultsState.downloadRoot || 'n/a')} />
           </MetricGrid>
 
-          <SectionCard title="FTP favourites" subtitle="Saved remote mounts and transfer targets.">
-            {favouriteStatus ? <p className="dash2-admin-note">{favouriteStatus}</p> : null}
-            {favourites.length === 0 ? <EmptyState title="No favourites" message="Create an FTP favourite from the transfer tools." /> : (
+          <SectionCard title="Connection" subtitle="Bring back the V1 manual connection card for one-off FTP sessions and favourite editing.">
+            {ftpStatus ? <p className="dash2-admin-note">{ftpStatus}</p> : null}
+            <div className="dash2-form-grid">
+              <label><span>Display name</span><input className="ui-input" value={ftpDraft.name} onChange={(event) => setFtpDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+              <label><span>Host</span><input className="ui-input" value={ftpDraft.host} onChange={(event) => { setActiveFavouriteId(null); setFtpDraft((current) => ({ ...current, host: event.target.value })); }} /></label>
+              <label><span>Port</span><input className="ui-input" value={ftpDraft.port} onChange={(event) => { setActiveFavouriteId(null); setFtpDraft((current) => ({ ...current, port: event.target.value })); }} /></label>
+              <label><span>Username</span><input className="ui-input" value={ftpDraft.username} onChange={(event) => { setActiveFavouriteId(null); setFtpDraft((current) => ({ ...current, username: event.target.value })); }} /></label>
+              <label><span>Password</span><input className="ui-input" type="password" value={ftpDraft.password} onChange={(event) => { setActiveFavouriteId(null); setFtpDraft((current) => ({ ...current, password: event.target.value })); }} /></label>
+              <label><span>Start path</span><input className="ui-input" value={ftpDraft.remotePath} onChange={(event) => setFtpDraft((current) => ({ ...current, remotePath: event.target.value }))} /></label>
+              <label><span>Drive folder</span><input className="ui-input" value={ftpDraft.mountName} onChange={(event) => setFtpDraft((current) => ({ ...current, mountName: event.target.value }))} /></label>
+              <label className="dash2-checkbox-row"><input type="checkbox" checked={ftpDraft.secure} onChange={(event) => setFtpDraft((current) => ({ ...current, secure: event.target.checked }))} /><span>Use FTPS/TLS</span></label>
+            </div>
+            <div className="dash2-wrap-row">
+              <button className="ui-button ui-button--primary" type="button" disabled={ftpBusy} onClick={() => void loadDirectory(ftpDraft.remotePath || '/', activeFavouriteId)}>
+                {ftpBusy ? 'Connecting…' : 'Connect'}
+              </button>
+              <button className="ui-button" type="button" disabled={ftpBusy} onClick={() => void loadDirectory(ftpPath, activeFavouriteId)}>Refresh</button>
+              <button className="ui-button" type="button" disabled={ftpBusy} onClick={() => void saveFavourite()}>{ftpEditingId ? 'Update favourite' : 'Save favourite'}</button>
+              <button className="ui-button" type="button" disabled={ftpBusy} onClick={resetDraft}>Reset</button>
+            </div>
+            <p className="dash2-small-copy">Current remote path: {ftpPath}</p>
+          </SectionCard>
+
+          <SectionCard title="Transfer actions" subtitle="Upload and mkdir controls from the V1 FTP workspace.">
+            <div className="dash2-form-grid">
+              <label><span>Local file path</span><input className="ui-input" value={ftpUploadLocalPath} onChange={(event) => setFtpUploadLocalPath(event.target.value)} placeholder="/data/data/com.termux/files/home/Downloads/file.pkg" /></label>
+              <label><span>Remote upload path</span><input className="ui-input" value={ftpUploadRemotePath} onChange={(event) => setFtpUploadRemotePath(event.target.value)} placeholder="/data/file.pkg" /></label>
+              <label><span>New remote folder</span><input className="ui-input" value={ftpFolderName} onChange={(event) => setFtpFolderName(event.target.value)} placeholder="new-folder" /></label>
+            </div>
+            <div className="dash2-wrap-row">
+              <button className="ui-button" type="button" disabled={ftpBusy} onClick={() => void uploadFile()}>Upload local file</button>
+              <button className="ui-button" type="button" disabled={ftpBusy} onClick={() => void createFolder()}>Create folder</button>
+            </div>
+            {ftpEntries.length > 0 ? (
               <ul className="dash2-list">
-                {favourites.map((item, index) => {
+                {ftpEntries.slice(0, 12).map((entry, index) => (
+                  <li key={`${String(entry.name || 'entry')}-${index}`}>
+                    <div>
+                      <strong>{String(entry.name || 'Remote entry')}</strong>
+                      <p>{String(entry.type || 'item')} · {formatBytes(entry.size)}</p>
+                    </div>
+                    <button className="ui-button" type="button" disabled={ftpBusy || String(entry.type || '') !== 'directory'} onClick={() => void loadDirectory(`${ftpPath.replace(/\/$/, '')}/${String(entry.name || '')}`.replace(/\/+/g, '/'), activeFavouriteId)}>
+                      Open
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState title="No remote listing yet" message="Connect to a remote host to browse entries here." />
+            )}
+          </SectionCard>
+        </>
+      ) : activeTab === 'favourites' ? (
+        <>
+          <SectionCard title="Saved FTP remotes" subtitle="Browse, mount, edit, and delete connection presets.">
+            {favouriteStatus ? <p className="dash2-admin-note">{favouriteStatus}</p> : null}
+            {ftpFavouritesState.length === 0 ? <EmptyState title="No favourites" message="Create an FTP favourite from the Connect tab." /> : (
+              <ul className="dash2-list">
+                {ftpFavouritesState.map((item, index) => {
                   const mount = asRecord(item.mount);
                   const itemId = Number(item.id || 0);
                   return (
@@ -1116,8 +1320,21 @@ function TransfersWorkspace({
                       </div>
                       <div className="dash2-list__actions">
                         <StatusBadge tone={Boolean(mount.mounted) ? 'ok' : 'muted'}>{String(mount.state || 'unmounted')}</StatusBadge>
+                        <button className="ui-button" type="button" disabled={favouriteBusyId === itemId} onClick={() => { applyFavourite(item); setActiveTab('connect'); void loadDirectory(String(item.remotePath || '/'), itemId); }}>
+                          Browse
+                        </button>
                         <button className="ui-button" type="button" disabled={favouriteBusyId === itemId} onClick={() => void handleToggleMount(item)}>
                           {favouriteBusyId === itemId ? 'Working…' : Boolean(mount.mounted) ? 'Unmount' : 'Mount'}
+                        </button>
+                        <button className="ui-button" type="button" disabled={favouriteBusyId === itemId} onClick={() => {
+                          setFtpEditingId(itemId);
+                          applyFavourite(item);
+                          setActiveTab('connect');
+                        }}>
+                          Edit
+                        </button>
+                        <button className="ui-button" type="button" disabled={favouriteBusyId === itemId} onClick={() => void deleteFavourite(item)}>
+                          Delete
                         </button>
                       </div>
                     </li>
@@ -1219,6 +1436,7 @@ function AiWorkspace({
   const [chatTranscript, setChatTranscript] = useState<Array<{ id?: number; role: string; content: string; createdAt?: string }>>([]);
   const [conversationBusy, setConversationBusy] = useState(false);
   const [conversations, setConversations] = useState<Array<Record<string, unknown>>>([]);
+  const [activeTab, setActiveTab] = useState<'chat' | 'manage'>('chat');
 
   useEffect(() => {
     setModelId(String(llm.activeModelId || ''));
@@ -1424,6 +1642,15 @@ function AiWorkspace({
 
   return (
     <>
+      <LocalTabBar
+        label="AI workspace tabs"
+        items={[
+          { key: 'chat', label: 'Chat' },
+          { key: 'manage', label: 'Manage' },
+        ]}
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as 'chat' | 'manage')}
+      />
       <MetricGrid>
         <MetricTile label="Runtime" value={Boolean(llm.running) ? 'Running' : 'Stopped'} helper={String(llm.blocker || 'Local LLM service state')} />
         <MetricTile label="Active model" value={String(llm.activeModelId || 'none')} helper="Selected local or online model" />
@@ -1432,7 +1659,8 @@ function AiWorkspace({
         <MetricTile label="Host CPU load" value={toPercent(monitor.cpuLoad)} helper={String(monitor.timestamp || 'Latest AI workspace sample')} />
       </MetricGrid>
 
-      <SectionCard title="Legacy chatbox" subtitle="Conversation history, full threaded chat, and local/online routing controls.">
+      {activeTab === 'chat' ? (
+      <SectionCard title="Chat" subtitle="V1-style threaded chat with conversation history and compact routing controls.">
         <div className="dash2-chat-controls">
           <div className="dash2-chat-actions">
             <label>
@@ -1540,8 +1768,8 @@ function AiWorkspace({
         </div>
         {chatStatus ? <p className="dash2-admin-note">{chatStatus}</p> : null}
       </SectionCard>
-
-      <SectionCard title="Model inventory" subtitle="Local and online model status snapshots.">
+      ) : (
+      <SectionCard title="Manage" subtitle="Bring the V1 runtime and model-management controls back into a dedicated management view.">
         <div className="dash2-llm-controls">
           <label>
             <span>Local model</span>
@@ -1589,6 +1817,7 @@ function AiWorkspace({
           </ul>
         )}
       </SectionCard>
+      )}
     </>
   );
 }
@@ -1601,7 +1830,7 @@ function TerminalWorkspace({ payload }: { payload: Record<string, unknown> }) {
   return (
     <SectionCard
       title="Terminal workspace"
-      subtitle="Shell access health and mini embedded terminal view."
+      subtitle="Larger embedded shell view with the route/details noise removed."
       actions={<Link href={terminalRoute} className="ui-button ui-button--primary">Open terminal route</Link>}
     >
       <div className="dash2-terminal-layout">
@@ -1609,13 +1838,12 @@ function TerminalWorkspace({ payload }: { payload: Record<string, unknown> }) {
           rows={[
             { label: 'Service', value: String(terminal.label || terminal.key || 'ttyd') },
             { label: 'Status', value: String(terminal.status || 'unknown') },
-            { label: 'Route', value: terminalRoute },
-            { label: 'Notes', value: String(terminal.description || terminal.blocker || 'Terminal route served through gateway') },
+            { label: 'Access', value: String(terminal.description || terminal.blocker || 'Terminal route served through gateway') },
           ]}
         />
         {terminalAvailable ? (
           <iframe
-            title="Mini terminal"
+            title="Embedded terminal"
             src={terminalRoute}
             className="dash2-terminal-mini"
           />
@@ -1647,9 +1875,59 @@ function AdminWorkspace({
   const coreEntries = asArray<Record<string, unknown>>(networkExposure.core);
   const exposureServices = asArray<Record<string, unknown>>(networkExposure.services);
   const exposureCount = coreEntries.length + exposureServices.length;
+  const logs = asRecord(dashboard.logs);
+  const logEntries = asArray<Record<string, unknown>>(logs.entries);
+  const arrEvidence = asRecord(payload.arrEvidence);
+  const arrMismatches = asArray<string>(arrEvidence.mismatches);
+  const [activeTab, setActiveTab] = useState<'controls' | 'network' | 'logs' | 'help'>('controls');
+  const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all');
+  const [logSearch, setLogSearch] = useState('');
+  const [verboseLogging, setVerboseLogging] = useState(Boolean(logs.verboseLoggingEnabled));
+  const [logState, setLogState] = useState(logEntries);
+  const [logStatus, setLogStatus] = useState('');
+
+  useEffect(() => {
+    setVerboseLogging(Boolean(logs.verboseLoggingEnabled));
+    setLogState(logEntries);
+  }, [logs.verboseLoggingEnabled, logEntries]);
+
+  const filteredLogs = logState.filter((entry) => {
+    const level = String(entry.level || '').toLowerCase();
+    const query = logSearch.trim().toLowerCase();
+    if (logFilter !== 'all' && level !== logFilter) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    return `${String(entry.message || '')} ${JSON.stringify(entry.meta || null)}`.toLowerCase().includes(query);
+  });
+
+  const toggleVerbose = async () => {
+    try {
+      const response = await updateVerboseLogging(!verboseLogging);
+      setVerboseLogging(Boolean(response.verboseLoggingEnabled));
+      const snapshot = await fetchLogsSnapshot();
+      setLogState(asArray<Record<string, unknown>>(snapshot.entries));
+      setLogStatus(Boolean(response.verboseLoggingEnabled) ? 'Verbose logging enabled.' : 'Verbose logging disabled.');
+    } catch (error) {
+      setLogStatus(toErrorMessage(error, 'Unable to update logging mode'));
+    }
+  };
 
   return (
     <>
+      <LocalTabBar
+        label="Admin workspace tabs"
+        items={[
+          { key: 'controls', label: 'Controls' },
+          { key: 'network', label: 'Network' },
+          { key: 'logs', label: 'Logs' },
+          { key: 'help', label: 'Help' },
+        ]}
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as 'controls' | 'network' | 'logs' | 'help')}
+      />
       <MetricGrid>
         <MetricTile label="Service catalog" value={serviceCatalog.length} helper="Entries in controller inventory" />
         <MetricTile label="Controller lock" value={Boolean(controller.locked) ? 'Locked' : 'Unlocked'} helper="Admin action safety gate" />
@@ -1659,7 +1937,7 @@ function AdminWorkspace({
         <MetricTile label="Generated" value={String(dashboard.generatedAt || 'unknown')} helper="Snapshot timestamp" />
       </MetricGrid>
 
-      {adminActions ? (
+      {activeTab === 'controls' && adminActions ? (
         <SectionCard title="Controller access" subtitle="Unlock service controls and run start/stop/restart actions.">
           <div className="dash2-admin-controls">
             <label>
@@ -1687,6 +1965,54 @@ function AdminWorkspace({
         </SectionCard>
       ) : null}
 
+      {activeTab === 'controls' ? (
+      <SectionCard title="Admin service inventory" subtitle="Operational state for all registered services.">
+        <div className="dash2-service-admin-grid">
+          {serviceCatalog.map((entry, index) => {
+            const key = String(entry.key || `service-${index}`);
+            const label = String(entry.label || key || 'Service');
+            const status = String(entry.status || 'unknown');
+            const available = Boolean(entry.available);
+            const controlMode = String(entry.controlMode || 'always_on');
+            const canUseControls = Boolean(adminActions && !locked && adminActions.adminPassword.trim());
+            const controllable = adminActions ? optionalControls.has(key) && canUseControls : false;
+            const actionBusy = adminActions?.controlBusyKey === key;
+
+            return (
+              <article key={`${key}-${index}`} className="dash2-service-admin-card">
+                <div className="dash2-service-admin-card__header">
+                  <strong>{label}</strong>
+                  <StatusBadge tone={toneFromStatus(status)}>{status}</StatusBadge>
+                </div>
+                <p>{String(entry.description || entry.blocker || 'No summary available.')}</p>
+                <div className="dash2-service-admin-card__meta">
+                  <span>key: {key}</span>
+                  <span>mode: {controlMode}</span>
+                  <span>{available ? 'available' : 'unavailable'}</span>
+                </div>
+                {controllable && adminActions ? (
+                  <div className="dash2-service-admin-card__actions dash2-service-admin-card__actions--compact">
+                    <button className="ui-button dash2-ui-button--small" type="button" disabled={actionBusy} onClick={() => adminActions.onControl(key, 'start')}>Start</button>
+                    <button className="ui-button dash2-ui-button--small" type="button" disabled={actionBusy} onClick={() => adminActions.onControl(key, 'stop')}>Stop</button>
+                    <button className="ui-button dash2-ui-button--small" type="button" disabled={actionBusy} onClick={() => adminActions.onControl(key, 'restart')}>Restart</button>
+                  </div>
+                ) : (
+                  <p className="dash2-admin-note">
+                    {optionalControls.has(key)
+                      ? locked
+                        ? 'Unlock controller and provide admin password to show controls.'
+                        : 'Provide admin password to show controls.'
+                      : 'No direct controller action exposed for this service.'}
+                  </p>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </SectionCard>
+      ) : null}
+
+      {activeTab === 'network' ? (
       <SectionCard title="Network & ports" subtitle="Core gateway routes, service bindings, and unauthenticated exposure checks.">
         {exposureCount === 0 ? <EmptyState title="No audit data" message="Network exposure data is currently unavailable." /> : (
           <div className="dash2-service-admin-grid">
@@ -1720,7 +2046,9 @@ function AdminWorkspace({
           </div>
         )}
       </SectionCard>
+      ) : null}
 
+      {activeTab === 'network' ? (
       <SectionCard title="Remote access" subtitle="Preferred tailnet entrypoints for the gateway and SSH.">
         <KeyValueList
           rows={[
@@ -1732,57 +2060,53 @@ function AdminWorkspace({
           ]}
         />
       </SectionCard>
+      ) : null}
 
-      <SectionCard title="Admin service inventory" subtitle="Operational state for all registered services.">
-        <div className="dash2-service-admin-grid">
-          {serviceCatalog.map((entry, index) => {
-            const key = String(entry.key || `service-${index}`);
-            const label = String(entry.label || key || 'Service');
-            const status = String(entry.status || 'unknown');
-            const available = Boolean(entry.available);
-            const controlMode = String(entry.controlMode || 'always_on');
-            const canUseControls = Boolean(adminActions && !locked && adminActions.adminPassword.trim());
-            const controllable = adminActions ? optionalControls.has(key) && canUseControls : false;
-            const actionBusy = adminActions?.controlBusyKey === key;
-
-            return (
-              <article key={`${key}-${index}`} className="dash2-service-admin-card">
-                <div className="dash2-service-admin-card__header">
-                  <strong>{label}</strong>
-                  <StatusBadge tone={toneFromStatus(status)}>{status}</StatusBadge>
-                </div>
-                <p>{String(entry.description || entry.blocker || 'No summary available.')}</p>
-                <div className="dash2-service-admin-card__meta">
-                  <span>key: {key}</span>
-                  <span>mode: {controlMode}</span>
-                  <span>{available ? 'available' : 'unavailable'}</span>
-                </div>
-                {controllable && adminActions ? (
-                  <div className="dash2-service-admin-card__actions dash2-service-admin-card__actions--compact">
-                    <button className="ui-button dash2-ui-button--small" type="button" disabled={actionBusy} onClick={() => adminActions.onControl(key, 'start')}>
-                      Start
-                    </button>
-                    <button className="ui-button dash2-ui-button--small" type="button" disabled={actionBusy} onClick={() => adminActions.onControl(key, 'stop')}>
-                      Stop
-                    </button>
-                    <button className="ui-button dash2-ui-button--small" type="button" disabled={actionBusy} onClick={() => adminActions.onControl(key, 'restart')}>
-                      Restart
-                    </button>
-                  </div>
-                ) : (
-                  <p className="dash2-admin-note">
-                    {optionalControls.has(key)
-                      ? locked
-                        ? 'Unlock controller and provide admin password to show controls.'
-                        : 'Provide admin password to show controls.'
-                      : 'No direct controller action exposed for this service.'}
-                  </p>
-                )}
-              </article>
-            );
-          })}
+      {activeTab === 'logs' ? (
+      <SectionCard title="Debug logs" subtitle="V1-style operational log view with filtering and verbose-mode toggle.">
+        <div className="dash2-wrap-row">
+          <input className="ui-input" type="search" placeholder="Filter logs" value={logSearch} onChange={(event) => setLogSearch(event.target.value)} />
+          {(['all', 'info', 'warn', 'error'] as const).map((level) => (
+            <button key={level} className={`ui-button ${logFilter === level ? 'dash2-tab-switcher__button--active' : ''}`} type="button" onClick={() => setLogFilter(level)}>
+              {level.toUpperCase()}
+            </button>
+          ))}
+          <button className="ui-button" type="button" onClick={() => void toggleVerbose()}>
+            {verboseLogging ? 'Disable verbose' : 'Enable verbose'}
+          </button>
+        </div>
+        {logStatus ? <p className="dash2-admin-note">{logStatus}</p> : null}
+        <div className="dash2-log-box">
+          {filteredLogs.length === 0 ? <p className="dash2-small-copy">No debug events yet.</p> : filteredLogs.slice(0, 80).map((entry, index) => (
+            <p key={`${String(entry.timestamp || '')}-${index}`} className="dash2-log-line">
+              <span>{String(entry.timestamp || '')}</span>
+              <strong>{String(entry.level || 'info').toUpperCase()}</strong>
+              <span>{String(entry.message || '')}{entry.meta ? ` ${JSON.stringify(entry.meta)}` : ''}</span>
+            </p>
+          ))}
         </div>
       </SectionCard>
+      ) : null}
+
+      {activeTab === 'help' ? (
+      <SectionCard title="Operator help" subtitle="How to use the dashboard and the intended media workflow.">
+        <KeyValueList
+          rows={[
+            { label: 'Overview', value: 'Use Overview for quick host health, active sessions, and drive warnings.' },
+            { label: 'Media workflow', value: 'Requests go through Jellyseerr, automation runs through Prowlarr/Sonarr/Radarr, qBittorrent downloads into the ARR lanes, importer moves content into Jellyfin libraries.' },
+            { label: 'Transfers', value: 'Use Connect for one-off FTP sessions, Favourites for saved remotes and mounts, and Torrent for qBittorrent lane checks and standalone adds.' },
+            { label: 'Files', value: 'Use Files for managed shares, storage protection, and direct browser operations.' },
+            { label: 'Terminal', value: 'Use Terminal for shell-only recovery and service-level debugging when the UI is not enough.' },
+            { label: 'ARR recovery', value: arrMismatches.length > 0 ? `Current mismatches: ${arrMismatches.join(', ')}` : 'No ARR mapping mismatches are currently reported.' },
+          ]}
+        />
+        {arrEvidence.generatedAt ? (
+          <p className="dash2-admin-note">
+            ARR evidence generated {String(arrEvidence.generatedAt)}{arrEvidence.lastVerifiedAt ? ` · verified ${String(arrEvidence.lastVerifiedAt)}` : ''}.
+          </p>
+        ) : null}
+      </SectionCard>
+      ) : null}
     </>
   );
 }

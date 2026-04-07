@@ -1,6 +1,7 @@
 import type { WorkspaceKey } from './types';
 
 export const DEFAULT_WORKSPACE: WorkspaceKey = 'overview';
+export const SAFE_NEXT_PATHS = new Set(['/radarr/', '/sonarr/', '/prowlarr/']);
 
 export const LEGACY_TAB_FALLBACK_MAP: Record<string, WorkspaceKey> = {
   home: 'overview',
@@ -41,4 +42,17 @@ export const resolveWorkspaceFromQuery = (
   const tab = String(searchParams.get('tab') || '').trim().toLowerCase();
   const map = legacyMap || LEGACY_TAB_FALLBACK_MAP;
   return map[tab] || DEFAULT_WORKSPACE;
+};
+
+export const normalizeSafeNextPath = (value: string | null | undefined): string | null => {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith('/')) {
+    return null;
+  }
+  if (raw.startsWith('//') || raw.includes('://') || raw.includes('\n') || raw.includes('\r')) {
+    return null;
+  }
+
+  const [pathname] = raw.split(/[?#]/, 1);
+  return SAFE_NEXT_PATHS.has(pathname) ? pathname : null;
 };

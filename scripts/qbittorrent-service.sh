@@ -99,6 +99,31 @@ remove_config_key() {
     mv "$tmp_file" "$QBITTORRENT_CONFIG_PATH"
 }
 
+list_matching_pids() {
+    pgrep -af "qbittorrent-nox" | awk '!/pgrep -af/ { print $1 }' || true
+}
+
+read_pid() {
+    local pid=""
+
+    if [ -f "$QBITTORRENT_PID_PATH" ]; then
+        pid="$(tr -d '[:space:]' < "$QBITTORRENT_PID_PATH" 2>/dev/null || true)"
+    fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        printf '%s\n' "$pid"
+        return 0
+    fi
+
+    pid="$(list_matching_pids | head -n 1)"
+    if [ -n "$pid" ]; then
+        printf '%s\n' "$pid" > "$QBITTORRENT_PID_PATH"
+        printf '%s\n' "$pid"
+        return 0
+    fi
+
+    return 1
+}
+
 ensure_config() {
     if [ ! -f "$QBITTORRENT_CONFIG_PATH" ]; then
         cat > "$QBITTORRENT_CONFIG_PATH" <<EOF
@@ -153,12 +178,14 @@ EOF
 
 is_running() {
     local pid=""
-    [ -f "$QBITTORRENT_PID_PATH" ] || return 1
-    pid="$(cat "$QBITTORRENT_PID_PATH" 2>/dev/null || true)"
+    pid="$(read_pid || true)"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 start_service() {
+    local command_str=""
+    local pid=""
+
     [ -n "$QBITTORRENT_BIN" ] || {
         echo "qbittorrent-nox is not installed" >&2
         return 1
@@ -169,32 +196,31 @@ start_service() {
     fi
 
     ensure_config
-    if command -v setsid >/dev/null 2>&1; then
-        setsid env HOME="$QBITTORRENT_HOME" QT_QPA_PLATFORM=offscreen \
-            "$QBITTORRENT_BIN" \
-            --profile="$QBITTORRENT_HOME" \
-            --webui-port="$QBITTORRENT_PORT" \
-            --confirm-legal-notice \
-            > "$QBITTORRENT_LOG_PATH" 2>&1 < /dev/null &
-    else
-        nohup env HOME="$QBITTORRENT_HOME" QT_QPA_PLATFORM=offscreen \
-            "$QBITTORRENT_BIN" \
-            --profile="$QBITTORRENT_HOME" \
-            --webui-port="$QBITTORRENT_PORT" \
-            --confirm-legal-notice \
-            > "$QBITTORRENT_LOG_PATH" 2>&1 &
+    rm -f "$QBITTORRENT_PID_PATH"
+
+    printf -v command_str '%q ' \
+        env \
+        HOME="$QBITTORRENT_HOME" \
+        QT_QPA_PLATFORM=offscreen \
+        "$QBITTORRENT_BIN" \
+        "--profile=$QBITTORRENT_HOME" \
+        "--webui-port=$QBITTORRENT_PORT" \
+        --confirm-legal-notice
+
+    /data/data/com.termux/files/usr/bin/bash -lc "${command_str} --daemon" >> "$QBITTORRENT_LOG_PATH" 2>&1
+    sleep 3
+    pid="$(read_pid || true)"
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$QBITTORRENT_PID_PATH"
+        return 1
     fi
-    printf '%s\n' "$!" > "$QBITTORRENT_PID_PATH"
+    printf '%s\n' "$pid" > "$QBITTORRENT_PID_PATH"
 }
 
 stop_service() {
     local pid=""
 
-    if [ ! -f "$QBITTORRENT_PID_PATH" ]; then
-        return 0
-    fi
-
-    pid="$(cat "$QBITTORRENT_PID_PATH" 2>/dev/null || true)"
+    pid="$(read_pid || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         kill "$pid" >/dev/null 2>&1 || true
         sleep 1
@@ -202,6 +228,15 @@ stop_service() {
             kill -9 "$pid" >/dev/null 2>&1 || true
         fi
     fi
+
+    list_matching_pids | while read -r extra_pid; do
+        [ -n "$extra_pid" ] || continue
+        kill "$extra_pid" >/dev/null 2>&1 || true
+        sleep 1
+        if kill -0 "$extra_pid" 2>/dev/null; then
+            kill -9 "$extra_pid" >/dev/null 2>&1 || true
+        fi
+    done
 
     rm -f "$QBITTORRENT_PID_PATH"
 }

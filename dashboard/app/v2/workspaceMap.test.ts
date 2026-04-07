@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_WORKSPACE, normalizeWorkspace, resolveWorkspaceFromQuery } from './workspaceMap';
+import { DEFAULT_WORKSPACE, normalizeSafeNextPath, normalizeWorkspace, resolveWorkspaceFromQuery } from './workspaceMap';
 
 describe('workspaceMap helpers', () => {
   it('normalizes known workspace keys', () => {
@@ -17,5 +17,13 @@ describe('workspaceMap helpers', () => {
 
   it('falls back to default workspace', () => {
     expect(resolveWorkspaceFromQuery(new URLSearchParams())).toBe(DEFAULT_WORKSPACE);
+  });
+
+  it('accepts only allowlisted internal next paths', () => {
+    expect(normalizeSafeNextPath('/radarr/')).toBe('/radarr/');
+    expect(normalizeSafeNextPath('/sonarr/?foo=bar')).toBe('/sonarr/');
+    expect(normalizeSafeNextPath('https://example.com/radarr/')).toBeNull();
+    expect(normalizeSafeNextPath('//example.com/radarr/')).toBeNull();
+    expect(normalizeSafeNextPath('/api/auth/logout')).toBeNull();
   });
 });

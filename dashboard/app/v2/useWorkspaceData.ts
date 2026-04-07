@@ -38,6 +38,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const workspaceRequestRef = useRef(0);
   const loadedWorkspaceKeyRef = useRef('');
   const workspaceCacheRef = useRef<Map<string, UiWorkspaceResponse>>(new Map());
+  const hiddenRef = useRef(false);
 
   const applyInitialPayload = useCallback(
     (requestedWorkspace: WorkspaceKey, payload: NormalizedUiInitial) => {
@@ -90,7 +91,8 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       return;
     }
     const url = new URL(window.location.href);
-    url.searchParams.set('workspace', workspace);
+    url.searchParams.delete('workspace');
+    url.searchParams.set('tab', workspace);
     window.history.replaceState({}, '', url.toString());
   }, []);
 
@@ -128,6 +130,22 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     const params = new URLSearchParams(window.location.search);
     const mappedWorkspace = resolveWorkspaceFromQuery(params);
     setActiveWorkspaceState(mappedWorkspace);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const handleVisibilityChange = () => {
+      hiddenRef.current = document.hidden;
+      if (!document.hidden) {
+        setBootstrapReloadTick((current) => current + 1);
+        setWorkspaceReloadTick((current) => current + 1);
+      }
+    };
+    hiddenRef.current = document.hidden;
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
   useEffect(() => {
@@ -189,7 +207,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     void loadInitial();
     const bootstrapTimer = window.setInterval(() => {
       void refreshBootstrap();
-    }, 60000);
+    }, hiddenRef.current ? 60000 : 30000);
 
     return () => {
       cancelled = true;
@@ -250,7 +268,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     }
     const workspaceTimer = window.setInterval(() => {
       void loadWorkspace();
-    }, activeWorkspace === 'overview' ? 12000 : 18000);
+    }, hiddenRef.current ? 60000 : activeWorkspace === 'overview' ? 5000 : 9000);
 
     return () => {
       cancelled = true;

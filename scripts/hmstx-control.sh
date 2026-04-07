@@ -187,6 +187,7 @@ TAILSCALE_SSH_PORT="${TAILSCALE_SSH_PORT:-8022}"
 TAILSCALE_EXPOSE_GATEWAY="${TAILSCALE_EXPOSE_GATEWAY:-true}"
 TAILSCALE_EXPOSE_SSH="${TAILSCALE_EXPOSE_SSH:-true}"
 TAILSCALE_SERVICE_CMD="${TAILSCALE_SERVICE_CMD:-$PROJECT/scripts/tailscale-service.sh}"
+TAILSCALE_ROOT_CMD="${TAILSCALE_ROOT_CMD:-su -c tailscale}"
 
 if [ "$TAILSCALE_MODE" != "disabled" ]; then
     SERVICE_ORDER+=(tailscale)
@@ -691,6 +692,7 @@ build_service_exposure_json() {
 build_tailscale_json() {
     local mode="$TAILSCALE_MODE"
     local identity="${TAILSCALE_DNS_NAME:-$TAILSCALE_IP}"
+    local resolved_ip="$TAILSCALE_IP"
     local connected="false"
     local status="disabled"
     local notes=""
@@ -703,7 +705,7 @@ build_tailscale_json() {
             status="degraded"
             notes="Configure TAILSCALE_DNS_NAME or TAILSCALE_IP for stable gateway and SSH links."
         fi
-    elif [ "$mode" = "managed_daemon" ]; then
+    elif [ "$mode" = "managed_daemon" ] || [ "$mode" = "root_daemon" ]; then
         if [ -x "$TAILSCALE_SERVICE_CMD" ]; then
             local raw=""
             if raw="$($TAILSCALE_SERVICE_CMD status --json 2>/dev/null || true)"; then
@@ -711,13 +713,14 @@ build_tailscale_json() {
                     *'"connected":true'*) connected="true" ;;
                 esac
                 case "$raw" in
-                    *'"status":"running"'*|*'"status":"working"'*) status="working" ;;
+                    *'"status":"working"'*) status="working" ;;
+                    *'"status":"running"'*) status="running" ;;
                     *'"status":"stopped"'*) status="stopped" ;;
                     *) status="degraded" ;;
                 esac
-                if [ -z "$identity" ]; then
-                    identity="$(printf '%s' "$raw" | sed -n 's/.*"dnsName":"\([^"]*\)".*/\1/p' | head -1)"
-                fi
+                identity="$(printf '%s' "$raw" | sed -n 's/.*"dnsName":"\([^"]*\)".*/\1/p' | head -1)"
+                resolved_ip="$(printf '%s' "$raw" | sed -n 's/.*"ip4":"\([^"]*\)".*/\1/p' | head -1)"
+                [ -n "$identity" ] || identity="$resolved_ip"
             fi
         else
             status="unavailable"
@@ -736,8 +739,8 @@ build_tailscale_json() {
         "$(json_escape "$mode")" \
         "$(json_escape "$status")" \
         "$connected" \
-        "$(json_escape "$TAILSCALE_DNS_NAME")" \
-        "$(json_escape "$TAILSCALE_IP")" \
+        "$(json_escape "${identity%%:*}")" \
+        "$(json_escape "$resolved_ip")" \
         "$(json_escape "$gateway_url")" \
         "$(json_escape "$ssh_target")" \
         "$(join_notes_json "$notes")"
@@ -745,10 +748,18 @@ build_tailscale_json() {
 
 build_remote_access_json() {
     local identity="${TAILSCALE_DNS_NAME:-$TAILSCALE_IP}"
+    local raw=""
     local gateway_url=""
     local ssh_target=""
     local gateway_status="disabled"
     local ssh_status="disabled"
+
+    if [ -z "$identity" ] && [ "$TAILSCALE_MODE" != "android_app" ] && [ "$TAILSCALE_MODE" != "disabled" ] && [ -x "$TAILSCALE_SERVICE_CMD" ]; then
+        raw="$($TAILSCALE_SERVICE_CMD status --json 2>/dev/null || true)"
+        identity="$(printf '%s' "$raw" | sed -n 's/.*"dnsName":"\([^"]*\)".*/\1/p' | head -1)"
+        [ -n "$identity" ] || identity="$(printf '%s' "$raw" | sed -n 's/.*"ip4":"\([^"]*\)".*/\1/p' | head -1)"
+    fi
+
     if [ -n "$identity" ]; then
         gateway_url="http://${identity}:${TAILSCALE_GATEWAY_PORT}"
         ssh_target="ssh -p ${TAILSCALE_SSH_PORT} ${USER:-termux}@${identity}"
@@ -794,10 +805,24 @@ emit_status_json() {
 
 emit_audit_text() {
     local overall="$(compute_overall_status)"
+    local identity="${TAILSCALE_DNS_NAME:-$TAILSCALE_IP}"
+    local raw=""
+    local gateway="http://127.0.0.1:${NGINX_PORT}"
+
+    if [ -z "$identity" ] && [ "$TAILSCALE_MODE" != "android_app" ] && [ "$TAILSCALE_MODE" != "disabled" ] && [ -x "$TAILSCALE_SERVICE_CMD" ]; then
+        raw="$($TAILSCALE_SERVICE_CMD status --json 2>/dev/null || true)"
+        identity="$(printf '%s' "$raw" | sed -n 's/.*"dnsName":"\([^"]*\)".*/\1/p' | head -1)"
+        [ -n "$identity" ] || identity="$(printf '%s' "$raw" | sed -n 's/.*"ip4":"\([^"]*\)".*/\1/p' | head -1)"
+    fi
+
+    if [ -n "$identity" ] && [ "$TAILSCALE_EXPOSE_GATEWAY" = "true" ]; then
+        gateway="http://${identity}:${TAILSCALE_GATEWAY_PORT}"
+    fi
+
     printf 'hmstx audit: %s\n' "$overall"
     printf '  core=%s/%s reachable\n' "$STATUS_CORE_RUNNING_COUNT" "$STATUS_CORE_TOTAL_COUNT"
     printf '  tailscale=%s\n' "$TAILSCALE_MODE"
-    printf '  gateway=http://127.0.0.1:%s\n' "$NGINX_PORT"
+    printf '  gateway=%s\n' "$gateway"
 }
 
 emit_audit_json() {
@@ -813,7 +838,7 @@ run_service_action() {
     if [ "$action" = "stop" ]; then
         for ((idx=${#SERVICE_ORDER[@]} - 1; idx >= 0; idx -= 1)); do
             key="${SERVICE_ORDER[$idx]}"
-            [ "$key" = "tailscale" ] && [ "$TAILSCALE_MODE" != "managed_daemon" ] && continue
+            [ "$key" = "tailscale" ] && [ "$TAILSCALE_MODE" = "android_app" ] && continue
             label="${SERVICE_LABEL[$key]:-$key}"
             script_path="${SERVICE_CMD[$key]:-}"
             if [ ! -x "$script_path" ]; then
@@ -825,7 +850,7 @@ run_service_action() {
         done
     else
         for key in "${SERVICE_ORDER[@]}"; do
-            [ "$key" = "tailscale" ] && [ "$TAILSCALE_MODE" != "managed_daemon" ] && continue
+            [ "$key" = "tailscale" ] && [ "$TAILSCALE_MODE" = "android_app" ] && continue
             label="${SERVICE_LABEL[$key]:-$key}"
             script_path="${SERVICE_CMD[$key]:-}"
             if [ ! -x "$script_path" ]; then
@@ -907,6 +932,13 @@ run_preflight_checks() {
         command -v tailscale >/dev/null 2>&1 && add_preflight_check "tailscale-cli" "warn" "true" "$(command -v tailscale)" || add_preflight_check "tailscale-cli" "warn" "false" "tailscale CLI is missing"
         command -v tailscaled >/dev/null 2>&1 && add_preflight_check "tailscaled" "warn" "true" "$(command -v tailscaled)" || add_preflight_check "tailscaled" "warn" "false" "tailscaled is missing"
         [ -e /dev/net/tun ] && add_preflight_check "tailscale-tun" "warn" "true" "/dev/net/tun" || add_preflight_check "tailscale-tun" "warn" "false" "/dev/net/tun is missing; managed daemon mode will not work"
+    elif [ "$TAILSCALE_MODE" = "root_daemon" ]; then
+        command -v su >/dev/null 2>&1 && add_preflight_check "tailscale-root-su" "warn" "true" "$(command -v su)" || add_preflight_check "tailscale-root-su" "warn" "false" "su is required for root_daemon tailscale mode"
+        if bash -lc "$TAILSCALE_ROOT_CMD version" >/dev/null 2>&1; then
+            add_preflight_check "tailscale-root-cli" "warn" "true" "$TAILSCALE_ROOT_CMD"
+        else
+            add_preflight_check "tailscale-root-cli" "warn" "false" "Root tailscale command failed: $TAILSCALE_ROOT_CMD"
+        fi
     fi
 
     if bash -n "$0" >/dev/null 2>&1; then add_preflight_check "syntax:hmstx-control" "fail" "true" "bash -n passed"; else add_preflight_check "syntax:hmstx-control" "fail" "false" "bash -n failed for $0"; fi

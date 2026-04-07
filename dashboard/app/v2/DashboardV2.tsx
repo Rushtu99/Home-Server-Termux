@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { appFetch } from '../demo-api';
 import { ErrorState, LoadingState, StatusBadge } from './components';
 import { toErrorMessage } from './errors';
@@ -85,6 +85,9 @@ export default function DashboardV2() {
   const [theme, setTheme] = useState('dark');
   const [styleVariant, setStyleVariant] = useState('classic-v2');
   const [loginNextPath, setLoginNextPath] = useState<string | null>(null);
+  const [utilityMenuOpen, setUtilityMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const utilityMenuRef = useRef<HTMLDivElement | null>(null);
 
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
@@ -163,6 +166,28 @@ export default function DashboardV2() {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [sidebarOpen]);
+
+  useEffect(() => {
+    if (!utilityMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!utilityMenuRef.current?.contains(event.target as Node)) {
+        setUtilityMenuOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setUtilityMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [utilityMenuOpen]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -283,6 +308,49 @@ export default function DashboardV2() {
   const hasDisplayedWorkspaceData = Boolean(workspaceData && workspaceData.workspaceKey === displayedWorkspace);
   const activeWorkspaceTitle = nav.find((entry) => entry.key === activeWorkspace)?.label || 'Dashboard';
   const activeWorkspaceSummary = nav.find((entry) => entry.key === activeWorkspace)?.summary || 'Home server control workspace';
+  const quickResults = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const navResults = nav
+      .filter((item) => !query || `${item.label} ${item.summary}`.toLowerCase().includes(query))
+      .slice(0, 6)
+      .map((item) => ({
+        id: `nav:${item.key}`,
+        label: item.label,
+        subtitle: item.summary,
+        run: () => {
+          setActiveWorkspace(item.key as WorkspaceKey);
+          setSearchQuery('');
+        },
+      }));
+    const actionResults = [
+      {
+        id: 'action:refresh',
+        label: 'Refresh current workspace',
+        subtitle: 'Action',
+        run: () => {
+          void handleRefresh();
+          setSearchQuery('');
+        },
+      },
+      {
+        id: 'action:files',
+        label: 'Open Files route',
+        subtitle: 'Shortcut',
+        run: () => {
+          window.location.assign('/files');
+        },
+      },
+      {
+        id: 'action:legacy',
+        label: 'Open classic dashboard',
+        subtitle: 'Shortcut',
+        run: () => {
+          window.location.assign('/legacy');
+        },
+      },
+    ].filter((item) => !query || `${item.label} ${item.subtitle}`.toLowerCase().includes(query));
+    return [...navResults, ...actionResults].slice(0, 8);
+  }, [nav, searchQuery, setActiveWorkspace]);
 
   return (
     <div className="dash2-shell">
@@ -363,35 +431,72 @@ export default function DashboardV2() {
               <p>{authRequired ? 'Admin workspace sign-in is required.' : activeWorkspaceSummary}</p>
             </div>
           </div>
+          {!authRequired ? (
+            <div className="dash2-header__search">
+              <input
+                className="ui-input"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search workspaces and actions"
+                aria-label="Search workspaces and actions"
+              />
+              {searchQuery.trim() ? (
+                <div className="dash2-search-results" role="listbox" aria-label="Search results">
+                  {quickResults.length === 0 ? <p className="dash2-search-results__empty">No matches.</p> : quickResults.map((item) => (
+                    <button key={item.id} className="dash2-search-result" type="button" onClick={item.run}>
+                      <span>{item.label}</span>
+                      <small>{item.subtitle}</small>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="dash2-header__meta">
             {authRequired ? (
               <StatusBadge tone="warn">sign in required</StatusBadge>
             ) : (
               <>
                 <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
-                <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleString() : 'Waiting for snapshot'}</span>
-                <label className="dash2-theme-picker">
-                  <span>Theme</span>
-                  <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
-                    {THEME_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="dash2-theme-picker">
-                  <span>Style</span>
-                  <select className="ui-input" value={styleVariant} onChange={(event) => setStyleVariant(event.target.value)}>
-                    {STYLE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
+                <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleTimeString() : 'Waiting for snapshot'}</span>
                 <button className="ui-button" type="button" onClick={handleRefresh} disabled={headerBusy}>
                   {headerBusy ? 'Refreshing…' : 'Refresh'}
                 </button>
-                <button className="ui-button" type="button" onClick={handleLogout} disabled={headerBusy}>
-                  Log out
-                </button>
+                <div className="dash2-utility-menu" ref={utilityMenuRef}>
+                  <button
+                    className="ui-button"
+                    type="button"
+                    aria-expanded={utilityMenuOpen}
+                    aria-haspopup="menu"
+                    onClick={() => setUtilityMenuOpen((current) => !current)}
+                  >
+                    Account
+                  </button>
+                  {utilityMenuOpen ? (
+                    <div className="dash2-utility-menu__panel" role="menu" aria-label="Theme and account">
+                      <label className="dash2-theme-picker">
+                        <span>Theme</span>
+                        <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
+                          {THEME_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="dash2-theme-picker">
+                        <span>Style</span>
+                        <select className="ui-input" value={styleVariant} onChange={(event) => setStyleVariant(event.target.value)}>
+                          {STYLE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className="ui-button" type="button" onClick={handleLogout} disabled={headerBusy}>
+                        Log out
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </>
             )}
           </div>

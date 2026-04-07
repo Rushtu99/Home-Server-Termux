@@ -26,11 +26,44 @@ CHROOT_LANG="${CHROOT_LANG:-C.UTF-8}"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
+if [ -e "$APP_LOG_PATH" ] && [ ! -w "$APP_LOG_PATH" ]; then
+    APP_LOG_PATH="$LOG_DIR/$APP_SLUG.user.log"
+fi
+
+have_root_su() {
+    command -v su >/dev/null 2>&1 && su -c true >/dev/null 2>&1
+}
+
+signal_pid() {
+    local pid="$1"
+
+    if have_root_su; then
+        su -c "kill -0 '$pid'" >/dev/null 2>&1
+    else
+        kill -0 "$pid" >/dev/null 2>&1
+    fi
+}
+
+kill_pid() {
+    local pid="$1"
+    local signal="${2:-TERM}"
+
+    if have_root_su; then
+        su -c "kill -s '$signal' '$pid'" >/dev/null 2>&1
+    else
+        kill "-$signal" "$pid" >/dev/null 2>&1
+    fi
+}
+
 list_matching_pids() {
     local pattern=""
 
     printf -v pattern '%s -nobrowser -data=%s' "$APP_BINARY_NAME" "$APP_DATA_DIR_IN_CHROOT"
-    su -c "ps -A -o PID=,ARGS= 2>/dev/null | grep -F -- '$pattern' | grep -v grep | awk '{ print \$1 }'" 2>/dev/null || true
+    if have_root_su; then
+        su -c "ps -A -o PID=,ARGS= 2>/dev/null | grep -F -- '$pattern' | grep -v grep | awk '{ print \$1 }'" 2>/dev/null || true
+    else
+        ps -A -o PID=,ARGS= 2>/dev/null | grep -F -- "$pattern" | grep -v grep | awk '{ print $1 }' || true
+    fi
 }
 
 read_pid() {
@@ -39,7 +72,12 @@ read_pid() {
     if [ -f "$APP_PID_PATH" ]; then
         pid="$(tr -d '[:space:]' < "$APP_PID_PATH" 2>/dev/null || true)"
     fi
-    if [ -n "$pid" ] && su -c "kill -0 '$pid'" >/dev/null 2>&1; then
+    case "$pid" in
+        ''|*[!0-9]*)
+            pid=""
+            ;;
+    esac
+    if [ -n "$pid" ] && signal_pid "$pid"; then
         printf '%s\n' "$pid"
         return 0
     fi
@@ -57,7 +95,7 @@ read_pid() {
 is_running() {
     local pid=""
     pid="$(read_pid || true)"
-    [ -n "$pid" ] && su -c "kill -0 '$pid'" >/dev/null 2>&1
+    [ -n "$pid" ] && signal_pid "$pid"
 }
 
 ensure_rootfs() {
@@ -75,11 +113,16 @@ ensure_install() {
 }
 
 ensure_chroot_mounts() {
-    su -c "mkdir -p '$CHROOT_ROOTFS/dev' '$CHROOT_ROOTFS/proc' '$CHROOT_ROOTFS/sys' '$CHROOT_ROOTFS$CHROOT_DRIVES_PATH' '$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT'"
-    su -c "grep -q ' $CHROOT_ROOTFS/dev ' /proc/mounts || mount --bind /dev '$CHROOT_ROOTFS/dev'"
-    su -c "grep -q ' $CHROOT_ROOTFS/proc ' /proc/mounts || mount -t proc proc '$CHROOT_ROOTFS/proc'"
-    su -c "grep -q ' $CHROOT_ROOTFS/sys ' /proc/mounts || mount -t sysfs sysfs '$CHROOT_ROOTFS/sys'"
-    su -c "grep -q ' $CHROOT_ROOTFS$CHROOT_DRIVES_PATH ' /proc/mounts || mount --bind '$TERMUX_DRIVES_PATH' '$CHROOT_ROOTFS$CHROOT_DRIVES_PATH'"
+    if have_root_su; then
+        su -c "mkdir -p '$CHROOT_ROOTFS/dev' '$CHROOT_ROOTFS/proc' '$CHROOT_ROOTFS/sys' '$CHROOT_ROOTFS$CHROOT_DRIVES_PATH' '$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT'"
+        su -c "grep -q ' $CHROOT_ROOTFS/dev ' /proc/mounts || mount --bind /dev '$CHROOT_ROOTFS/dev'"
+        su -c "grep -q ' $CHROOT_ROOTFS/proc ' /proc/mounts || mount -t proc proc '$CHROOT_ROOTFS/proc'"
+        su -c "grep -q ' $CHROOT_ROOTFS/sys ' /proc/mounts || mount -t sysfs sysfs '$CHROOT_ROOTFS/sys'"
+        su -c "grep -q ' $CHROOT_ROOTFS$CHROOT_DRIVES_PATH ' /proc/mounts || mount --bind '$TERMUX_DRIVES_PATH' '$CHROOT_ROOTFS$CHROOT_DRIVES_PATH'"
+        return 0
+    fi
+
+    mkdir -p "$CHROOT_ROOTFS$CHROOT_DRIVES_PATH" "$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT"
 }
 
 ensure_config() {
@@ -102,6 +145,7 @@ EOF
 start_service() {
     local chroot_cmd=""
     local root_cmd=""
+    local proot_cmd=""
     local pid=""
 
     if is_running; then
@@ -114,9 +158,13 @@ start_service() {
     ensure_config
 
     rm -f "$APP_PID_PATH"
-    su -c "rm -f '$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT/${APP_SLUG}.pid'"
+    if have_root_su; then
+        su -c "rm -f '$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT/${APP_SLUG}.pid'"
+    else
+        rm -f "$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT/${APP_SLUG}.pid"
+    fi
 
-    printf -v chroot_cmd 'cd %q && exec env -i PATH=%q HOME=/root TMPDIR=/tmp LANG=%q LC_ALL=%q %q -nobrowser %q' \
+    printf -v chroot_cmd 'cd %q && PATH=%q HOME=/root TMPDIR=/tmp LANG=%q LC_ALL=%q exec %q -nobrowser %q' \
         "$APP_DATA_DIR_IN_CHROOT" \
         "$CHROOT_SYSTEM_PATH" \
         "$CHROOT_LANG" \
@@ -124,17 +172,33 @@ start_service() {
         "$APP_INSTALL_DIR_IN_CHROOT/$APP_BINARY_NAME" \
         "-data=$APP_DATA_DIR_IN_CHROOT"
 
-    printf -v root_cmd 'umask 022; nohup chroot %q /bin/sh -lc %q >> %q 2>&1 </dev/null & echo $! > %q' \
-        "$CHROOT_ROOTFS" \
-        "$chroot_cmd" \
-        "$APP_LOG_PATH" \
-        "$APP_PID_PATH"
+    if have_root_su; then
+        printf -v root_cmd 'umask 022; nohup chroot %q /bin/sh -lc %q >> %q 2>&1 </dev/null & echo $! > %q' \
+            "$CHROOT_ROOTFS" \
+            "$chroot_cmd" \
+            "$APP_LOG_PATH" \
+            "$APP_PID_PATH"
 
-    su -c "$root_cmd"
+        su -c "$root_cmd"
+    else
+        printf -v proot_cmd 'cd %q && PATH=%q HOME=/root TMPDIR=/tmp LANG=%q LC_ALL=%q exec %q -nobrowser %q' \
+            "$APP_DATA_DIR_IN_CHROOT" \
+            "$CHROOT_SYSTEM_PATH" \
+            "$CHROOT_LANG" \
+            "$CHROOT_LANG" \
+            "$APP_INSTALL_DIR_IN_CHROOT/$APP_BINARY_NAME" \
+            "-data=$APP_DATA_DIR_IN_CHROOT"
+        nohup proot-distro login "$PROOT_DISTRO_ALIAS" \
+            --shared-tmp \
+            --fix-low-ports \
+            --bind "$TERMUX_DRIVES_PATH:$CHROOT_DRIVES_PATH" \
+            -- /bin/sh -lc "$proot_cmd" >> "$APP_LOG_PATH" 2>&1 </dev/null &
+        printf '%s\n' "$!" > "$APP_PID_PATH"
+    fi
     sleep 2
 
     pid="$(read_pid || true)"
-    if [ -z "$pid" ] || ! su -c "kill -0 '$pid'" >/dev/null 2>&1; then
+    if [ -z "$pid" ] || ! signal_pid "$pid"; then
         rm -f "$APP_PID_PATH"
         return 1
     fi
@@ -144,19 +208,19 @@ stop_service() {
     local pid=""
 
     pid="$(read_pid || true)"
-    if [ -n "$pid" ] && su -c "kill '$pid'" >/dev/null 2>&1; then
+    if [ -n "$pid" ] && kill_pid "$pid" TERM; then
         sleep 1
-        if su -c "kill -0 '$pid'" >/dev/null 2>&1; then
-            su -c "kill -9 '$pid'" >/dev/null 2>&1 || true
+        if signal_pid "$pid"; then
+            kill_pid "$pid" KILL || true
         fi
     fi
 
     list_matching_pids | while read -r extra_pid; do
         [ -n "$extra_pid" ] || continue
-        su -c "kill '$extra_pid'" >/dev/null 2>&1 || true
+        kill_pid "$extra_pid" TERM || true
         sleep 1
-        if su -c "kill -0 '$extra_pid'" >/dev/null 2>&1; then
-            su -c "kill -9 '$extra_pid'" >/dev/null 2>&1 || true
+        if signal_pid "$extra_pid"; then
+            kill_pid "$extra_pid" KILL || true
         fi
     done
     rm -f "$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT/${APP_SLUG}.pid"

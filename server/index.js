@@ -6157,6 +6157,88 @@ const buildArrDiagnostics = (serviceCatalog) => {
   };
 };
 
+const buildArrEvidence = (serviceCatalog) => {
+  const generatedAt = new Date().toISOString();
+  const qbConfig = probeQbittorrentConfig();
+  const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
+  const mismatches = [];
+  const expectedPaths = {
+    movies: MEDIA_DOWNLOADS_MOVIES_DIR,
+    series: MEDIA_DOWNLOADS_SERIES_DIR,
+    standalone: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
+  };
+  const actualPaths = {
+    movies: qbConfig.moviesCategoryPath || '',
+    series: qbConfig.seriesCategoryPath || '',
+    standalone: qbConfig.standaloneCategoryPath || '',
+  };
+
+  if (actualPaths.movies && path.resolve(actualPaths.movies) !== path.resolve(expectedPaths.movies)) {
+    mismatches.push('QBIT_MOVIES_PATH_MISMATCH');
+  }
+  if (actualPaths.series && path.resolve(actualPaths.series) !== path.resolve(expectedPaths.series)) {
+    mismatches.push('QBIT_SERIES_PATH_MISMATCH');
+  }
+  if (actualPaths.standalone && path.resolve(actualPaths.standalone) !== path.resolve(expectedPaths.standalone)) {
+    mismatches.push('QBIT_STANDALONE_PATH_MISMATCH');
+  }
+
+  const sonarr = serviceByKey.get('sonarr') || null;
+  const radarr = serviceByKey.get('radarr') || null;
+  const qbittorrent = serviceByKey.get('qbittorrent') || null;
+
+  if (!sonarr) {
+    mismatches.push('SONARR_CLIENT_MISSING');
+  }
+  if (!radarr) {
+    mismatches.push('RADARR_CLIENT_MISSING');
+  }
+  if (sonarr && !String(sonarr.route || '').trim()) {
+    mismatches.push('OPEN_TARGET_UNRESOLVED');
+  }
+  if (radarr && !String(radarr.route || '').trim()) {
+    mismatches.push('OPEN_TARGET_UNRESOLVED');
+  }
+  if (qbittorrent && !String(qbittorrent.route || '').trim()) {
+    mismatches.push('OPEN_TARGET_UNRESOLVED');
+  }
+
+  return {
+    generatedAt,
+    lastVerifiedAt: generatedAt,
+    staleAfterMs: 300000,
+    verificationMode: 'background',
+    qbittorrent: {
+      route: String(qbittorrent?.route || ''),
+      expected: expectedPaths,
+      actual: actualPaths,
+    },
+    serverMapping: {
+      movies: expectedPaths.movies,
+      series: expectedPaths.series,
+      standalone: expectedPaths.standalone,
+    },
+    sonarr: {
+      route: String(sonarr?.route || ''),
+      status: String(sonarr?.status || 'unknown'),
+      category: 'series',
+      remotePath: expectedPaths.series,
+    },
+    radarr: {
+      route: String(radarr?.route || ''),
+      status: String(radarr?.status || 'unknown'),
+      category: 'movies',
+      remotePath: expectedPaths.movies,
+    },
+    mismatches,
+    openChecks: {
+      qbittorrent: Boolean(qbittorrent?.route),
+      sonarr: Boolean(sonarr?.route),
+      radarr: Boolean(radarr?.route),
+    },
+  };
+};
+
 const buildUiInitialSectionMeta = (ok, payload, fallbackMessage) => ({
   generatedAt: payload?.generatedAt || new Date().toISOString(),
   ok,
@@ -6401,6 +6483,7 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
   ]);
   return {
     generatedAt: now,
+    arrEvidence: buildArrEvidence(serviceCatalog),
     workspaceKey,
     dashboard,
     services,

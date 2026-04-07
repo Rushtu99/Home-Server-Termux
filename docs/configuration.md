@@ -25,13 +25,26 @@ Core ports and bind hosts:
 The intended public surface is still nginx on `:8088`. For remote access, prefer Tailscale and keep the tailnet entrypoints limited to the gateway on `:8088` and SSH on `:8022`.
 
 Tailscale settings:
-- `TAILSCALE_MODE=disabled|android_app|managed_daemon`
+- `TAILSCALE_MODE=disabled|android_app|managed_daemon|root_daemon`
 - `TAILSCALE_DNS_NAME`, `TAILSCALE_IP` for stable app-mode links
 - `TAILSCALE_GATEWAY_PORT`, `TAILSCALE_SSH_PORT`
 - `TAILSCALE_EXPOSE_GATEWAY`, `TAILSCALE_EXPOSE_SSH`
 - managed mode only: `TAILSCALE_BIN`, `TAILSCALED_BIN`, `TAILSCALE_STATE_DIR`, `TAILSCALE_SOCKET`, `TAILSCALE_STATE_PATH`, `TAILSCALE_AUTH_KEY`, `TAILSCALE_HOSTNAME`
+- root-daemon mode: `TAILSCALE_ROOT_CMD` points to the root-owned CLI entrypoint, for example `su -c tailscale`
 
-On this Android/Termux host, `android_app` is the primary supported mode. `managed_daemon` requires both CLI binaries and a working `/dev/net/tun`; otherwise it should be treated as unsupported and the UI will report degraded remote access.
+On this Android/Termux host, `android_app` and `root_daemon` are the practical modes. `managed_daemon` requires both CLI binaries and a working `/dev/net/tun`; otherwise it should be treated as unsupported and the UI will report degraded remote access.
+
+## Boot and Unlock (GrapheneOS)
+
+GrapheneOS keeps credential-encrypted storage locked until the first unlock. Termux:Boot receives `BOOT_COMPLETED`, but scripts under `~/.termux/boot` cannot access `$HOME` until after unlock.
+
+To run the home-server boot flow immediately after the first unlock, install the Magisk post-unlock launcher:
+- `scripts/install-post-unlock-launcher.sh`
+
+To manually retrigger the post-unlock boot flow after unlocking:
+- `scripts/run-home-server-after-unlock.sh`
+
+Logs are written to `/data/adb/termux-home-server-unlock.log`.
 
 ## Storage and Media Layout
 

@@ -76,9 +76,21 @@ TTYD_BIND_HOST="${TTYD_BIND_HOST:-127.0.0.1}"
 SSHD_BIND_HOST="${SSHD_BIND_HOST:-127.0.0.1}"
 SSHD_PORT="${SSHD_PORT:-8022}"
 ENABLE_SSHD="${ENABLE_SSHD:-false}"
+SSHD_AUTH_MODE="${SSHD_AUTH_MODE:-password_and_key}"
+SSHD_AUTHORIZED_KEY_PATH="${SSHD_AUTHORIZED_KEY_PATH:-$USER_HOME/.ssh/id_ed25519.pub}"
+TERMUX_PREFIX="${TERMUX_PREFIX:-${PREFIX:-/data/data/com.termux/files/usr}}"
+SVDIR_PATH="${SVDIR_PATH:-${SVDIR:-$TERMUX_PREFIX/var/service}}"
+LOGDIR_PATH="${LOGDIR_PATH:-${LOGDIR:-$TERMUX_PREFIX/var/log}}"
+SERVICE_DAEMON_BIN="${SERVICE_DAEMON_BIN:-$TERMUX_PREFIX/bin/service-daemon}"
+SV_BIN="${SV_BIN:-$TERMUX_PREFIX/bin/sv}"
+SSHD_MANAGED_CONFIG_PATH="${SSHD_MANAGED_CONFIG_PATH:-$TERMUX_PREFIX/etc/ssh/sshd_config.d/50-home-server-managed.conf}"
+SSHD_SERVICE_LOG_PATH="${SSHD_SERVICE_LOG_PATH:-$LOGDIR_PATH/sv/sshd/current}"
+START_LOCK_WAIT_SECONDS="${START_LOCK_WAIT_SECONDS:-30}"
+TAILSCALE_MODE="${TAILSCALE_MODE:-disabled}"
 DRIVE_AGENT_CMD="${DRIVE_AGENT_CMD:-/data/data/com.termux/files/usr/bin/termux-drive-agent}"
 TERMUX_CLOUD_MOUNT_CMD="${TERMUX_CLOUD_MOUNT_CMD:-/data/data/com.termux/files/usr/bin/termux-cloud-mount}"
 LOOPBACK_LOCKDOWN_CMD="${LOOPBACK_LOCKDOWN_CMD:-$PROJECT/scripts/loopback-lockdown.sh}"
+TAILSCALE_SERVICE_CMD="${TAILSCALE_SERVICE_CMD:-$PROJECT/scripts/tailscale-service.sh}"
 LLM_SERVICE_CMD="${LLM_SERVICE_CMD:-$PROJECT/scripts/llm-service.sh}"
 MEDIA_IMPORTER_CMD="${MEDIA_IMPORTER_CMD:-$PROJECT/scripts/media-importer.sh}"
 MEDIA_WORKFLOW_SERVICE_CMD="${MEDIA_WORKFLOW_SERVICE_CMD:-$PROJECT/scripts/media-workflow-service.sh}"
@@ -203,31 +215,36 @@ RELOAD_REQUESTED=0
 acquire_start_lock() {
     local lock_pid_file="$START_LOCK_DIR/pid"
     local existing_pid=""
+    local waited=0
 
-    if mkdir "$START_LOCK_DIR" 2>/dev/null; then
-        printf '%s\n' "$$" > "$lock_pid_file"
-        return 0
-    fi
-
-    if [ -f "$lock_pid_file" ]; then
-        existing_pid="$(tr -d '[:space:]' < "$lock_pid_file" 2>/dev/null || true)"
-        if [ -n "$existing_pid" ] && [ "$existing_pid" = "$$" ]; then
+    while true; do
+        if mkdir "$START_LOCK_DIR" 2>/dev/null; then
+            printf '%s\n' "$$" > "$lock_pid_file"
             return 0
         fi
-        if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-            log_error "Another start.sh instance is already running (pid $existing_pid)"
-            exit 1
+
+        if [ -f "$lock_pid_file" ]; then
+            existing_pid="$(tr -d '[:space:]' < "$lock_pid_file" 2>/dev/null || true)"
+            if [ -n "$existing_pid" ] && [ "$existing_pid" = "$$" ]; then
+                return 0
+            fi
+            if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+                if [ "$waited" -ge "$START_LOCK_WAIT_SECONDS" ]; then
+                    log_error "Another start.sh instance is still running after ${START_LOCK_WAIT_SECONDS}s (pid $existing_pid)"
+                    exit 1
+                fi
+                if [ "$waited" -eq 0 ]; then
+                    log_info "Waiting for existing start.sh instance (pid $existing_pid)"
+                fi
+                sleep 1
+                waited=$((waited + 1))
+                continue
+            fi
         fi
-    fi
 
-    rm -rf "$START_LOCK_DIR" 2>/dev/null || true
-    if mkdir "$START_LOCK_DIR" 2>/dev/null; then
-        printf '%s\n' "$$" > "$lock_pid_file"
-        return 0
-    fi
-
-    log_error "Unable to acquire startup lock at $START_LOCK_DIR"
-    exit 1
+        log_warn "Recovering stale startup lock at $START_LOCK_DIR"
+        rm -rf "$START_LOCK_DIR" 2>/dev/null || true
+    done
 }
 
 release_start_lock() {
@@ -312,6 +329,83 @@ port_is_open() {
     fi
 
     ss -tuln 2>/dev/null | grep -q ":$port\\b"
+}
+
+ssh_probe_host() {
+    case "${1:-127.0.0.1}" in
+        0.0.0.0|'::'|'[::]'|'')
+            printf '127.0.0.1\n'
+            ;;
+        *)
+            printf '%s\n' "$1"
+            ;;
+    esac
+}
+
+ssh_listener_is_ready() {
+    local host="$1"
+    local port="$2"
+    local probe_host=""
+
+    probe_host="$(ssh_probe_host "$host")"
+    if command -v nc >/dev/null 2>&1; then
+        nc -z "$probe_host" "$port" >/dev/null 2>&1
+        return $?
+    fi
+
+    [ "$probe_host" = "127.0.0.1" ] && port_is_open "$port"
+}
+
+run_sv() {
+    env PREFIX="$TERMUX_PREFIX" SVDIR="$SVDIR_PATH" LOGDIR="$LOGDIR_PATH" "$SV_BIN" "$@"
+}
+
+run_service_daemon() {
+    env PREFIX="$TERMUX_PREFIX" SVDIR="$SVDIR_PATH" LOGDIR="$LOGDIR_PATH" "$SERVICE_DAEMON_BIN" "$@"
+}
+
+supervisor_pid() {
+    pgrep -f "$TERMUX_PREFIX/bin/runsvdir $SVDIR_PATH" | head -1 || true
+}
+
+supervisor_is_ready() {
+    local supervise_ok="$SVDIR_PATH/sshd/supervise/ok"
+
+    if [ -p "$supervise_ok" ]; then
+        return 0
+    fi
+
+    run_sv status sshd >/dev/null 2>&1
+}
+
+ensure_service_supervisor() {
+    local attempts=0
+    local pid=""
+
+    if [ ! -x "$SERVICE_DAEMON_BIN" ] || [ ! -x "$SV_BIN" ]; then
+        log_error "SSH failure class=SUPERVISOR_UNAVAILABLE missing service-daemon or sv binary"
+        return 1
+    fi
+
+    pid="$(supervisor_pid)"
+    if [ -z "$pid" ]; then
+        log_info "Ensuring Termux service supervisor"
+        run_service_daemon start >/dev/null 2>&1 || true
+    else
+        log_info "Termux service supervisor already running (pid $pid)"
+    fi
+
+    while [ "$attempts" -lt 10 ]; do
+        if supervisor_is_ready; then
+            log_info "Termux service supervisor ready"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        sleep 1
+    done
+
+    log_error "SSH failure class=SUPERVISOR_UNAVAILABLE service supervisor did not become ready"
+    return 1
 }
 
 wait_for_port() {
@@ -1083,17 +1177,335 @@ ensure_media_layout() {
     fi
 }
 
-stop_repo_sshd() {
-    stop_pidfile_process "sshd" "$SSHD_PID_PATH"
+ensure_bootstrap_ssh_key() {
+    local pubkey_path="$SSHD_AUTHORIZED_KEY_PATH"
+    local ssh_dir="$USER_HOME/.ssh"
+    local auth_keys="$ssh_dir/authorized_keys"
+    local pubkey_line=""
 
-    if [ -n "${SSH_CONNECTION:-}" ]; then
+    mkdir -p "$ssh_dir"
+    chmod 700 "$ssh_dir"
+    touch "$auth_keys"
+    chmod 600 "$auth_keys"
+
+    [ -f "$pubkey_path" ] || return 0
+
+    pubkey_line="$(grep -Ev '^[[:space:]]*(#|$)' "$pubkey_path" | head -1 || true)"
+    [ -n "$pubkey_line" ] || return 0
+
+    if ! grep -Fqx "$pubkey_line" "$auth_keys" 2>/dev/null; then
+        printf '%s\n' "$pubkey_line" >> "$auth_keys"
+        log_info "Added bootstrap SSH key from $pubkey_path"
+    fi
+}
+
+normalize_sshd_auth_mode() {
+    case "$SSHD_AUTH_MODE" in
+        key_only|password_only|password_and_key)
+            printf '%s\n' "$SSHD_AUTH_MODE"
+            ;;
+        *)
+            log_warn "Unknown SSHD_AUTH_MODE=$SSHD_AUTH_MODE; falling back to password_and_key"
+            printf 'password_and_key\n'
+            ;;
+    esac
+}
+
+ssh_expected_auth_flags() {
+    local normalized_mode=""
+
+    normalized_mode="$(normalize_sshd_auth_mode)"
+    case "$normalized_mode" in
+        key_only)
+            printf 'yes\nno\nno\n'
+            ;;
+        password_only)
+            printf 'no\nyes\nyes\n'
+            ;;
+        password_and_key)
+            printf 'yes\nyes\nyes\n'
+            ;;
+    esac
+}
+
+ssh_policy_payload() {
+    local auth_flags=""
+    local pubkey_auth=""
+    local password_auth=""
+    local kbd_auth=""
+
+    auth_flags="$(ssh_expected_auth_flags)"
+    pubkey_auth="$(printf '%s\n' "$auth_flags" | sed -n '1p')"
+    password_auth="$(printf '%s\n' "$auth_flags" | sed -n '2p')"
+    kbd_auth="$(printf '%s\n' "$auth_flags" | sed -n '3p')"
+
+    cat <<EOF
+Port $SSHD_PORT
+ListenAddress $SSHD_BIND_HOST
+PubkeyAuthentication $pubkey_auth
+PasswordAuthentication $password_auth
+KbdInteractiveAuthentication $kbd_auth
+EOF
+}
+
+ssh_policy_hash() {
+    ssh_policy_payload | sha256sum | awk '{print $1}'
+}
+
+render_managed_sshd_config() {
+    local config_hash=""
+
+    config_hash="$(ssh_policy_hash)"
+    cat <<EOF
+# managed-by home-server/start.sh
+# source-hash: $config_hash
+$(ssh_policy_payload)
+EOF
+}
+
+sync_managed_sshd_config() {
+    local config_dir=""
+    local tmp_file=""
+    local config_hash=""
+
+    config_dir="$(dirname "$SSHD_MANAGED_CONFIG_PATH")"
+    mkdir -p "$config_dir"
+    tmp_file="$(mktemp "$config_dir/50-home-server-managed.conf.XXXXXX")"
+    render_managed_sshd_config > "$tmp_file"
+    config_hash="$(ssh_policy_hash)"
+
+    if [ -f "$SSHD_MANAGED_CONFIG_PATH" ] && cmp -s "$tmp_file" "$SSHD_MANAGED_CONFIG_PATH"; then
+        rm -f "$tmp_file"
+        log_info "SSH managed config unchanged (hash=$config_hash)"
+        return 1
+    fi
+
+    mv "$tmp_file" "$SSHD_MANAGED_CONFIG_PATH"
+    chmod 600 "$SSHD_MANAGED_CONFIG_PATH"
+    log_info "SSH managed config regenerated (hash=$config_hash)"
+    return 0
+}
+
+ssh_expected_listenaddress() {
+    case "$SSHD_BIND_HOST" in
+        '::'|'[::]')
+            printf '[::]:%s\n' "$SSHD_PORT"
+            ;;
+        *)
+            printf '%s:%s\n' "$SSHD_BIND_HOST" "$SSHD_PORT"
+            ;;
+    esac
+}
+
+ssh_current_policy_matches() {
+    local effective_config=""
+    local auth_flags=""
+    local expected_listen=""
+    local pubkey_expected=""
+    local password_expected=""
+    local kbd_expected=""
+
+    effective_config="$(sshd -T 2>/dev/null || true)"
+    [ -n "$effective_config" ] || return 1
+
+    auth_flags="$(ssh_expected_auth_flags)"
+    pubkey_expected="$(printf '%s\n' "$auth_flags" | sed -n '1p')"
+    password_expected="$(printf '%s\n' "$auth_flags" | sed -n '2p')"
+    kbd_expected="$(printf '%s\n' "$auth_flags" | sed -n '3p')"
+    expected_listen="$(ssh_expected_listenaddress)"
+
+    printf '%s\n' "$effective_config" | grep -qx "port $SSHD_PORT" || return 1
+    printf '%s\n' "$effective_config" | grep -qx "pubkeyauthentication $pubkey_expected" || return 1
+    printf '%s\n' "$effective_config" | grep -qx "passwordauthentication $password_expected" || return 1
+    printf '%s\n' "$effective_config" | grep -qx "kbdinteractiveauthentication $kbd_expected" || return 1
+    printf '%s\n' "$effective_config" | grep -qx "listenaddress $expected_listen" || return 1
+}
+
+sshd_service_running() {
+    run_sv status sshd 2>/dev/null | grep -q '^run: sshd:'
+}
+
+sshd_process_count() {
+    pgrep -x sshd | wc -l | tr -d '[:space:]'
+}
+
+sshd_session_count() {
+    pgrep -f '/data/data/com.termux/files/usr/libexec/sshd-session' | wc -l | tr -d '[:space:]'
+}
+
+stop_unmanaged_sshd() {
+    local pid=""
+    local attempts=0
+
+    pid="$(pgrep -x sshd | head -1 || true)"
+    [ -n "$pid" ] || return 0
+
+    log_warn "Stopping unmanaged sshd (pid $pid) so repo-managed sshd can take over"
+    kill "$pid" 2>/dev/null || true
+    while [ "$attempts" -lt 10 ]; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        sleep 1
+    done
+
+    log_error "SSH failure class=START_TIMEOUT unmanaged sshd pid $pid did not exit"
+    return 1
+}
+
+log_sshd_diagnostics() {
+    local failure_class="$1"
+    local service_status=""
+    local sshd_count=""
+    local session_count=""
+    local line=""
+
+    service_status="$(run_sv status sshd 2>/dev/null || echo unavailable)"
+    sshd_count="$(sshd_process_count)"
+    session_count="$(sshd_session_count)"
+
+    log_error "SSH failure class=$failure_class"
+    log_error "SSH supervisor status: $service_status"
+    log_error "SSH listener probe host=$(ssh_probe_host "$SSHD_BIND_HOST") port=$SSHD_PORT ready=$(ssh_listener_is_ready "$SSHD_BIND_HOST" "$SSHD_PORT" && printf yes || printf no)"
+    log_error "SSH process count: ${sshd_count:-0}"
+    log_error "SSH session count: ${session_count:-0}"
+    log_error "SSH policy hash: $(ssh_policy_hash)"
+
+    if [ -f "$SSHD_SERVICE_LOG_PATH" ]; then
+        while IFS= read -r line; do
+            log_error "SSH service log: $line"
+        done <<EOF
+$(tail -n 50 "$SSHD_SERVICE_LOG_PATH" 2>/dev/null || true)
+EOF
+    fi
+}
+
+wait_for_sshd_supervised() {
+    local attempts=0
+
+    log_info "Waiting for sshd on $SSHD_BIND_HOST:$SSHD_PORT"
+    while [ "$attempts" -lt 15 ]; do
+        if sshd_service_running && ssh_listener_is_ready "$SSHD_BIND_HOST" "$SSHD_PORT"; then
+            log_info "sshd is up on $SSHD_BIND_HOST:$SSHD_PORT"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        sleep 1
+    done
+
+    log_sshd_diagnostics "START_TIMEOUT"
+    return 1
+}
+
+stop_repo_sshd() {
+    if ! supervisor_is_ready; then
         return 0
     fi
 
-    if pgrep sshd >/dev/null 2>&1; then
-        log_info "Stopping public sshd instances to keep nginx as the only exposed entrypoint"
-        pkill sshd >/dev/null 2>&1 || true
+    if sshd_service_running; then
+        log_info "Stopping repo-managed sshd"
+        run_sv down sshd >/dev/null 2>&1 || true
+        rm -f "$SSHD_PID_PATH"
     fi
+}
+
+start_tailscale_service() {
+    if [ "$TAILSCALE_MODE" = "disabled" ] || [ "$TAILSCALE_MODE" = "android_app" ]; then
+        return 0
+    fi
+
+    if [ ! -x "$TAILSCALE_SERVICE_CMD" ]; then
+        log_warn "Skipping Tailscale (helper not found: $TAILSCALE_SERVICE_CMD)"
+        return 0
+    fi
+
+    log_info "Ensuring Tailscale"
+    if ! "$TAILSCALE_SERVICE_CMD" start >/dev/null 2>&1; then
+        log_warn "Tailscale start failed (check root daemon and Tailscale auth state)"
+        return 0
+    fi
+}
+
+start_repo_sshd() {
+    local config_changed=0
+    local sshd_count=0
+    local attempts=0
+
+    if [ "$ENABLE_SSHD" != "true" ] || ! command -v sshd >/dev/null 2>&1; then
+        stop_repo_sshd
+        log_info "sshd disabled in single-port mode"
+        return 0
+    fi
+
+    ensure_bootstrap_ssh_key
+    if ! ensure_service_supervisor; then
+        return 1
+    fi
+
+    if sync_managed_sshd_config; then
+        config_changed=1
+    fi
+
+    if ssh_listener_is_ready "$SSHD_BIND_HOST" "$SSHD_PORT"; then
+        sshd_count="$(sshd_process_count)"
+        if [ "${sshd_count:-0}" = "1" ] && ssh_current_policy_matches; then
+            rm -f "$SSHD_PID_PATH"
+            if sshd_service_running; then
+                log_info "Reusing existing repo-managed sshd on $(ssh_probe_host "$SSHD_BIND_HOST"):$SSHD_PORT"
+            else
+                log_warn "Reusing unmanaged sshd on $(ssh_probe_host "$SSHD_BIND_HOST"):$SSHD_PORT"
+            fi
+            return 0
+        fi
+
+        if [ "${sshd_count:-0}" = "0" ]; then
+            log_sshd_diagnostics "PORT_CONFLICT_NON_SSHD"
+            return 1
+        fi
+
+        if ! sshd_service_running; then
+            if [ "$(sshd_session_count)" = "0" ]; then
+                if ! stop_unmanaged_sshd; then
+                    return 1
+                fi
+            else
+                log_sshd_diagnostics "POLICY_DRIFT_ACTIVE_SESSIONS"
+                return 1
+            fi
+        fi
+
+        if ssh_listener_is_ready "$SSHD_BIND_HOST" "$SSHD_PORT" && ! sshd_service_running; then
+            log_sshd_diagnostics "POLICY_DRIFT"
+            return 1
+        fi
+    fi
+
+    if sshd_service_running; then
+        log_info "Restarting repo-managed sshd"
+        run_sv down sshd >/dev/null 2>&1 || true
+        while [ "$attempts" -lt 10 ]; do
+            if ! ssh_listener_is_ready "$SSHD_BIND_HOST" "$SSHD_PORT"; then
+                break
+            fi
+            attempts=$((attempts + 1))
+            sleep 1
+        done
+    else
+        log_info "Starting sshd"
+    fi
+
+    run_sv up sshd >/dev/null 2>&1 || true
+    if ! wait_for_sshd_supervised; then
+        if [ "$config_changed" -eq 1 ]; then
+            log_error "SSH managed config changed immediately before startup"
+        fi
+        log_sshd_diagnostics "SSHD_BIND_FAILURE"
+        return 1
+    fi
+
+    rm -f "$SSHD_PID_PATH"
+    return 0
 }
 
 stop_managed_services() {
@@ -1101,7 +1513,6 @@ stop_managed_services() {
     stop_pidfile_process "backend" "$BACKEND_PID_PATH"
     stop_pidfile_process "frontend" "$FRONTEND_PID_PATH"
     stop_pidfile_process "ttyd" "$TTYD_PID_PATH"
-    stop_pidfile_process "sshd" "$SSHD_PID_PATH"
     stop_pidfile_process "copyparty" "$COPYPARTY_PID_PATH"
     stop_pidfile_process "syncthing" "$SYNCTHING_PID_PATH"
     stop_pidfile_process "samba" "$SAMBA_PID_PATH"
@@ -1336,6 +1747,9 @@ fi
 
 stop_managed_services
 stop_legacy_services
+start_tailscale_service
+log_info "Checking SSH"
+start_repo_sshd
 
 if ! ensure_node_dependencies "$PROJECT/server" "backend"; then
     log_error "Backend dependencies check failed; aborting startup."
@@ -1345,20 +1759,6 @@ fi
 if ! ensure_node_dependencies "$PROJECT/dashboard" "dashboard"; then
     log_error "Dashboard dependencies check failed; aborting startup."
     exit 1
-fi
-
-log_info "Checking SSH"
-if [ "$ENABLE_SSHD" = "true" ] && command -v sshd >/dev/null 2>&1; then
-    stop_repo_sshd
-    start_background_command \
-        "sshd" \
-        "$SSHD_PORT" \
-        "$SSHD_PID_PATH" \
-        "mkdir -p '$LOG_DIR'; exec sshd -D -E '$LOG_DIR/sshd.log' -o ListenAddress='$SSHD_BIND_HOST' -o Port='$SSHD_PORT' > '$LOG_DIR/sshd-stdout.log' 2>&1" \
-        "$SSHD_BIND_HOST"
-else
-    stop_repo_sshd
-    log_info "sshd disabled in single-port mode"
 fi
 
 start_background_command \

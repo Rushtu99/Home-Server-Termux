@@ -4,6 +4,7 @@
   grid-template-columns: 236px 1fr;
   background: var(--background);
   color: var(--foreground);
+  font-size: 13px;
 }
 
 .dash2-sidebar {
@@ -19,13 +20,13 @@
 
 .dash2-brand strong {
   display: block;
-  font-size: 18px;
+  font-size: 17px;
   letter-spacing: 0.02em;
 }
 
 .dash2-brand span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-nav {
@@ -85,9 +86,9 @@
 }
 
 .dash2-main {
-  padding: 12px;
+  padding: 10px;
   display: grid;
-  gap: 10px;
+  gap: 9px;
 }
 
 .dash2-sidebar-backdrop {
@@ -98,12 +99,12 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-raised) 86%, transparent);
-  padding: 10px;
+  padding: 7px 9px;
   overflow: hidden;
 }
 
@@ -113,13 +114,13 @@
 
 .dash2-header h1 {
   margin: 0;
-  font-size: clamp(20px, 2vw, 28px);
+  font-size: clamp(18px, 1.6vw, 24px);
 }
 
 .dash2-header p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .dash2-header__meta {
@@ -127,10 +128,50 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
   justify-content: flex-end;
   min-width: 0;
+}
+
+.dash2-header__search {
+  position: relative;
+  min-width: min(100%, 260px);
+  flex: 1 1 240px;
+}
+
+.dash2-header__search .ui-input {
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.dash2-search-results {
+  position: absolute;
+  inset: calc(100% + 6px) 0 auto;
+  z-index: 30;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+}
+
+.dash2-search-result {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
+  color: inherit;
+}
+
+.dash2-search-result small,
+.dash2-search-results__empty {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .dash2-theme-picker {
@@ -139,12 +180,30 @@
 }
 
 .dash2-theme-picker span {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
 }
 
 .dash2-theme-picker select {
   min-width: 128px;
+}
+
+.dash2-utility-menu {
+  position: relative;
+}
+
+.dash2-utility-menu__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 180px;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 97%, transparent);
 }
 
 .dash2-sidebar-toggle {
@@ -189,13 +248,13 @@
 
 .dash2-card__header h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .dash2-card__header p {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-card__body {
@@ -291,26 +350,26 @@
 .dash2-metric__label {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-metric__value {
   margin: 5px 0 0;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .dash2-metric__helper {
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-badge {
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.3;
 }
 
@@ -352,7 +411,7 @@
 
 .dash2-kv dt {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-kv dd {
@@ -389,11 +448,11 @@
 .dash2-service-list p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-small-copy {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   line-height: 1.35;
   word-break: break-word;
@@ -494,7 +553,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-admin-controls__actions {
@@ -507,7 +566,7 @@
 .dash2-admin-controls__status {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-service-admin-grid {
@@ -535,7 +594,7 @@
 .dash2-service-admin-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-service-admin-card__meta {
@@ -543,7 +602,7 @@
   gap: 8px;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-service-admin-card__actions {
@@ -555,7 +614,7 @@
 .dash2-service-admin-card__actions--compact .ui-button {
   padding: 4px 8px;
   min-height: 28px;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-ui-button--small {
@@ -579,7 +638,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-tab-switcher {
@@ -591,7 +650,7 @@
 .dash2-tab-switcher .ui-button {
   min-height: 28px;
   padding: 4px 9px;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-tab-switcher__button--active {
@@ -610,7 +669,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-torrent-controls__row {
@@ -628,7 +687,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-chatbox-layout {
@@ -647,7 +706,7 @@
 
 .dash2-chatbox-rail h3 {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .dash2-chat-history-item {
@@ -718,17 +777,17 @@
 .dash2-workflow-card__step {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-workflow-card__header h3 {
   margin: 4px 0 0;
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .dash2-workflow-card__summary {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.45;
   color: color-mix(in srgb, var(--foreground) 88%, var(--muted));
 }
@@ -738,7 +797,7 @@
   padding-left: 18px;
   display: grid;
   gap: 8px;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -758,7 +817,7 @@
 
 .dash2-media-health-card h3 {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .dash2-terminal-layout {
@@ -768,7 +827,7 @@
 
 .dash2-terminal-mini {
   width: 100%;
-  min-height: 260px;
+  min-height: 520px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 8px;
   background: #0b0f14;
@@ -799,7 +858,7 @@
 
 .dash2-chat-log__entry strong {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
 }
 
@@ -817,8 +876,51 @@
 }
 
 .dash2-admin-note {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
+}
+
+.dash2-wrap-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.dash2-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.dash2-form-grid label,
+.dash2-checkbox-row {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.dash2-checkbox-row {
+  align-content: center;
+  grid-auto-flow: column;
+  justify-content: start;
+}
+
+.dash2-log-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.dash2-log-line {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 170px) 60px 1fr;
+  gap: 8px;
+  font-size: 11px;
 }
 
 .dash2-header__lead {
@@ -935,14 +1037,35 @@ html[data-style="filesystem"] .dash2-graph-card--legacy,
 html[data-style="filesystem"] .dash2-loading,
 html[data-style="filesystem"] .dash2-empty,
 html[data-style="filesystem"] .dash2-error,
-html[data-style="filesystem"] .dash2-login-card {
+html[data-style="filesystem"] .dash2-login-card,
+html[data-style="filesystem"] .dash2-metric,
+html[data-style="filesystem"] .dash2-list li,
+html[data-style="filesystem"] .dash2-service-list li,
+html[data-style="filesystem"] .dash2-search-result,
+html[data-style="filesystem"] .dash2-search-results,
+html[data-style="filesystem"] .dash2-utility-menu__panel {
   border-radius: 6px;
+  background: color-mix(in srgb, var(--background) 92%, var(--panel));
+  box-shadow: none;
 }
 
 html[data-style="filesystem"] .dash2-main,
 html[data-style="filesystem"] .dash2-sidebar {
   padding: 10px;
   gap: 10px;
+}
+
+html[data-style="filesystem"] .dash2-header,
+html[data-style="filesystem"] .dash2-card,
+html[data-style="filesystem"] .dash2-nav__item,
+html[data-style="filesystem"] .dash2-metric,
+html[data-style="filesystem"] .dash2-list li,
+html[data-style="filesystem"] .dash2-service-list li,
+html[data-style="filesystem"] .dash2-chatbox-thread,
+html[data-style="filesystem"] .dash2-chatbox-rail,
+html[data-style="filesystem"] .dash2-service-admin-card {
+  background: color-mix(in srgb, var(--background) 93%, var(--panel));
+  border-color: color-mix(in srgb, var(--border) 86%, transparent);
 }
 
 html[data-style="filesystem"] .dash2-card__header,
@@ -1023,6 +1146,16 @@ html[data-style="filesystem"] .dash2-chatbox-layout {
   }
 
   .dash2-terminal-mini {
-    min-height: 210px;
+    min-height: 420px;
+  }
+}
+
+@media (max-width: 640px) {
+  .dash2-log-line {
+    grid-template-columns: 1fr;
+  }
+
+  .dash2-terminal-mini {
+    min-height: 320px;
   }
 }
