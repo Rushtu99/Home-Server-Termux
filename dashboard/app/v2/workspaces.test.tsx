@@ -30,6 +30,58 @@ vi.mock('./api', () => ({
 }));
 
 describe('WorkspaceViewport', () => {
+  it('renders compact ARR controls for the media workspace layout', () => {
+    const { container } = render(
+      <WorkspaceViewport
+        workspace="media"
+        payload={{
+          mediaWorkflow: {
+            watch: { label: 'Jellyfin', summary: 'Playback ready', serviceKeys: ['jellyfin'], status: 'working' },
+            requests: { status: 'working', serviceKeys: ['jellyseerr'], summary: 'Requests online' },
+            automation: { status: 'working', healthy: 3, total: 3, serviceKeys: ['prowlarr', 'sonarr', 'radarr'] },
+            subtitles: { status: 'working', summary: 'Bazarr healthy' },
+            liveTv: { channelCount: 12, summary: 'Guide synced', status: 'working' },
+          },
+          mediaHealth: {
+            available: false,
+            status: 'unavailable',
+            error: 'No Jellyfin API key configured',
+            totals: {},
+            libraries: [],
+            activeSessions: [],
+          },
+          services: [
+            { key: 'sonarr', label: 'Sonarr', available: true, status: 'working', route: '/sonarr/', description: 'Series automation' },
+            { key: 'radarr', label: 'Radarr', available: true, status: 'working', route: '/radarr/', description: 'Movie automation' },
+            { key: 'prowlarr', label: 'Prowlarr', available: true, status: 'working', route: '/prowlarr/', description: 'Indexer sync' },
+            { key: 'bazarr', label: 'Bazarr', available: true, status: 'working', route: '/bazarr/', description: 'Subtitle sync' },
+            { key: 'jellyseerr', label: 'Jellyseerr', available: true, status: 'working', route: '/jellyseerr/', description: 'Requests' },
+          ],
+          arrDiagnostics: { healthy: 4, total: 4 },
+          qbDiagnostics: {
+            webUiReachable: true,
+            version: '5.0.0',
+            baseUrl: 'http://127.0.0.1:8081',
+            defaultSavePath: '/downloads/manual',
+            categories: {
+              movies: '/downloads/movies',
+              series: '/downloads/series',
+              standalone: '/downloads/manual',
+            },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText('ARR + qB diagnostics')).toBeInTheDocument();
+    expect(screen.getByText('Torrent source')).toBeInTheDocument();
+    expect(screen.getByText('Media type')).toBeInTheDocument();
+    expect(screen.getByText('Add to ARR queue')).toBeInTheDocument();
+    expect(container.querySelectorAll('a.ui-button').length).toBeGreaterThanOrEqual(4);
+    expect(container.querySelector('.dash2-torrent-controls__row')).toBeTruthy();
+    expect(container.querySelectorAll('.dash2-service-admin-card__actions--compact').length).toBeGreaterThan(0);
+  });
+
   it('restores the transfers connect workspace with wrapped action rows', () => {
     const { container } = render(
       <WorkspaceViewport
@@ -89,6 +141,50 @@ describe('WorkspaceViewport', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Help' }));
     expect(screen.getByText('Operator help')).toBeInTheDocument();
     expect(screen.getByText(/Requests go through Jellyseerr/i)).toBeInTheDocument();
+  });
+
+  it('keeps unlocked admin controls in the compact action row', () => {
+    const { container } = render(
+      <WorkspaceViewport
+        workspace="admin"
+        payload={{
+          dashboard: {
+            generatedAt: '2026-04-06T00:00:00.000Z',
+            serviceCatalog: [
+              {
+                key: 'jellyseerr',
+                label: 'Jellyseerr',
+                status: 'working',
+                available: true,
+                controlMode: 'manual',
+                description: 'Request intake',
+              },
+            ],
+            serviceController: { locked: false, optionalServices: ['jellyseerr'] },
+            networkExposure: { core: [], services: [], overall: 'unknown' },
+            tailscale: {},
+            remoteAccess: { gateway: {}, ssh: {} },
+            logs: { entries: [], verboseLoggingEnabled: false },
+          },
+          arrEvidence: { mismatches: [] },
+        }}
+        adminActions={{
+          adminPassword: 'secret',
+          controlBusyKey: '',
+          controlStatus: '',
+          lockBusy: false,
+          onAdminPasswordChange: vi.fn(),
+          onControl: vi.fn(),
+          onUnlock: vi.fn(),
+          onLock: vi.fn(),
+        }}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Start' })).toHaveClass('dash2-ui-button--small');
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass('dash2-ui-button--small');
+    expect(screen.getByRole('button', { name: 'Restart' })).toHaveClass('dash2-ui-button--small');
+    expect(container.querySelector('.dash2-service-admin-card__actions--compact')).toBeTruthy();
   });
 
   it('removes route and notes rows from terminal workspace metadata', () => {
