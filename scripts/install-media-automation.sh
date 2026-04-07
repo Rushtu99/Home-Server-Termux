@@ -71,6 +71,41 @@ download_release() {
     curl -fL "$url" -o "$archive"
 }
 
+read_required_node_major() {
+    local package_json="$1"
+
+    node - "$package_json" <<'NODE'
+const fs = require('fs');
+const pkg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const range = String(pkg.engines?.node || '');
+const match = range.match(/\^(\d+)/);
+if (match) {
+  process.stdout.write(match[1]);
+}
+NODE
+}
+
+ensure_package_node_compatibility() {
+    local package_json="$1"
+    local package_name="$2"
+    local node_version="" current_major="" required_major=""
+
+    command -v node >/dev/null 2>&1 || {
+        echo "$package_name requires node to build, but node is not installed." >&2
+        return 1
+    }
+
+    node_version="$(node -v 2>/dev/null || true)"
+    current_major="${node_version#v}"
+    current_major="${current_major%%.*}"
+    required_major="$(read_required_node_major "$package_json" 2>/dev/null || true)"
+
+    if [ -n "$required_major" ] && [ "$current_major" != "$required_major" ]; then
+        echo "$package_name requires Node ${required_major}.x, but found $node_version. Install or switch to Node ${required_major} and rerun this installer." >&2
+        return 1
+    fi
+}
+
 install_servarr_app() {
     local slug="$1"
     local url="$2"
@@ -111,6 +146,8 @@ install_jellyseerr() {
     tar -xzf "$archive" -C "$target" --strip-components=1
     cd "$target"
 
+    ensure_package_node_compatibility "$target/package.json" "Jellyseerr"
+
     package_manager="$(node -p "require('./package.json').packageManager || ''" 2>/dev/null || true)"
     if [ -n "$package_manager" ] && printf '%s' "$package_manager" | grep -q '^pnpm@'; then
         if command -v corepack >/dev/null 2>&1; then
@@ -118,6 +155,10 @@ install_jellyseerr() {
             CYPRESS_INSTALL_BINARY=0 corepack pnpm install --frozen-lockfile --config.engine-strict=false
             CYPRESS_INSTALL_BINARY=0 corepack pnpm build --config.engine-strict=false
         else
+            command -v npx >/dev/null 2>&1 || {
+                echo "Jellyseerr uses pnpm; install corepack or make npx available before rerunning with INSTALL_JELLYSEERR=1." >&2
+                return 1
+            }
             CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 install --frozen-lockfile --config.engine-strict=false
             CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 build --config.engine-strict=false
         fi

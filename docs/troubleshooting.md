@@ -74,25 +74,27 @@ Then verify the service wrappers still agree with the repo-managed layout:
 
 If this keeps drifting, re-check `MEDIA_VAULT_ROOT`, `MEDIA_SCRATCH_ROOT`, and the `/mnt/termux-drives` bind mount inside the proot environment.
 
-## Jellyseerr Fails To Start
+## Jellyseerr `/requests` Is Unavailable
 
 Check:
 
 ```bash
-scripts/jellyseerr-service.sh status --json
+scripts/jellyseerr-service.sh doctor
 tail -n 100 logs/jellyseerr.log
 ```
 
-Common causes:
-- Jellyseerr was never installed because `INSTALL_JELLYSEERR` was left at `0`
-- `~/services/jellyseerr/app/dist/index.js` is missing because the install/build step failed
-- the local Node runtime is too old for the pinned Jellyseerr release
+Typical causes:
+- Jellyseerr source was unpacked but `dist/index.js` was never built
+- `node_modules` is missing under `~/services/jellyseerr/app`
+- the host Node runtime does not satisfy Jellyseerr's pinned engine (currently Node 22.x; Node 25.x will fail with `ERR_PNPM_UNSUPPORTED_ENGINE`)
 
-Repair by re-running the installer with Jellyseerr enabled:
+Recovery path:
 
 ```bash
 INSTALL_JELLYSEERR=1 scripts/install-media-automation.sh
 ```
+
+If the source tree and dependencies already exist, `scripts/jellyseerr-service.sh start` now attempts a one-time rebuild before launching. If the doctor command reports a Node-major mismatch, switch the Termux Node install to the required major first; nginx already proxies `/requests/`, so a Node-engine mismatch is a host runtime blocker rather than a proxy/config issue.
 
 ## Local LLM Fails To Start
 
