@@ -68,6 +68,7 @@ type DemoFsOperation = {
 type DemoFtpMountState = {
   error?: string;
   mountName: string;
+  mirrorMountPoint?: string;
   mountPoint: string;
   mounted: boolean;
   pid?: number | null;
@@ -139,11 +140,11 @@ const SERVICE_META: DemoServiceCatalogEntry[] = [
   { available: true, controlMode: 'always_on', description: 'Browser terminal access inside the dashboard.', group: 'platform', key: 'ttyd', label: 'ttyd', placeholder: false, route: '/term/', status: 'working', surface: 'terminal' },
   { available: true, controlMode: 'always_on', description: 'Streams your movie and series library to local clients.', group: 'media', key: 'jellyfin', label: 'Jellyfin', placeholder: false, route: '/jellyfin/', status: 'working', surface: 'media' },
   { available: true, controlMode: 'always_on', description: 'Handles automated and manual torrent downloads alongside the dedicated downloads workspace.', group: 'downloads', key: 'qbittorrent', label: 'qBittorrent', placeholder: false, route: '/qb/', status: 'working', surface: 'downloads' },
-  { available: false, blocker: 'Currently blocked on Android-native Node/chroot packaging.', controlMode: 'always_on', description: 'Request portal for adding movies and shows into the automation flow.', group: 'media', key: 'jellyseerr', label: 'Jellyseerr', placeholder: true, route: '/requests/', status: 'unavailable', surface: 'media' },
+  { available: false, blocker: 'Currently blocked on Next.js Android SWC build support for this host.', controlMode: 'always_on', description: 'Request portal for adding movies and shows into the automation flow.', group: 'media', key: 'jellyseerr', label: 'Jellyseerr', placeholder: true, route: '/requests/', status: 'unavailable', surface: 'media' },
   { available: true, controlMode: 'always_on', description: 'Automates series discovery, tracking, and download handoff.', group: 'arr', key: 'sonarr', label: 'Sonarr', placeholder: false, route: '/sonarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Automates movie discovery, tracking, and download handoff.', group: 'arr', key: 'radarr', label: 'Radarr', placeholder: false, route: '/radarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Central indexer manager for Sonarr and Radarr.', group: 'arr', key: 'prowlarr', label: 'Prowlarr', placeholder: false, route: '/prowlarr/', status: 'working', surface: 'arr' },
-  { available: false, blocker: 'Currently blocked on Python native dependencies for this host.', controlMode: 'always_on', description: 'Subtitle automation for imported media libraries.', group: 'arr', key: 'bazarr', label: 'Bazarr', placeholder: true, status: 'unavailable', surface: 'arr' },
+  { available: true, controlMode: 'always_on', description: 'Subtitle automation for imported media libraries.', group: 'arr', key: 'bazarr', label: 'Bazarr', placeholder: false, route: '/bazarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Persistent database for IPTV services and future media metadata.', group: 'data', key: 'postgres', label: 'PostgreSQL', placeholder: false, status: 'working', surface: 'media' },
   { available: true, controlMode: 'always_on', description: 'Cache and worker coordination for IPTV and background jobs.', group: 'data', key: 'redis', label: 'Redis', placeholder: false, status: 'working', surface: 'media' },
   { available: true, controlMode: 'optional', description: 'Legacy remote access and PS4-compatible transfer path.', group: 'access', key: 'ftp', label: 'FTP', placeholder: false, status: 'working', surface: 'ftp' },
@@ -459,6 +460,7 @@ const seedState = (): DemoState => {
       id: 1,
       mount: {
         mountName: 'PS4',
+        mirrorMountPoint: '/mnt/termux-drives/PS4',
         mountPoint: '/data/data/com.termux/files/home/Drives/PS4',
         mounted: true,
         pid: 8123,
@@ -772,18 +774,20 @@ const aggregateCatalogStatus = (entries: DemoServiceCatalogEntry[]) => {
 };
 
 const DEMO_TORRENT_ADD_ENDPOINT = '/api/media/torrents/add';
+const DEMO_VAULT_ROOT = '~/Drives/D (Media Archive)/VAULT/Media';
+const DEMO_SCRATCH_ROOT = '~/Drives/E (Cold Backup)/SCRATCH/HmSTxScratch';
 const DEMO_TORRENT_LANES = {
   arrMovies: {
     category: 'movies',
-    savePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/movies',
+    savePath: `${DEMO_SCRATCH_ROOT}/downloads/movies`,
   },
   arrSeries: {
     category: 'series',
-    savePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/series',
+    savePath: `${DEMO_SCRATCH_ROOT}/downloads/series`,
   },
   standalone: {
     category: 'standalone',
-    savePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/torrent/qbit',
+    savePath: `${DEMO_SCRATCH_ROOT}/downloads/torrent/qbit`,
   },
 } as const;
 
@@ -857,10 +861,10 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
     },
     storage: {
       compatibilityRoot: '~/Drives/Media',
-      vaultRoot: '~/Drives/D/VAULT/Media',
-      vaultRoots: ['~/Drives/D/VAULT/Media'],
-      scratchRoot: '~/Drives/E/SCRATCH/HmSTxScratch',
-      scratchRoots: ['~/Drives/E/SCRATCH/HmSTxScratch'],
+      vaultRoot: DEMO_VAULT_ROOT,
+      vaultRoots: [DEMO_VAULT_ROOT],
+      scratchRoot: DEMO_SCRATCH_ROOT,
+      scratchRoots: [DEMO_SCRATCH_ROOT],
       importAbortFreeGb: 200,
       vaultWarnFreeGb: 250,
       scratchWarnFreeGb: 150,
@@ -869,14 +873,14 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
       scratchMinFreeGb: 200,
       scratchCleanupEnabled: true,
       cleanupMode: 'hybrid_age_and_size',
-      importReviewDir: '~/Drives/E/SCRATCH/HmSTxScratch/review',
-      importLogDir: '~/Drives/E/SCRATCH/HmSTxScratch/logs',
-      transcodeDir: '~/Drives/E/SCRATCH/HmSTxScratch/cache/jellyfin',
-      miscCacheDir: '~/Drives/E/SCRATCH/HmSTxScratch/cache/misc',
-      qbitTempDir: '~/Drives/E/SCRATCH/HmSTxScratch/tmp/qbittorrent',
-      qbitDefaultSavePath: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual',
+      importReviewDir: `${DEMO_SCRATCH_ROOT}/review`,
+      importLogDir: `${DEMO_SCRATCH_ROOT}/logs`,
+      transcodeDir: `${DEMO_SCRATCH_ROOT}/cache/jellyfin`,
+      miscCacheDir: `${DEMO_SCRATCH_ROOT}/cache/misc`,
+      qbitTempDir: `${DEMO_SCRATCH_ROOT}/tmp/qbittorrent`,
+      qbitDefaultSavePath: `${DEMO_SCRATCH_ROOT}/downloads/manual`,
       qbitCategoryPaths: {
-        manual: '~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual',
+        manual: `${DEMO_SCRATCH_ROOT}/downloads/manual`,
         movies: DEMO_TORRENT_LANES.arrMovies.savePath,
         series: DEMO_TORRENT_LANES.arrSeries.savePath,
         standalone: DEMO_TORRENT_LANES.standalone.savePath,
@@ -937,14 +941,14 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
         vault: {
           healthy: true,
           reason: '',
-          drives: ['~/Drives/D'],
-          roots: ['~/Drives/D/VAULT/Media'],
+          drives: ['~/Drives/D (Media Archive)'],
+          roots: [DEMO_VAULT_ROOT],
         },
         scratch: {
           healthy: true,
           reason: '',
-          drives: ['~/Drives/E'],
-          roots: ['~/Drives/E/SCRATCH/HmSTxScratch'],
+          drives: ['~/Drives/E (Cold Backup)'],
+          roots: [DEMO_SCRATCH_ROOT],
         },
       },
     },
@@ -2366,6 +2370,7 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
       id: Math.max(0, ...demoState.ftpFavourites.map((entry) => entry.id)) + 1,
       mount: {
         mountName: String(body.mountName || body.name || 'Remote'),
+        mirrorMountPoint: `/mnt/termux-drives/${String(body.mountName || body.name || 'Remote')}`,
         mountPoint: `/data/data/com.termux/files/home/Drives/${String(body.mountName || body.name || 'Remote')}`,
         mounted: false,
         remoteName: String(body.name || 'Remote'),
@@ -2431,6 +2436,12 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
     favourite.secure = Boolean(body.secure);
     favourite.remotePath = String(body.remotePath || favourite.remotePath);
     favourite.mountName = String(body.mountName || favourite.mountName);
+    favourite.mount = {
+      ...favourite.mount,
+      mirrorMountPoint: `/mnt/termux-drives/${favourite.mountName}`,
+      mountName: favourite.mountName,
+      mountPoint: `/data/data/com.termux/files/home/Drives/${favourite.mountName}`,
+    };
     favourite.updatedAt = nowIso();
     pushLog(demoState, 'info', 'Demo FTP favourite updated', { id, name: favourite.name });
     return jsonResponse({ favourite });

@@ -129,6 +129,8 @@ const FS_OPERATIONS_STATE_DIR = process.env.FS_OPERATIONS_STATE_DIR || path.join
 const FS_OPERATIONS_STAGING_DIR = process.env.FS_OPERATIONS_STAGING_DIR || path.join(FS_OPERATIONS_STATE_DIR, 'staging');
 const TERMUX_CLOUD_MOUNT_CMD = process.env.TERMUX_CLOUD_MOUNT_CMD || '/data/data/com.termux/files/usr/bin/termux-cloud-mount';
 const TERMUX_CLOUD_MOUNT_ROOT = process.env.TERMUX_CLOUD_MOUNT_ROOT || '/mnt/cloud/home-server';
+const TERMUX_DRIVES_MIRROR_ROOT = process.env.TERMUX_DRIVES_MIRROR_ROOT || '/mnt/termux-drives';
+const DRIVE_COMMON_SCRIPT = process.env.DRIVE_COMMON_SCRIPT || path.join(ROOT_DIR, 'scripts', 'drive-common.sh');
 const NGINX_PID = process.env.NGINX_PID_PATH || path.join(RUNTIME_DIR, 'nginx.pid');
 const TTYD_PID = process.env.TTYD_PID_PATH || path.join(RUNTIME_DIR, 'ttyd.pid');
 const FTP_PID = process.env.FTP_PID_PATH || path.join(RUNTIME_DIR, 'ftp.pid');
@@ -704,6 +706,7 @@ const BASE_SERVICE_CATALOG_META = {
     description: 'Subtitle automation for imported media libraries.',
     group: 'arr',
     label: 'Bazarr',
+    route: '/bazarr/',
     surface: 'arr',
   },
   jellyseerr: {
@@ -796,7 +799,7 @@ const OPTIONAL_SERVICE_NAMES = [
   'tailscale',
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
-const PLACEHOLDER_SERVICE_SET = new Set(['bazarr', 'jellyseerr']);
+const PLACEHOLDER_SERVICE_SET = new Set(['jellyseerr']);
 const SERVICE_GROUP_ORDER = ['platform', 'media', 'arr', 'data', 'downloads', 'filesystem', 'access', 'ai'];
 const SERVICE_UNLOCK_TTL_MS = parseDurationMs(process.env.SERVICE_UNLOCK_TTL || '8h', 8 * 60 * 60 * 1000);
 const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -4128,6 +4131,7 @@ const getFtpFavouriteRuntime = (favourite) => {
   return {
     helperRequestPath: path.join(FTP_MOUNT_RUNTIME_DIR, `${favourite.id}.request.json`),
     mountName,
+    mirrorMountPoint: path.join(TERMUX_DRIVES_MIRROR_ROOT, mountName),
     mountPoint: path.join(FILEBROWSER_ROOT, mountName),
     remoteName,
     symlinkPath: path.join(FILEBROWSER_ROOT, mountName),
@@ -4149,6 +4153,8 @@ const writeCloudMountRequest = (favourite, { includeSecrets = false } = {}) => {
     id: Number(favourite.id),
     host: favourite.host,
     mountName: runtime.mountName,
+    mirrorMountPoint: runtime.mirrorMountPoint,
+    mirrorRoot: TERMUX_DRIVES_MIRROR_ROOT,
     name: favourite.name,
     password: includeSecrets ? String(favourite.auth?.password || '') : '',
     port: favourite.port,
@@ -4217,6 +4223,36 @@ const getCloudMountCapability = () => {
   };
 };
 
+const refreshTermuxDriveMirror = () => {
+  if (!fs.existsSync(DRIVE_COMMON_SCRIPT)) {
+    return { ok: false, error: `Missing drive mirror helper at ${DRIVE_COMMON_SCRIPT}` };
+  }
+
+  try {
+    execFileSync('bash', ['-lc', `
+set -euo pipefail
+source ${JSON.stringify(DRIVE_COMMON_SCRIPT)}
+prepare_drives_root
+DRIVE_MIRROR_MODE=""
+DRIVE_MIRROR_ENTRIES_JSON="[]"
+DRIVE_MIRROR_ALIASES_JSON="[]"
+DRIVE_MIRROR_REASON=""
+ensure_termux_drive_mirror DRIVE_MIRROR_MODE DRIVE_MIRROR_ENTRIES_JSON DRIVE_MIRROR_ALIASES_JSON DRIVE_MIRROR_REASON
+`], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 20000,
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.stderr || error?.stdout || error?.message || 'Drive mirror refresh failed').trim(),
+    };
+  }
+};
+
 const getFtpMountState = (favourite) => {
   const runtime = getFtpFavouriteRuntime(favourite);
   const capability = getCloudMountCapability();
@@ -4228,6 +4264,7 @@ const getFtpMountState = (favourite) => {
       linkPath: runtime.symlinkPath,
       logTail: [],
       mode: 'fallback',
+      mirrorMountPoint: runtime.mirrorMountPoint,
       mountInfo: null,
       mountName: runtime.mountName,
       mountPoint: runtime.mountPoint,
@@ -4251,6 +4288,7 @@ const getFtpMountState = (favourite) => {
     linkPath: String(payload.linkPath || runtime.symlinkPath),
     logTail: Array.isArray(payload.logTail) ? payload.logTail : [],
     mode: String(payload.mode || 'root_helper'),
+    mirrorMountPoint: String(payload.mirrorMountPoint || runtime.mirrorMountPoint),
     mountInfo: payload.mountInfo || null,
     mountName: runtime.mountName,
     mountPoint: runtime.mountPoint,
@@ -4343,12 +4381,14 @@ const mountFtpFavourite = async (favourite) => {
   } finally {
     writeCloudMountRequest(favourite, { includeSecrets: false });
   }
+  refreshTermuxDriveMirror();
   return getFtpMountState(favourite);
 };
 
 const unmountFtpFavourite = async (favourite) => {
   writeCloudMountRequest(favourite, { includeSecrets: false });
   runCloudMountHelper(['unmount', '--request', getFtpFavouriteRuntime(favourite).helperRequestPath]);
+  refreshTermuxDriveMirror();
   return getFtpMountState(favourite);
 };
 
@@ -7994,7 +8034,12 @@ const mountFtpFavouriteHandler = async (req, res) => {
       return res.status(500).json({ error, favourite: payload });
     }
 
-    pushAuditEvent(req, 'info', 'FTP favourite mounted', { id: favourite.id, name: favourite.name, mountPoint: mount.mountPoint });
+    pushAuditEvent(req, 'info', 'FTP favourite mounted', {
+      id: favourite.id,
+      name: favourite.name,
+      mirrorMountPoint: mount.mirrorMountPoint,
+      mountPoint: mount.mountPoint,
+    });
     return res.json({ success: true, favourite: payload });
   } catch (err) {
     const error = String(err?.message || err || 'Unable to mount FTP favourite');

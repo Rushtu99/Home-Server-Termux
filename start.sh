@@ -104,6 +104,7 @@ RADARR_SERVICE_CMD="${RADARR_SERVICE_CMD:-$PROJECT/scripts/radarr-service.sh}"
 PROWLARR_SERVICE_CMD="${PROWLARR_SERVICE_CMD:-$PROJECT/scripts/prowlarr-service.sh}"
 BAZARR_SERVICE_CMD="${BAZARR_SERVICE_CMD:-$PROJECT/scripts/bazarr-service.sh}"
 JELLYSEERR_SERVICE_CMD="${JELLYSEERR_SERVICE_CMD:-$PROJECT/scripts/jellyseerr-service.sh}"
+CONFIGURE_ARR_STACK_CMD="${CONFIGURE_ARR_STACK_CMD:-$PROJECT/scripts/configure-arr-stack.sh}"
 LLM_BIND_HOST="${LLM_BIND_HOST:-127.0.0.1}"
 LLM_PORT="${LLM_PORT:-11435}"
 LLM_AUTO_START="${LLM_AUTO_START:-true}"
@@ -1694,6 +1695,13 @@ start_media_stack_services() {
         start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
     fi
 
+    if [ -x "$CONFIGURE_ARR_STACK_CMD" ]; then
+        log_info "Reconciling ARR, subtitles, and request-stack integrations"
+        if ! "$CONFIGURE_ARR_STACK_CMD" >/dev/null 2>&1; then
+            log_warn "ARR stack reconciliation failed (see logs for details)"
+        fi
+    fi
+
     start_worker_helper "Storage watchdog" "$STORAGE_WATCHDOG_SERVICE_CMD" "$STORAGE_WATCHDOG_PID_PATH"
     start_worker_helper "Media workflow sweeper" "$MEDIA_WORKFLOW_SERVICE_CMD" "$MEDIA_WORKFLOW_PID_PATH"
 }
@@ -1737,7 +1745,32 @@ warn_conflicting_boot_scripts
 stop_drive_watcher
 prepare_drives_root
 run_drive_agent_scan
+DRIVE_MIRROR_MODE=""
+DRIVE_MIRROR_ENTRIES_JSON="[]"
+DRIVE_MIRROR_ALIASES_JSON="[]"
+DRIVE_MIRROR_REASON=""
+ensure_termux_drive_mirror DRIVE_MIRROR_MODE DRIVE_MIRROR_ENTRIES_JSON DRIVE_MIRROR_ALIASES_JSON DRIVE_MIRROR_REASON
+case "$DRIVE_MIRROR_MODE" in
+    preferred-mirror)
+        log_info "Host drive mirror ready at $TERMUX_DRIVES_MIRROR_ROOT"
+        ;;
+    *)
+        log_warn "Host drive mirror degraded; falling back to $DRIVES_DIR${DRIVE_MIRROR_REASON:+ ($DRIVE_MIRROR_REASON)}"
+        ;;
+esac
+if printf '%s\n' "$DRIVE_MIRROR_ALIASES_JSON" | grep -Fq 'conflict-active-mount'; then
+    log_warn "Legacy D/E alias cleanup found active conflicting mountpoints under $DRIVES_DIR"
+fi
 sync_cloud_mount_links
+ensure_termux_drive_mirror DRIVE_MIRROR_MODE DRIVE_MIRROR_ENTRIES_JSON DRIVE_MIRROR_ALIASES_JSON DRIVE_MIRROR_REASON
+case "$DRIVE_MIRROR_MODE" in
+    preferred-mirror)
+        log_info "Host drive mirror refreshed after FTP link sync"
+        ;;
+    *)
+        log_warn "Host drive mirror refresh after FTP link sync fell back to $DRIVES_DIR${DRIVE_MIRROR_REASON:+ ($DRIVE_MIRROR_REASON)}"
+        ;;
+esac
 ensure_media_layout
 apply_loopback_lockdown
 

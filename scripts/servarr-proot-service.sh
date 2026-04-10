@@ -36,6 +36,10 @@ load_shell_env_file() {
 
 load_shell_env_file "$SERVER_ENV_FILE"
 
+if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
+    . "$PROJECT/scripts/drive-common.sh"
+fi
+
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
 LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
 PROOT_DISTRO_ALIAS="${PROOT_DISTRO_ALIAS:-debian-hs}"
@@ -144,13 +148,92 @@ ensure_install() {
     }
 }
 
+ensure_root_bind_mount() {
+    local source="$1"
+    local target="$2"
+
+    [ -n "$source" ] || return 1
+    [ -n "$target" ] || return 1
+
+    su -c "mkdir -p '$target'" >/dev/null 2>&1 || return 1
+    if type path_mount_source_matches >/dev/null 2>&1 && path_mount_source_matches "$target" "$source"; then
+        return 0
+    fi
+    if type path_is_direct_mount_in_proc >/dev/null 2>&1 && path_is_direct_mount_in_proc "$target"; then
+        su -c "umount -l '$target'" >/dev/null 2>&1 || true
+    fi
+    su -c "mount --bind '$source' '$target'" >/dev/null 2>&1
+}
+
+ensure_root_bind_child_mounts() {
+    local source_root="$1"
+    local target_root="$2"
+    local source_dir=""
+    local source_name=""
+    local target_dir=""
+    local desired_names=""
+
+    [ -d "$source_root" ] || return 0
+    su -c "mkdir -p '$target_root'" >/dev/null 2>&1 || return 1
+
+    while IFS= read -r source_dir; do
+        [ -n "$source_dir" ] || continue
+        source_name="$(basename "$source_dir")"
+        target_dir="$target_root/$source_name"
+        desired_names="${desired_names}${source_name}
+"
+        ensure_root_bind_mount "$source_dir" "$target_dir" || return 1
+    done < <(find "$source_root" -mindepth 1 -maxdepth 1 -type d | sort)
+
+    while IFS= read -r target_dir; do
+        [ -n "$target_dir" ] || continue
+        source_name="$(basename "$target_dir")"
+        if printf '%s\n' "$desired_names" | grep -Fxq "$source_name"; then
+            continue
+        fi
+        if type path_is_direct_mount_in_proc >/dev/null 2>&1 && path_is_direct_mount_in_proc "$target_dir"; then
+            su -c "umount -l '$target_dir'" >/dev/null 2>&1 || true
+        fi
+        su -c "rmdir '$target_dir' 2>/dev/null || true" >/dev/null 2>&1 || true
+    done < <(find "$target_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+}
+
+preferred_chroot_drives_source() {
+    if ! have_root_su; then
+        printf '%s\n' "$TERMUX_DRIVES_PATH"
+        return 0
+    fi
+
+    if type preferred_termux_drives_source >/dev/null 2>&1; then
+        preferred_termux_drives_source "$TERMUX_DRIVES_PATH"
+        return 0
+    fi
+
+    printf '%s\n' "$TERMUX_DRIVES_PATH"
+}
+
 ensure_chroot_mounts() {
+    local preferred_source=""
+    local fallback_source="$TERMUX_DRIVES_PATH"
+    local selected_source=""
+
     if have_root_su; then
         su -c "mkdir -p '$CHROOT_ROOTFS/dev' '$CHROOT_ROOTFS/proc' '$CHROOT_ROOTFS/sys' '$CHROOT_ROOTFS$CHROOT_DRIVES_PATH' '$CHROOT_ROOTFS$APP_DATA_DIR_IN_CHROOT'"
         su -c "grep -q ' $CHROOT_ROOTFS/dev ' /proc/mounts || mount --bind /dev '$CHROOT_ROOTFS/dev'"
         su -c "grep -q ' $CHROOT_ROOTFS/proc ' /proc/mounts || mount -t proc proc '$CHROOT_ROOTFS/proc'"
         su -c "grep -q ' $CHROOT_ROOTFS/sys ' /proc/mounts || mount -t sysfs sysfs '$CHROOT_ROOTFS/sys'"
-        su -c "grep -q ' $CHROOT_ROOTFS$CHROOT_DRIVES_PATH ' /proc/mounts || mount --bind '$TERMUX_DRIVES_PATH' '$CHROOT_ROOTFS$CHROOT_DRIVES_PATH'"
+        preferred_source="$(preferred_chroot_drives_source)"
+        if ! ensure_root_bind_mount "$preferred_source" "$CHROOT_ROOTFS$CHROOT_DRIVES_PATH"; then
+            if [ "$preferred_source" != "$fallback_source" ]; then
+                ensure_root_bind_mount "$fallback_source" "$CHROOT_ROOTFS$CHROOT_DRIVES_PATH" || return 1
+                selected_source="$fallback_source"
+            else
+                return 1
+            fi
+        else
+            selected_source="$preferred_source"
+        fi
+        ensure_root_bind_child_mounts "$selected_source" "$CHROOT_ROOTFS$CHROOT_DRIVES_PATH" || return 1
         return 0
     fi
 

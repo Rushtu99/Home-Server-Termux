@@ -16,6 +16,9 @@ BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
 BAZARR_LOG_PATH="${BAZARR_LOG_PATH:-$LOG_DIR/bazarr.log}"
 BAZARR_CONFIG_DIR="${BAZARR_CONFIG_DIR:-$BAZARR_HOME/data}"
 BAZARR_TMUX_SESSION="${BAZARR_TMUX_SESSION:-hmstx-bazarr}"
+SYSTEM_PYTHON_SITE_PACKAGES="${SYSTEM_PYTHON_SITE_PACKAGES:-/data/data/com.termux/files/usr/lib/python3.13/site-packages}"
+BAZARR_PYTHONPATH="${BAZARR_PYTHONPATH:-$SYSTEM_PYTHON_SITE_PACKAGES}"
+BAZARR_MEDIA_BIN_DIR="${BAZARR_MEDIA_BIN_DIR:-/data/data/com.termux/files/usr/opt/jellyfin/bin}"
 SERVICE_NAME="bazarr"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$BAZARR_HOME" "$BAZARR_CONFIG_DIR"
@@ -52,7 +55,20 @@ read_pid() {
 is_running() {
     local pid=""
     pid="$(read_pid || true)"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && is_listening
+}
+
+is_listening() {
+    python3 - "$BAZARR_BIND_HOST" "$BAZARR_PORT" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.create_connection((host, port), timeout=2):
+    pass
+PY
 }
 
 ensure_install() {
@@ -64,7 +80,8 @@ ensure_install() {
         echo "Bazarr app is missing; run scripts/install-media-automation.sh first" >&2
         return 1
     }
-    "$BAZARR_VENV_DIR/bin/python" -c "import lxml" >/dev/null 2>&1 || {
+    PYTHONPATH="$BAZARR_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+        "$BAZARR_VENV_DIR/bin/python" -c "import lxml" >/dev/null 2>&1 || {
         echo "Bazarr dependencies are incomplete; lxml is missing from the venv" >&2
         return 1
     }
@@ -72,6 +89,8 @@ ensure_install() {
 
 start_service() {
     local command_str=""
+    local runtime_path=""
+    local runtime_pythonpath=""
     local pid=""
 
     if is_running; then
@@ -80,14 +99,27 @@ start_service() {
 
     ensure_install
     rm -f "$BAZARR_PID_PATH"
+    runtime_path="$PATH"
+    if [ -d "$BAZARR_MEDIA_BIN_DIR" ]; then
+        runtime_path="$BAZARR_MEDIA_BIN_DIR:$runtime_path"
+    fi
+    runtime_pythonpath="$BAZARR_PYTHONPATH"
+    if [ -n "${PYTHONPATH:-}" ]; then
+        runtime_pythonpath="$runtime_pythonpath:$PYTHONPATH"
+    fi
 
     printf -v command_str '%q ' \
         env \
         BAZARR_HOST="$BAZARR_BIND_HOST" \
         BAZARR_PORT="$BAZARR_PORT" \
         BAZARR_CONFIG_DIR="$BAZARR_CONFIG_DIR" \
+        PATH="$runtime_path" \
+        PYTHONPATH="$runtime_pythonpath" \
         "$BAZARR_VENV_DIR/bin/python" \
-        "$BAZARR_APP_DIR/bazarr.py"
+        "$BAZARR_APP_DIR/bazarr.py" \
+        -c "$BAZARR_CONFIG_DIR" \
+        -p "$BAZARR_PORT" \
+        --no-update
 
     if command -v tmux >/dev/null 2>&1; then
         tmux kill-session -t "$BAZARR_TMUX_SESSION" 2>/dev/null || true
@@ -96,12 +128,15 @@ start_service() {
         nohup /data/data/com.termux/files/usr/bin/bash -lc "exec ${command_str}" >> "$BAZARR_LOG_PATH" 2>&1 < /dev/null &
         printf '%s\n' "$!" > "$BAZARR_PID_PATH"
     fi
-    sleep 2
-    pid="$(read_pid || true)"
-    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-        rm -f "$BAZARR_PID_PATH"
-        return 1
-    fi
+    for _ in $(seq 1 20); do
+        sleep 1
+        pid="$(read_pid || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && is_listening; then
+            return 0
+        fi
+    done
+    rm -f "$BAZARR_PID_PATH"
+    return 1
 }
 
 stop_service() {

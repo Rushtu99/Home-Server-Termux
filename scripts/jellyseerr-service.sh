@@ -17,12 +17,34 @@ JELLYSEERR_BASE_PATH="${JELLYSEERR_BASE_PATH:-/requests}"
 JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
 JELLYSEERR_LOG_PATH="${JELLYSEERR_LOG_PATH:-$LOG_DIR/jellyseerr.log}"
 JELLYSEERR_DATA_DIR="${JELLYSEERR_DATA_DIR:-$JELLYSEERR_HOME/data}"
+JELLYSEERR_NODE_ROOT="${JELLYSEERR_NODE_ROOT:-/data/data/com.termux/files/usr/opt/nodejs-22}"
+JELLYSEERR_NODE_BIN="${JELLYSEERR_NODE_BIN:-}"
+JELLYSEERR_COREPACK_CLI="${JELLYSEERR_COREPACK_CLI:-}"
+JELLYSEERR_NPM_CLI="${JELLYSEERR_NPM_CLI:-}"
+JELLYSEERR_NODE_SHIMS_DIR="${JELLYSEERR_NODE_SHIMS_DIR:-}"
 SERVICE_NAME="jellyseerr"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYSEERR_HOME" "$JELLYSEERR_DATA_DIR"
 
+if [ -z "$JELLYSEERR_NODE_BIN" ]; then
+    if [ -x "$JELLYSEERR_NODE_ROOT/bin/node" ]; then
+        JELLYSEERR_NODE_BIN="$JELLYSEERR_NODE_ROOT/bin/node"
+    else
+        JELLYSEERR_NODE_BIN="$(command -v node || true)"
+    fi
+fi
+if [ -z "$JELLYSEERR_COREPACK_CLI" ] && [ -f "$JELLYSEERR_NODE_ROOT/lib/node_modules/corepack/dist/corepack.js" ]; then
+    JELLYSEERR_COREPACK_CLI="$JELLYSEERR_NODE_ROOT/lib/node_modules/corepack/dist/corepack.js"
+fi
+if [ -z "$JELLYSEERR_NPM_CLI" ] && [ -f "$JELLYSEERR_NODE_ROOT/lib/node_modules/npm/bin/npm-cli.js" ]; then
+    JELLYSEERR_NPM_CLI="$JELLYSEERR_NODE_ROOT/lib/node_modules/npm/bin/npm-cli.js"
+fi
+if [ -z "$JELLYSEERR_NODE_SHIMS_DIR" ] && [ -d "$JELLYSEERR_NODE_ROOT/lib/node_modules/corepack/shims" ]; then
+    JELLYSEERR_NODE_SHIMS_DIR="$JELLYSEERR_NODE_ROOT/lib/node_modules/corepack/shims"
+fi
+
 read_required_node_major() {
-    node - "$JELLYSEERR_PACKAGE_JSON" <<'NODE'
+    "$JELLYSEERR_NODE_BIN" - "$JELLYSEERR_PACKAGE_JSON" <<'NODE'
 const fs = require('fs');
 const pkg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const range = String(pkg.engines?.node || '');
@@ -36,12 +58,12 @@ NODE
 ensure_compatible_node() {
     local node_version="" current_major="" required_major=""
 
-    command -v node >/dev/null 2>&1 || {
+    [ -x "$JELLYSEERR_NODE_BIN" ] || {
         echo "Jellyseerr requires node, but it is not installed on this host." >&2
         return 1
     }
 
-    node_version="$(node -v 2>/dev/null || true)"
+    node_version="$("$JELLYSEERR_NODE_BIN" -v 2>/dev/null || true)"
     current_major="${node_version#v}"
     current_major="${current_major%%.*}"
     required_major="$(read_required_node_major 2>/dev/null || true)"
@@ -55,35 +77,37 @@ ensure_compatible_node() {
 run_jellyseerr_package_manager() {
     local action="$1"
     local package_manager=""
+    local runtime_path="$PATH"
 
-    package_manager="$(node -p "require(process.argv[1]).packageManager || ''" "$JELLYSEERR_PACKAGE_JSON" 2>/dev/null || true)"
+    if [ -d "$JELLYSEERR_NODE_ROOT/bin" ]; then
+        runtime_path="$JELLYSEERR_NODE_ROOT/bin:$runtime_path"
+    fi
+    if [ -d "$JELLYSEERR_NODE_SHIMS_DIR" ]; then
+        runtime_path="$JELLYSEERR_NODE_SHIMS_DIR:$runtime_path"
+    fi
+
+    package_manager="$("$JELLYSEERR_NODE_BIN" -p "require(process.argv[1]).packageManager || ''" "$JELLYSEERR_PACKAGE_JSON" 2>/dev/null || true)"
 
     if [ -n "$package_manager" ] && printf '%s' "$package_manager" | grep -q '^pnpm@'; then
-        if command -v corepack >/dev/null 2>&1; then
+        if [ -f "$JELLYSEERR_COREPACK_CLI" ]; then
             case "$action" in
-                install) CYPRESS_INSTALL_BINARY=0 corepack pnpm install --frozen-lockfile --config.engine-strict=false ;;
-                build) CYPRESS_INSTALL_BINARY=0 corepack pnpm build --config.engine-strict=false ;;
+                install) PATH="$runtime_path" CYPRESS_INSTALL_BINARY=0 "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_COREPACK_CLI" pnpm install --frozen-lockfile --config.engine-strict=false ;;
+                build) PATH="$runtime_path" CYPRESS_INSTALL_BINARY=0 "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_COREPACK_CLI" pnpm build --config.engine-strict=false ;;
                 *) echo "Unsupported Jellyseerr package-manager action: $action" >&2; return 1 ;;
             esac
             return 0
         fi
-
-        command -v npx >/dev/null 2>&1 || {
-            echo "Jellyseerr requires corepack or npx to bootstrap pnpm." >&2
-            return 1
-        }
-
-        case "$action" in
-            install) CYPRESS_INSTALL_BINARY=0 npx --yes "$package_manager" install --frozen-lockfile --config.engine-strict=false ;;
-            build) CYPRESS_INSTALL_BINARY=0 npx --yes "$package_manager" build --config.engine-strict=false ;;
-            *) echo "Unsupported Jellyseerr package-manager action: $action" >&2; return 1 ;;
-        esac
-        return 0
+        echo "Jellyseerr requires corepack support to bootstrap pnpm." >&2
+        return 1
     fi
 
+    [ -f "$JELLYSEERR_NPM_CLI" ] || {
+        echo "Jellyseerr npm CLI is unavailable for fallback package-manager actions." >&2
+        return 1
+    }
     case "$action" in
-        install) npm install --legacy-peer-deps ;;
-        build) npm run build ;;
+        install) PATH="$runtime_path" "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_NPM_CLI" install --legacy-peer-deps ;;
+        build) PATH="$runtime_path" "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_NPM_CLI" run build ;;
         *) echo "Unsupported Jellyseerr package-manager action: $action" >&2; return 1 ;;
     esac
 }
@@ -138,7 +162,20 @@ is_running() {
     local pid=""
     [ -f "$JELLYSEERR_PID_PATH" ] || return 1
     pid="$(cat "$JELLYSEERR_PID_PATH" 2>/dev/null || true)"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && is_listening
+}
+
+is_listening() {
+    python3 - "$JELLYSEERR_BIND_HOST" "$JELLYSEERR_PORT" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.create_connection((host, port), timeout=2):
+    pass
+PY
 }
 
 ensure_install() {
@@ -155,14 +192,29 @@ start_service() {
     fi
 
     ensure_install
+    local runtime_path="$PATH"
+    if [ -d "$JELLYSEERR_NODE_ROOT/bin" ]; then
+        runtime_path="$JELLYSEERR_NODE_ROOT/bin:$runtime_path"
+    fi
+    if [ -d "$JELLYSEERR_NODE_SHIMS_DIR" ]; then
+        runtime_path="$JELLYSEERR_NODE_SHIMS_DIR:$runtime_path"
+    fi
     if command -v setsid >/dev/null 2>&1; then
-        setsid env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" \
-            node "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 < /dev/null &
+        setsid env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
+            "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 < /dev/null &
     else
-        nohup env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" \
-            node "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 &
+        nohup env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
+            "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 &
     fi
     printf '%s\n' "$!" > "$JELLYSEERR_PID_PATH"
+    for _ in $(seq 1 30); do
+        sleep 1
+        if is_running; then
+            return 0
+        fi
+    done
+    rm -f "$JELLYSEERR_PID_PATH"
+    return 1
 }
 
 stop_service() {

@@ -48,7 +48,7 @@ Check:
 
 ```bash
 scripts/media-importer.sh status --json
-tail -n 50 ~/Drives/E/SCRATCH/HmSTxScratch/logs/media-importer.log
+tail -n 50 ~/Drives/<scratch-label>/SCRATCH/HmSTxScratch/logs/media-importer.log
 ```
 
 Look for:
@@ -67,8 +67,8 @@ scripts/configure-arr-stack.sh
 ```
 
 Then verify the service wrappers still agree with the repo-managed layout:
-- qBittorrent default save path should resolve to `~/Drives/E/SCRATCH/HmSTxScratch/downloads/manual`
-- qBittorrent temp path should resolve to `~/Drives/E/SCRATCH/HmSTxScratch/tmp/qbittorrent`
+- qBittorrent default save path should resolve to `~/Drives/<scratch-label>/SCRATCH/HmSTxScratch/downloads/manual`
+- qBittorrent temp path should resolve to `~/Drives/<scratch-label>/SCRATCH/HmSTxScratch/tmp/qbittorrent`
 - Sonarr should import from the `series` lane
 - Radarr should import from the `movies` lane
 

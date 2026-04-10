@@ -1186,12 +1186,17 @@ function TransfersWorkspace({
 
     setFavouriteBusyId(favouriteId);
     try {
+      const mountName = String(mount.mountName || favourite.mountName || favourite.name || 'Remote');
       if (Boolean(mount.mounted)) {
         const response = await unmountFtpFavourite(favouriteId);
         setFavouriteStatus(response.success === false ? String(response.error || 'Unmount failed') : 'Favourite unmounted.');
       } else {
         const response = await mountFtpFavourite(favouriteId);
-        setFavouriteStatus(response.success === false ? String(response.error || 'Mount failed') : 'Favourite mounted.');
+        setFavouriteStatus(
+          response.success === false
+            ? String(response.error || 'Mount failed')
+            : `Favourite mounted at ~/Drives/${mountName} and /mnt/termux-drives/${mountName}.`
+        );
       }
       workspaceActions?.onRefresh();
     } catch (error) {
@@ -1317,6 +1322,8 @@ function TransfersWorkspace({
                       <div>
                         <strong>{String(item.name || 'Remote')}</strong>
                         <p>{String(item.host || 'host')}:{String(item.port || 21)} · {String(item.remotePath || '/')}</p>
+                        <p>Drive target · ~/Drives/{String(mount.mountName || item.mountName || item.name || 'Remote')}</p>
+                        <p>Host mirror · {String(mount.mirrorMountPoint || `/mnt/termux-drives/${String(mount.mountName || item.mountName || item.name || 'Remote')}`)}</p>
                       </div>
                       <div className="dash2-list__actions">
                         <StatusBadge tone={Boolean(mount.mounted) ? 'ok' : 'muted'}>{String(mount.state || 'unmounted')}</StatusBadge>

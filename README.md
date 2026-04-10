@@ -88,6 +88,7 @@ scripts/storage-watchdog-service.sh check-now
 ## Documentation
 
 - [Docs Hub](/data/data/com.termux/files/home/home-server/docs/README.md)
+- [Feature, UI, and API Inventory](/data/data/com.termux/files/home/home-server/document.MD)
 - [Getting Started](/data/data/com.termux/files/home/home-server/docs/getting-started.md)
 - [Architecture](/data/data/com.termux/files/home/home-server/docs/architecture.md)
 - [Configuration](/data/data/com.termux/files/home/home-server/docs/configuration.md)

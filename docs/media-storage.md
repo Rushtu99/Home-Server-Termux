@@ -3,10 +3,11 @@
 ## Layout
 
 Default role split:
-- vault: `~/Drives/D/VAULT/Media`
-- scratch: `~/Drives/E/SCRATCH/HmSTxScratch`
+- vault: `~/Drives/<vault-label>/VAULT/Media`
+- scratch: `~/Drives/<scratch-label>/SCRATCH/HmSTxScratch`
 
 Compatibility paths still live under `~/Drives/Media`, but the managed services should use the scoped vault/scratch paths.
+Active external drives are also mirrored as host bind mounts under `/mnt/termux-drives/<label>` for non-Termux consumers.
 
 Default vault directories:
 - `movies`
@@ -49,7 +50,7 @@ The hook is a backstop, not the only mechanism. A sweeper also runs on an interv
 [scripts/configure-arr-stack.sh](../scripts/configure-arr-stack.sh) is the canonical repair script for the automated torrent pipeline. It starts the qBittorrent + ARR services it needs, then re-applies the expected root folders, download client wiring, and remote path mappings.
 
 Current expected mapping model:
-- qBittorrent writes into the Termux scratch tree under `~/Drives/E/SCRATCH/HmSTxScratch/downloads/...`
+- qBittorrent writes into the Termux scratch tree under `~/Drives/<scratch-label>/SCRATCH/HmSTxScratch/downloads/...`
 - Sonarr and Radarr run inside the Debian proot and therefore see the same storage as `/mnt/termux-drives/...`
 - the script programs remote path mappings so ARR imports from the chroot-visible download paths back into the host-visible scratch paths
 - Sonarr tracks the vault `series` library and Radarr tracks the vault `movies` library
@@ -61,10 +62,10 @@ scripts/configure-arr-stack.sh
 ```
 
 Successful runs reconcile:
-- Sonarr root folder → `/mnt/termux-drives/D/VAULT/Media/series`
-- Radarr root folder → `/mnt/termux-drives/D/VAULT/Media/movies`
-- Sonarr remote path mapping → `/mnt/termux-drives/E/SCRATCH/HmSTxScratch/downloads/series/`
-- Radarr remote path mapping → `/mnt/termux-drives/E/SCRATCH/HmSTxScratch/downloads/movies/`
+- Sonarr root folder → `/mnt/termux-drives/<vault-label>/VAULT/Media/series`
+- Radarr root folder → `/mnt/termux-drives/<vault-label>/VAULT/Media/movies`
+- Sonarr remote path mapping → `/mnt/termux-drives/<scratch-label>/SCRATCH/HmSTxScratch/downloads/series/`
+- Radarr remote path mapping → `/mnt/termux-drives/<scratch-label>/SCRATCH/HmSTxScratch/downloads/movies/`
 - qBittorrent download client entries for Sonarr and Radarr
 
 ## Importer

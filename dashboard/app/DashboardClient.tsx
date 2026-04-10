@@ -178,6 +178,7 @@ type FtpMountState = {
   error?: string;
   mounted: boolean;
   mountName: string;
+  mirrorMountPoint?: string;
   mountPoint: string;
   pid?: number | null;
   remoteName: string;
@@ -857,7 +858,9 @@ const describeFtpMount = (mount?: FtpMountState | null) => {
   }
 
   if (mount.mounted) {
-    return `mounted at ${mount.mountPoint}`;
+    return mount.mirrorMountPoint
+      ? `mounted at ${mount.mountPoint} · mirrored at ${mount.mirrorMountPoint}`
+      : `mounted at ${mount.mountPoint}`;
   }
 
   if (mount.state === 'starting' || mount.running) {
@@ -3333,9 +3336,10 @@ export default function Dashboard() {
       }
 
       await loadFtpFavourites();
+      const mountedName = favourite.mount?.mountName || favourite.mountName || favourite.name;
       setFtpStatus(
         action === 'mount'
-          ? `Mounted ${favourite.name} into ~/Drives/${favourite.mount.mountName || favourite.mountName}`
+          ? `Mounted ${favourite.name} at ~/Drives/${mountedName} and /mnt/termux-drives/${mountedName}`
           : `Unmounted ${favourite.name}`
       );
     } catch {
@@ -4490,7 +4494,7 @@ export default function Dashboard() {
         {activeTab === 'ftp' && (
           <Panel
             title="FTP"
-            subtitle="Save remotes, browse them directly, and mount them into ~/Drives when this host allows it."
+            subtitle="Save remotes, browse them directly, and mount them into ~/Drives with matching /mnt/termux-drives mirrors when this host allows it."
             meta={[`${ftpFavourites.length} favourites`, `${mountedFtpFavouriteCount} mounted`]}
           >
             <div style={{ ...styles.ftpWorkspace, ...(isCompact ? styles.ftpWorkspaceCompact : {}) }}>
@@ -4538,6 +4542,7 @@ export default function Dashboard() {
                             </div>
                             <p style={styles.mountMeta}>{favourite.host}:{favourite.port} · {favourite.remotePath || '/'}</p>
                             <p style={styles.mountMeta}>Drive target: ~/Drives/{favourite.mountName || favourite.name}</p>
+                            <p style={styles.mountMeta}>Host mirror: {favourite.mount?.mirrorMountPoint || `/mnt/termux-drives/${favourite.mountName || favourite.name}`}</p>
                             <p style={styles.mountMeta}>{describeFtpMount(favourite.mount)}</p>
                           </div>
                           <div style={styles.actionWrap}>
@@ -4615,7 +4620,10 @@ export default function Dashboard() {
                   <p style={styles.codeLine}>Current remote path: <code>{ftpPath}</code></p>
                   <p style={styles.codeLine}>Downloads land under: <code>{ftpDownloadRoot || '~/Drives'}</code></p>
                   {activeFtpFavourite && (
-                    <p style={styles.codeLine}>Drive target: <code>~/Drives/{activeFtpFavourite.mountName || activeFtpFavourite.name}</code></p>
+                    <>
+                      <p style={styles.codeLine}>Drive target: <code>~/Drives/{activeFtpFavourite.mountName || activeFtpFavourite.name}</code></p>
+                      <p style={styles.codeLine}>Host mirror: <code>{activeFtpFavourite.mount?.mirrorMountPoint || `/mnt/termux-drives/${activeFtpFavourite.mountName || activeFtpFavourite.name}`}</code></p>
+                    </>
                   )}
                   <p
                     style={{ ...styles.smallLabel, color: ftpStatusColor }}
