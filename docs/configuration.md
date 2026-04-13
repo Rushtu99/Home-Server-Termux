@@ -63,6 +63,10 @@ Key storage env vars:
 - `MEDIA_SCRATCH_RETENTION_DAYS`
 - `MEDIA_SCRATCH_CLEANUP_ENABLED`
 
+USB mount microservice settings:
+- `USB_MOUNT_SERVICE_CMD` points to the executable used by `/api/drives/check`
+- `USB_MOUNT_CONFIG_PATH` points to `scripts/usb-mount-service.conf` (UUID mapping + mount roots)
+
 Keep the qBittorrent download and temp paths on the scratch root. `scripts/configure-arr-stack.sh` programs Sonarr and Radarr remote path mappings from the chroot-visible `/mnt/termux-drives/...` paths back to these Termux-host paths, so drift here will break automated imports.
 
 Status artifacts:
@@ -76,6 +80,8 @@ Status artifacts:
 ## Service Helpers
 
 The backend and startup script resolve helpers from env, so you can override paths if needed:
+- `USB_MOUNT_SERVICE_CMD`
+- `USB_MOUNT_CONFIG_PATH`
 - `JELLYFIN_SERVICE_CMD`
 - `QBITTORRENT_SERVICE_CMD`
 - `SONARR_SERVICE_CMD`

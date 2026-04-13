@@ -5,13 +5,17 @@ export const SAFE_NEXT_PATHS = new Set(['/radarr/', '/sonarr/', '/prowlarr/']);
 
 export const LEGACY_TAB_FALLBACK_MAP: Record<string, WorkspaceKey> = {
   home: 'overview',
+  overview: 'overview',
   media: 'media',
   downloads: 'media',
   arr: 'media',
+  files: 'files',
   terminal: 'terminal',
+  transfers: 'transfers',
   filesystem: 'files',
   ftp: 'transfers',
   ai: 'ai',
+  admin: 'admin',
   settings: 'admin',
 };
 

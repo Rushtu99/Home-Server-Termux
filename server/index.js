@@ -146,6 +146,7 @@ const SONARR_PID = process.env.SONARR_PID_PATH || path.join(RUNTIME_DIR, 'sonarr
 const RADARR_PID = process.env.RADARR_PID_PATH || path.join(RUNTIME_DIR, 'radarr.pid');
 const PROWLARR_PID = process.env.PROWLARR_PID_PATH || path.join(RUNTIME_DIR, 'prowlarr.pid');
 const BAZARR_PID = process.env.BAZARR_PID_PATH || path.join(RUNTIME_DIR, 'bazarr.pid');
+const FLAREARR_PID = process.env.FLAREARR_PID_PATH || path.join(RUNTIME_DIR, 'flarearr.pid');
 const JELLYSEERR_PID = process.env.JELLYSEERR_PID_PATH || path.join(RUNTIME_DIR, 'jellyseerr.pid');
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const PORT = Number(process.env.PORT || 4000);
@@ -162,6 +163,7 @@ const SONARR_BIND_HOST = process.env.SONARR_BIND_HOST || '127.0.0.1';
 const RADARR_BIND_HOST = process.env.RADARR_BIND_HOST || '127.0.0.1';
 const PROWLARR_BIND_HOST = process.env.PROWLARR_BIND_HOST || '127.0.0.1';
 const BAZARR_BIND_HOST = process.env.BAZARR_BIND_HOST || '127.0.0.1';
+const FLAREARR_BIND_HOST = process.env.FLAREARR_BIND_HOST || '127.0.0.1';
 const JELLYSEERR_BIND_HOST = process.env.JELLYSEERR_BIND_HOST || '127.0.0.1';
 const FTP_SERVER_PORT = Number(process.env.FTP_SERVER_PORT || 2121);
 const COPYPARTY_PORT = Number(process.env.COPYPARTY_PORT || 3923);
@@ -180,6 +182,7 @@ const SONARR_PORT = Number(process.env.SONARR_PORT || 8989);
 const RADARR_PORT = Number(process.env.RADARR_PORT || 7878);
 const PROWLARR_PORT = Number(process.env.PROWLARR_PORT || 9696);
 const BAZARR_PORT = Number(process.env.BAZARR_PORT || 6767);
+const FLAREARR_PORT = Number(process.env.FLAREARR_PORT || 8191);
 const JELLYSEERR_PORT = Number(process.env.JELLYSEERR_PORT || 5055);
 const JELLYFIN_BASE_URL = process.env.JELLYFIN_BASE_URL || `http://${JELLYFIN_BIND_HOST}:${JELLYFIN_PORT}`;
 const JELLYFIN_API_KEY = process.env.JELLYFIN_API_KEY || '';
@@ -189,7 +192,7 @@ const DEFAULT_PS4_HOST = process.env.DEFAULT_PS4_HOST || '192.168.1.8';
 const DEFAULT_PS4_PORT = Number(process.env.DEFAULT_PS4_PORT || 2121);
 const DEFAULT_PS4_USER = process.env.DEFAULT_PS4_USER || 'anonymous';
 const DEFAULT_PS4_PASSWORD = process.env.DEFAULT_PS4_PASSWORD || 'anonymous@';
-const DRIVE_AGENT_CMD = process.env.DRIVE_AGENT_CMD || '/data/data/com.termux/files/usr/bin/termux-drive-agent';
+const USB_MOUNT_SERVICE_CMD = process.env.USB_MOUNT_SERVICE_CMD || process.env.DRIVE_AGENT_CMD || path.join(ROOT_DIR, 'scripts', 'usb-mount-service.sh');
 const DRIVE_STATE_PATH = process.env.DRIVE_STATE_PATH || path.join(FILEBROWSER_ROOT, '.state', 'drives.json');
 const DRIVE_EVENTS_PATH = process.env.DRIVE_EVENTS_PATH || path.join(FILEBROWSER_ROOT, '.state', 'drive-events.jsonl');
 const DRIVE_REFRESH_INTERVAL_MS = Math.max(60000, Number(process.env.DRIVE_REFRESH_INTERVAL_MS || 60000) || 60000);
@@ -211,6 +214,7 @@ const SONARR_SERVICE_CMD = process.env.SONARR_SERVICE_CMD || path.join(ROOT_DIR,
 const RADARR_SERVICE_CMD = process.env.RADARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'radarr-service.sh');
 const PROWLARR_SERVICE_CMD = process.env.PROWLARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'prowlarr-service.sh');
 const BAZARR_SERVICE_CMD = process.env.BAZARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'bazarr-service.sh');
+const FLAREARR_SERVICE_CMD = process.env.FLAREARR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'flarearr-service.sh');
 const JELLYSEERR_SERVICE_CMD = process.env.JELLYSEERR_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'jellyseerr-service.sh');
 const MEDIA_WORKFLOW_SERVICE_CMD = process.env.MEDIA_WORKFLOW_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'media-workflow-service.sh');
 const STORAGE_WATCHDOG_SERVICE_CMD = process.env.STORAGE_WATCHDOG_SERVICE_CMD || path.join(ROOT_DIR, 'scripts', 'storage-watchdog-service.sh');
@@ -227,6 +231,9 @@ const PROWLARR_APP_PATH = path.join(CHROOT_ROOTFS, 'opt', 'home-server', 'prowla
 const BAZARR_HOME = process.env.BAZARR_HOME || path.join(MEDIA_SERVICES_HOME, 'bazarr');
 const BAZARR_PYTHON_PATH = path.join(BAZARR_HOME, 'venv', 'bin', 'python');
 const BAZARR_APP_PATH = path.join(BAZARR_HOME, 'app', 'bazarr.py');
+const FLAREARR_HOME = process.env.FLAREARR_HOME || path.join(MEDIA_SERVICES_HOME, 'flarearr');
+const FLAREARR_PYTHON_PATH = process.env.FLAREARR_PYTHON_PATH || path.join(FLAREARR_HOME, 'venv', 'bin', 'python');
+const FLAREARR_APP_PATH = process.env.FLAREARR_APP_PATH || path.join(FLAREARR_HOME, 'app');
 const JELLYSEERR_HOME = process.env.JELLYSEERR_HOME || path.join(MEDIA_SERVICES_HOME, 'jellyseerr');
 const JELLYSEERR_DIST_PATH = path.join(JELLYSEERR_HOME, 'app', 'dist', 'index.js');
 const LLM_HOME = process.env.LLM_HOME || path.join(MEDIA_SERVICES_HOME, 'llm');
@@ -548,6 +555,17 @@ const SERVICES = {
     installCheckPaths: [BAZARR_SERVICE_CMD, BAZARR_PYTHON_PATH, BAZARR_APP_PATH],
     installCheckCommand: `"${BAZARR_PYTHON_PATH}" -c "import lxml"`,
   },
+  flarearr: {
+    start: `"${FLAREARR_SERVICE_CMD}" start`,
+    stop: `"${FLAREARR_SERVICE_CMD}" stop`,
+    restart: `"${FLAREARR_SERVICE_CMD}" restart`,
+    check: `"${FLAREARR_SERVICE_CMD}" status`,
+    host: FLAREARR_BIND_HOST,
+    port: FLAREARR_PORT,
+    binary: 'python3',
+    installCheckPaths: [FLAREARR_SERVICE_CMD, FLAREARR_PYTHON_PATH, FLAREARR_APP_PATH],
+    installCheckCommand: `"${FLAREARR_PYTHON_PATH}" -c "import requests"`,
+  },
   jellyseerr: {
     start: `"${JELLYSEERR_SERVICE_CMD}" start`,
     stop: `"${JELLYSEERR_SERVICE_CMD}" stop`,
@@ -709,6 +727,14 @@ const BASE_SERVICE_CATALOG_META = {
     route: '/bazarr/',
     surface: 'arr',
   },
+  flarearr: {
+    controlMode: 'optional',
+    description: 'Cloudflare challenge bypass helper for ARR/Prowlarr indexer requests.',
+    group: 'arr',
+    label: 'FlareArr',
+    route: '/flarearr/',
+    surface: 'arr',
+  },
   jellyseerr: {
     controlMode: 'always_on',
     description: 'Request portal for adding movies and shows into the automation flow.',
@@ -796,6 +822,7 @@ const OPTIONAL_SERVICE_NAMES = [
   'sshd',
   'llm',
   'codex_revamped',
+  'flarearr',
   'tailscale',
 ];
 const OPTIONAL_SERVICE_SET = new Set(OPTIONAL_SERVICE_NAMES);
@@ -1794,6 +1821,10 @@ const inspectServiceCatalogEntry = async (name, meta, storageProtection) => {
   let status = !available
     ? 'unavailable'
     : (running ? 'working' : meta.controlMode === 'optional' ? 'stopped' : 'stalled');
+  if (name === 'jellyseerr' && !running) {
+    status = 'deferred';
+    blocker = blocker || 'Deferred on this host until Jellyseerr runtime compatibility is restored.';
+  }
   if (name === 'tailscale' && TAILSCALE_MODE === 'android_app') {
     status = running ? 'external' : 'degraded';
   }
@@ -2017,7 +2048,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
     .map((key) => catalogByKey.get(key))
     .filter(Boolean);
   const subtitleEntry = catalogByKey.get('bazarr') || null;
-  const supportEntries = ['redis', 'postgres']
+  const supportEntries = ['redis', 'postgres', 'flarearr']
     .map((key) => catalogByKey.get(key))
     .filter(Boolean);
   const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
@@ -2277,7 +2308,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
       serviceKeys: supportEntries.map((entry) => entry.key),
       status: aggregateCatalogStatus(supportEntries),
       summary: supportEntries.length > 0
-        ? 'Redis and PostgreSQL support Live TV metadata and background media jobs.'
+        ? 'Redis/PostgreSQL handle media state while FlareArr supports Cloudflare-protected indexer access.'
         : 'No media support services are configured.',
     },
   };
@@ -3140,14 +3171,16 @@ const normalizeDriveEntry = (entry = {}) => ({
   filesystem: String(entry.filesystem || ''),
   letter: String(entry.letter || ''),
   mountPoint: String(entry.mountPoint || ''),
+  mountRole: String(entry.mountRole || entry.role || ''),
   name: String(entry.name || ''),
   rawMountPoint: String(entry.rawMountPoint || ''),
+  role: String(entry.role || ''),
   state: String(entry.state || 'unknown'),
   uuid: String(entry.uuid || ''),
 });
 
 const getDriveSnapshot = async () => {
-  const agentInstalled = fileIsExecutable(DRIVE_AGENT_CMD) || await commandExists(DRIVE_AGENT_CMD);
+  const agentInstalled = fileIsExecutable(USB_MOUNT_SERVICE_CMD) || await commandExists(USB_MOUNT_SERVICE_CMD);
   const rawManifest = readJsonFile(DRIVE_STATE_PATH, {});
 
   return {
@@ -6121,13 +6154,17 @@ const dashboardHandler = async (req, res) => {
 const UI_WORKSPACES = ['overview', 'media', 'files', 'transfers', 'ai', 'terminal', 'admin'];
 const LEGACY_TAB_TO_WORKSPACE = {
   home: 'overview',
+  overview: 'overview',
   media: 'media',
   downloads: 'media',
   arr: 'media',
+  files: 'files',
   terminal: 'terminal',
+  transfers: 'transfers',
   filesystem: 'files',
   ftp: 'transfers',
   ai: 'ai',
+  admin: 'admin',
   settings: 'admin',
 };
 
@@ -6185,7 +6222,7 @@ const buildQbittorrentUiDiagnostics = async (serviceCatalog) => {
 };
 
 const buildArrDiagnostics = (serviceCatalog) => {
-  const serviceKeys = ['sonarr', 'radarr', 'prowlarr', 'bazarr'];
+  const serviceKeys = ['sonarr', 'radarr', 'prowlarr', 'bazarr', 'flarearr'];
   const services = serviceKeys
     .map((key) => serviceCatalog.find((entry) => entry.key === key))
     .filter(Boolean);
@@ -6603,74 +6640,78 @@ const drivesHandler = async (req, res) => {
   res.json(await getDriveSnapshot());
 };
 
-const drivesCheckHandler = async (req, res) => {
-  const agentInstalled = fileIsExecutable(DRIVE_AGENT_CMD) || await commandExists(DRIVE_AGENT_CMD);
-  if (!agentInstalled) {
-    return res.status(503).json({ error: 'termux-drive-agent is not installed', agentInstalled: false });
+const ensureMediaCompatibilityLayout = () => {
+  const requiredDirs = [
+    MEDIA_ROOT,
+    MEDIA_MOVIES_DIR,
+    MEDIA_SERIES_DIR,
+    MEDIA_MUSIC_DIR,
+    MEDIA_AUDIOBOOKS_DIR,
+    MEDIA_DOWNLOADS_DIR,
+    MEDIA_IPTV_CACHE_DIR,
+    MEDIA_IPTV_EPG_DIR,
+  ];
+  for (const directory of requiredDirs) {
+    fs.mkdirSync(directory, { recursive: true });
   }
 
-  try {
-    await runCommand(`${DRIVE_AGENT_CMD} scan`);
-    const payload = await getDriveSnapshot();
-    pushAuditEvent(req, 'info', 'Drive agent scan requested', { count: payload.manifest.drives.length });
-    return res.json({ success: true, ...payload });
-  } catch (err) {
-    const error = String(err || 'Drive scan failed');
-    pushAuditEvent(req, 'error', 'Drive agent scan failed', { error });
-    return res.status(500).json({ error, ...(await getDriveSnapshot()) });
-  }
-};
+  const links = [
+    ['movies', MEDIA_MOVIES_DIR],
+    ['series', MEDIA_SERIES_DIR],
+    ['music', MEDIA_MUSIC_DIR],
+    ['audiobooks', MEDIA_AUDIOBOOKS_DIR],
+    ['downloads', MEDIA_DOWNLOADS_DIR],
+    ['iptv-cache', MEDIA_IPTV_CACHE_DIR],
+    ['iptv-epg', MEDIA_IPTV_EPG_DIR],
+  ];
 
-const storageProtectionHandler = (req, res) => {
-  res.json({
-    events: readJsonLines(STORAGE_WATCHDOG_EVENTS_FILE, 80),
-    storageProtection: readStorageProtectionState(),
-  });
-};
+  for (const [name, target] of links) {
+    const linkPath = path.join(MEDIA_ROOT, name);
+    const expectedTarget = fs.realpathSync.native(target);
 
-const storageProtectionRecheckHandler = async (req, res) => {
-  const helperAvailable = fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD) || await commandExists(STORAGE_WATCHDOG_SERVICE_CMD);
-  if (!helperAvailable) {
-    return res.status(503).json({
-      error: `Storage watchdog helper is not installed at ${STORAGE_WATCHDOG_SERVICE_CMD}`,
-      storageProtection: readStorageProtectionState(),
-    });
-  }
+    try {
+      const stat = fs.lstatSync(linkPath);
+      if (stat.isSymbolicLink()) {
+        const currentTarget = fs.realpathSync.native(linkPath);
+        if (currentTarget === expectedTarget) {
+          continue;
+        }
+        fs.unlinkSync(linkPath);
+      } else {
+        // Preserve user-managed paths; only manage symlinks.
+        continue;
+      }
+    } catch {
+      // Path does not exist; create managed symlink below.
+    }
 
-  try {
-    await runCommand(`"${STORAGE_WATCHDOG_SERVICE_CMD}" check-now`);
-    const payload = readStorageProtectionState();
-    pushAuditEvent(req, 'info', 'Storage watchdog recheck requested', {
-      blockedServices: payload.blockedServices.length,
-      state: payload.state,
-    });
-    return res.json({
-      success: true,
-      storageProtection: payload,
-    });
-  } catch (err) {
-    const error = String(err || 'Storage watchdog recheck failed');
-    pushAuditEvent(req, 'error', 'Storage watchdog recheck failed', { error });
-    return res.status(500).json({
-      error,
-      storageProtection: readStorageProtectionState(),
-    });
+    fs.symlinkSync(target, linkPath);
   }
 };
 
-const storageProtectionResumeHandler = async (req, res) => {
+const resumeStorageBlockedServices = async () => {
   const currentState = readStorageProtectionState();
 
   if (!currentState.overallHealthy || currentState.state === 'degraded') {
-    return res.status(409).json({
-      error: currentState.reason || 'Storage is still degraded',
+    return {
+      success: false,
+      blocked: true,
+      resumed: [],
+      failed: [],
       storageProtection: currentState,
-    });
+      error: currentState.reason || 'Storage is still degraded',
+    };
   }
 
   const pending = normalizeStringArray(currentState.stoppedByWatchdog);
   if (pending.length === 0) {
-    return res.json({ success: true, resumed: [], failed: [], storageProtection: currentState });
+    return {
+      success: true,
+      blocked: false,
+      resumed: [],
+      failed: [],
+      storageProtection: currentState,
+    };
   }
 
   const resumed = [];
@@ -6726,17 +6767,110 @@ const storageProtectionResumeHandler = async (req, res) => {
   }
 
   const nextState = readStorageProtectionState();
-  const success = failed.length === 0;
-  pushAuditEvent(req, success ? 'info' : 'warn', 'Storage resume requested', {
-    failed,
-    resumed,
-    state: nextState.state,
-  });
-  return res.status(success ? 200 : 207).json({
-    success,
+  return {
+    success: failed.length === 0,
+    blocked: false,
     resumed,
     failed,
     storageProtection: nextState,
+  };
+};
+
+const drivesCheckHandler = async (req, res) => {
+  const agentInstalled = fileIsExecutable(USB_MOUNT_SERVICE_CMD) || await commandExists(USB_MOUNT_SERVICE_CMD);
+  if (!agentInstalled) {
+    return res.status(503).json({ error: `USB mount service is not installed at ${USB_MOUNT_SERVICE_CMD}`, agentInstalled: false });
+  }
+
+  try {
+    await runCommand(`"${USB_MOUNT_SERVICE_CMD}" --scan-now`);
+    ensureMediaCompatibilityLayout();
+    const watchdogHelperAvailable = fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD) || await commandExists(STORAGE_WATCHDOG_SERVICE_CMD);
+    if (watchdogHelperAvailable) {
+      await runCommand(`"${STORAGE_WATCHDOG_SERVICE_CMD}" check-now`);
+      const firstWatchdogState = readStorageProtectionState();
+      if (firstWatchdogState.overallHealthy && firstWatchdogState.state === 'degraded') {
+        await runCommand(`"${STORAGE_WATCHDOG_SERVICE_CMD}" check-now`);
+      }
+    }
+    const resumeResult = await resumeStorageBlockedServices();
+    const payload = await getDriveSnapshot();
+    pushAuditEvent(req, 'info', 'Drive scan requested', {
+      count: payload.manifest.drives.length,
+      resumed: resumeResult.resumed.length,
+      failedResume: resumeResult.failed.length,
+      storageState: resumeResult.storageProtection.state,
+    });
+    return res.json({
+      success: true,
+      resumed: resumeResult.resumed,
+      failedResume: resumeResult.failed,
+      storageProtection: resumeResult.storageProtection,
+      ...payload,
+    });
+  } catch (err) {
+    const error = String(err || 'Drive scan failed');
+    pushAuditEvent(req, 'error', 'Drive scan failed', { error });
+    return res.status(500).json({ error, storageProtection: readStorageProtectionState(), ...(await getDriveSnapshot()) });
+  }
+};
+
+const storageProtectionHandler = (req, res) => {
+  res.json({
+    events: readJsonLines(STORAGE_WATCHDOG_EVENTS_FILE, 80),
+    storageProtection: readStorageProtectionState(),
+  });
+};
+
+const storageProtectionRecheckHandler = async (req, res) => {
+  const helperAvailable = fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD) || await commandExists(STORAGE_WATCHDOG_SERVICE_CMD);
+  if (!helperAvailable) {
+    return res.status(503).json({
+      error: `Storage watchdog helper is not installed at ${STORAGE_WATCHDOG_SERVICE_CMD}`,
+      storageProtection: readStorageProtectionState(),
+    });
+  }
+
+  try {
+    await runCommand(`"${STORAGE_WATCHDOG_SERVICE_CMD}" check-now`);
+    const payload = readStorageProtectionState();
+    pushAuditEvent(req, 'info', 'Storage watchdog recheck requested', {
+      blockedServices: payload.blockedServices.length,
+      state: payload.state,
+    });
+    return res.json({
+      success: true,
+      storageProtection: payload,
+    });
+  } catch (err) {
+    const error = String(err || 'Storage watchdog recheck failed');
+    pushAuditEvent(req, 'error', 'Storage watchdog recheck failed', { error });
+    return res.status(500).json({
+      error,
+      storageProtection: readStorageProtectionState(),
+    });
+  }
+};
+
+const storageProtectionResumeHandler = async (req, res) => {
+  const resumeResult = await resumeStorageBlockedServices();
+  if (resumeResult.blocked) {
+    return res.status(409).json({
+      error: resumeResult.error || 'Storage is still degraded',
+      storageProtection: resumeResult.storageProtection,
+    });
+  }
+  const success = resumeResult.success;
+  pushAuditEvent(req, success ? 'info' : 'warn', 'Storage resume requested', {
+    failed: resumeResult.failed,
+    resumed: resumeResult.resumed,
+    state: resumeResult.storageProtection.state,
+  });
+  return res.status(success ? 200 : 207).json({
+    success,
+    resumed: resumeResult.resumed,
+    failed: resumeResult.failed,
+    storageProtection: resumeResult.storageProtection,
   });
 };
 

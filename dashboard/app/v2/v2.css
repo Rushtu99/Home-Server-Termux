@@ -105,7 +105,9 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 90%, var(--background));
   padding: 6px 8px;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 60;
 }
 
 .dash2-header--auth {
@@ -191,20 +193,33 @@
 
 .dash2-utility-menu {
   position: relative;
+  z-index: 120;
+}
+
+.dash2-utility-menu__trigger {
+  list-style: none;
+}
+
+.dash2-utility-menu__trigger::-webkit-details-marker {
+  display: none;
 }
 
 .dash2-utility-menu__panel {
   position: absolute;
   right: 0;
   top: calc(100% + 4px);
-  z-index: 30;
+  z-index: 180;
   min-width: 176px;
-  display: grid;
+  display: none;
   gap: 6px;
   padding: 7px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 95%, var(--background));
+}
+
+.dash2-utility-menu[open] .dash2-utility-menu__panel {
+  display: grid;
 }
 
 .dash2-sidebar-toggle {

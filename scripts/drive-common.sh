@@ -13,10 +13,6 @@ TERMUX_DRIVES_MIRROR_ROOT="${TERMUX_DRIVES_MIRROR_ROOT:-/mnt/termux-drives}"
 INTERNAL_STORAGE="${INTERNAL_STORAGE:-/storage/emulated/0}"
 D_SOURCE="${D_SOURCE:-}"
 E_SOURCE="${E_SOURCE:-}"
-D_UUID="${D_UUID:-16BA8F9DBA8F784F}"
-E_UUID="${E_UUID:-8097-A8C4}"
-D_LABEL="${D_LABEL:-Rushtu 4TB}"
-E_LABEL="${E_LABEL:-T exFAT 2TB}"
 DRIVE_DETECT_RETRIES="${DRIVE_DETECT_RETRIES:-6}"
 DRIVE_DETECT_DELAY="${DRIVE_DETECT_DELAY:-1}"
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
@@ -243,7 +239,7 @@ list_external_drive_dirs() {
     find "$DRIVES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
         | while IFS= read -r drive_dir; do
             case "$(basename "$drive_dir")" in
-                C|Media|.state|.recycle-bin)
+                C|Media|.state|.recycle-bin|Vault|SCRATCH)
                     continue
                     ;;
                 *)
@@ -270,6 +266,11 @@ resolve_drive_dir() {
             candidate="$DRIVES_DIR/$token"
             ;;
     esac
+
+    if [ -d "$candidate" ] && path_is_direct_mount_in_proc "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
 
     normalized_token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     if [ -n "$normalized_token" ] && [ "${token#/}" = "$token" ]; then
@@ -409,8 +410,14 @@ cleanup_legacy_drive_aliases() {
     for alias_name in D E; do
         alias_path="$DRIVES_DIR/$alias_name"
         backup_path=""
+        # D/E are now first-class service mount points; never archive/remove them.
         if [ ! -e "$alias_path" ]; then
-            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"missing\"}")
+            mkdir -p "$alias_path" 2>/dev/null || true
+            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"created-service-mount-dir\"}")
+            continue
+        fi
+        if [ -d "$alias_path" ]; then
+            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"preserved-service-mount-dir\"}")
             continue
         fi
         if path_is_direct_mount_in_proc "$alias_path"; then

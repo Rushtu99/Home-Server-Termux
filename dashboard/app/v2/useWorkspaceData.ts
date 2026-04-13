@@ -91,8 +91,8 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       return;
     }
     const url = new URL(window.location.href);
-    url.searchParams.delete('workspace');
-    url.searchParams.set('tab', workspace);
+    url.searchParams.set('workspace', workspace);
+    url.searchParams.delete('tab');
     window.history.replaceState({}, '', url.toString());
   }, []);
 

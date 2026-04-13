@@ -19,6 +19,11 @@ TAILSCALE_LOG_PATH="${TAILSCALE_LOG_PATH:-$LOG_DIR/tailscaled.log}"
 TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
 TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-}"
 TAILSCALE_ACCEPT_DNS="${TAILSCALE_ACCEPT_DNS:-false}"
+QBITTORRENT_PORT="${QBITTORRENT_PORT:-8081}"
+TAILSCALE_EXPOSE_QBIT_WEBUI="${TAILSCALE_EXPOSE_QBIT_WEBUI:-true}"
+TAILSCALE_QBIT_WEBUI_PORT="${TAILSCALE_QBIT_WEBUI_PORT:-8081}"
+TAILSCALE_QBIT_TARGET_HOST="${TAILSCALE_QBIT_TARGET_HOST:-127.0.0.1}"
+TAILSCALE_QBIT_TARGET_PORT="${TAILSCALE_QBIT_TARGET_PORT:-$QBITTORRENT_PORT}"
 SERVICE_NAME="tailscale"
 
 load_shell_env_file() {
@@ -67,6 +72,11 @@ TAILSCALE_LOG_PATH="${TAILSCALE_LOG_PATH:-$LOG_DIR/tailscaled.log}"
 TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
 TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-}"
 TAILSCALE_ACCEPT_DNS="${TAILSCALE_ACCEPT_DNS:-false}"
+QBITTORRENT_PORT="${QBITTORRENT_PORT:-8081}"
+TAILSCALE_EXPOSE_QBIT_WEBUI="${TAILSCALE_EXPOSE_QBIT_WEBUI:-true}"
+TAILSCALE_QBIT_WEBUI_PORT="${TAILSCALE_QBIT_WEBUI_PORT:-8081}"
+TAILSCALE_QBIT_TARGET_HOST="${TAILSCALE_QBIT_TARGET_HOST:-127.0.0.1}"
+TAILSCALE_QBIT_TARGET_PORT="${TAILSCALE_QBIT_TARGET_PORT:-$QBITTORRENT_PORT}"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$TAILSCALE_STATE_DIR"
 
@@ -224,6 +234,21 @@ run_tailscale_up() {
     fi
 }
 
+configure_qbit_serve() {
+    [ "$TAILSCALE_MODE" = "root_daemon" ] || return 0
+    [ "$TAILSCALE_EXPOSE_QBIT_WEBUI" = "true" ] || return 0
+    root_tailscale_cli serve --bg --yes --tcp "$TAILSCALE_QBIT_WEBUI_PORT" "$TAILSCALE_QBIT_TARGET_HOST:$TAILSCALE_QBIT_TARGET_PORT" >/dev/null 2>&1 || {
+        echo "failed to expose qBittorrent via tailscale serve tcp:$TAILSCALE_QBIT_WEBUI_PORT -> $TAILSCALE_QBIT_TARGET_HOST:$TAILSCALE_QBIT_TARGET_PORT" >&2
+        return 1
+    }
+}
+
+clear_qbit_serve() {
+    [ "$TAILSCALE_MODE" = "root_daemon" ] || return 0
+    [ "$TAILSCALE_EXPOSE_QBIT_WEBUI" = "true" ] || return 0
+    root_tailscale_cli serve clear "tcp:$TAILSCALE_QBIT_WEBUI_PORT" >/dev/null 2>&1 || true
+}
+
 start_service() {
     local state=()
 
@@ -231,9 +256,11 @@ start_service() {
         ensure_install
         mapfile -t state < <(collect_tailscale_state)
         if [ "${state[1]:-false}" = "true" ]; then
+            configure_qbit_serve || true
             return 0
         fi
         run_tailscale_up >/dev/null 2>&1
+        configure_qbit_serve || true
         return 0
     fi
 
@@ -265,6 +292,7 @@ stop_service() {
     local pid=""
 
     if [ "$TAILSCALE_MODE" = "root_daemon" ]; then
+        clear_qbit_serve
         return 0
     fi
 

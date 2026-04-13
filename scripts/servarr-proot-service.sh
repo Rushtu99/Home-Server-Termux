@@ -36,6 +36,9 @@ load_shell_env_file() {
 
 load_shell_env_file "$SERVER_ENV_FILE"
 
+# Avoid leaking generic process-level PORT/HOST from other services into servarr boot.
+unset PORT HOST HOSTNAME || true
+
 if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
     . "$PROJECT/scripts/drive-common.sh"
 fi

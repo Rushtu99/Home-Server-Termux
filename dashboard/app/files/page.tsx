@@ -1045,10 +1045,10 @@ export default function FilesPage() {
   const statusText = driveAccessDenied
     ? 'Drive management is admin-only. Share browsing remains available for accounts with share access.'
     : !driveState.agentInstalled
-    ? 'termux-drive-agent is not installed yet. Only C will appear until the agent is available.'
+    ? 'USB mount service is not installed yet. Only internal storage will appear until it is available.'
     : drives.length > 0
       ? `${drives.length} removable drive${drives.length === 1 ? '' : 's'} detected.`
-      : 'Only C is currently present. Connect a removable drive or run Check Drives.';
+      : 'Only internal storage is currently present. Connect a removable drive or run Check drives (manual).';
 
   const selectedEntry = browser.entries.find((entry) => entry.path === selectedPath) || null;
   const filteredEntries = deferredSearch
@@ -1097,7 +1097,7 @@ export default function FilesPage() {
           </Link>
           {!driveAccessDenied ? (
             <button className="ui-button ui-button--primary" type="button" onClick={runManualCheck} disabled={manualBusy}>
-              {manualBusy ? 'Checking…' : 'Check Drives'}
+              {manualBusy ? 'Checking…' : 'Check drives (manual)'}
             </button>
           ) : null}
           <button className="ui-button" type="button" onClick={() => void loadDirectory(browser.path, { preserveSelection: true })} disabled={browserBusy}>

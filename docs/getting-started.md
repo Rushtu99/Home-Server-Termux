@@ -17,7 +17,7 @@ Required for the core web stack:
 - `nginx`
 
 Expected for the full Android runtime:
-- `termux-drive-agent`
+- `scripts/usb-mount-service.sh` (repo-provided mount microservice)
 - root access for drive mounts and loopback lockdown
 - service binaries you actually plan to run, such as `jellyfin-server`, `qbittorrent-nox`, `redis-server`, `postgres`, `llama-server`, or `ttyd`
 
@@ -67,9 +67,16 @@ bash start.sh
 What `start.sh` does:
 - loads `server/.env`
 - prepares `~/Drives`
-- refreshes external-drive state through `termux-drive-agent`
 - enforces the managed media layout and compatibility symlinks
 - starts backend, nginx, dashboard, media helpers, and optional local LLM helpers when available
+
+The USB mount daemon runs independently from home-server and can be managed with:
+
+```bash
+scripts/usb-mount-service.sh start
+scripts/usb-mount-service.sh status
+scripts/usb-mount-service.sh --scan-now
+```
 
 Default ports:
 - `8088`: nginx gateway

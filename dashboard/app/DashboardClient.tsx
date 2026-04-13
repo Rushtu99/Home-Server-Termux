@@ -2534,10 +2534,10 @@ export default function Dashboard() {
   const usedStoragePct = totalStorage > 0 ? Math.min((usedStorage / totalStorage) * 100, 100) : 0;
   const driveCount = driveState.manifest.drives.length;
   const filesystemStatus = !driveState.agentInstalled
-    ? 'Drive agent missing'
+    ? 'USB mount service missing'
     : driveCount > 0
       ? `${driveCount} removable drives mounted`
-      : 'Only C is present';
+      : 'Only internal storage is present';
   const latestDriveEvent = driveState.events[0] || null;
   const ftpBreadcrumbs = ftpPath.split('/').filter(Boolean);
   const filteredFtpEntries = ftpSearch.trim()
@@ -4001,7 +4001,7 @@ export default function Dashboard() {
                     </div>
                     <div style={styles.actionWrap}>
                       <button className="ui-button" style={styles.actionBtn} type="button" disabled={driveBusy} onClick={() => void runDriveCheck()}>
-                        {driveBusy ? 'Checking…' : 'Check Drives'}
+                        {driveBusy ? 'Checking…' : 'Check drives (manual)'}
                       </button>
                       {gatewayBase ? (
                         <a href={`${gatewayBase}/files`} className="ui-button ui-button--primary" style={styles.linkBtn}>

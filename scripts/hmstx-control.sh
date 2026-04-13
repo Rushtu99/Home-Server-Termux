@@ -186,6 +186,8 @@ TAILSCALE_GATEWAY_PORT="${TAILSCALE_GATEWAY_PORT:-8088}"
 TAILSCALE_SSH_PORT="${TAILSCALE_SSH_PORT:-8022}"
 TAILSCALE_EXPOSE_GATEWAY="${TAILSCALE_EXPOSE_GATEWAY:-true}"
 TAILSCALE_EXPOSE_SSH="${TAILSCALE_EXPOSE_SSH:-true}"
+TAILSCALE_EXPOSE_QBIT_WEBUI="${TAILSCALE_EXPOSE_QBIT_WEBUI:-true}"
+TAILSCALE_QBIT_WEBUI_PORT="${TAILSCALE_QBIT_WEBUI_PORT:-8081}"
 TAILSCALE_SERVICE_CMD="${TAILSCALE_SERVICE_CMD:-$PROJECT/scripts/tailscale-service.sh}"
 TAILSCALE_ROOT_CMD="${TAILSCALE_ROOT_CMD:-su -c tailscale}"
 
@@ -751,6 +753,7 @@ build_remote_access_json() {
     local raw=""
     local gateway_url=""
     local ssh_target=""
+    local qbit_url=""
     local gateway_status="disabled"
     local ssh_status="disabled"
 
@@ -763,10 +766,11 @@ build_remote_access_json() {
     if [ -n "$identity" ]; then
         gateway_url="http://${identity}:${TAILSCALE_GATEWAY_PORT}"
         ssh_target="ssh -p ${TAILSCALE_SSH_PORT} ${USER:-termux}@${identity}"
+        qbit_url="http://${identity}:${TAILSCALE_QBIT_WEBUI_PORT}"
         [ "$TAILSCALE_EXPOSE_GATEWAY" = "true" ] && gateway_status="preferred"
         [ "$TAILSCALE_EXPOSE_SSH" = "true" ] && ssh_status="preferred"
     fi
-    printf '{"preferred":"tailscale","gateway":{"enabled":%s,"port":%s,"url":"%s","status":"%s"},"ssh":{"enabled":%s,"port":%s,"target":"%s","status":"%s"}}' \
+    printf '{"preferred":"tailscale","gateway":{"enabled":%s,"port":%s,"url":"%s","status":"%s"},"ssh":{"enabled":%s,"port":%s,"target":"%s","status":"%s"},"qbittorrent":{"enabled":%s,"port":%s,"url":"%s","status":"%s"}}' \
         "$( [ "$TAILSCALE_EXPOSE_GATEWAY" = "true" ] && printf true || printf false )" \
         "$TAILSCALE_GATEWAY_PORT" \
         "$(json_escape "$gateway_url")" \
@@ -774,7 +778,11 @@ build_remote_access_json() {
         "$( [ "$TAILSCALE_EXPOSE_SSH" = "true" ] && printf true || printf false )" \
         "$TAILSCALE_SSH_PORT" \
         "$(json_escape "$ssh_target")" \
-        "$(json_escape "$ssh_status")"
+        "$(json_escape "$ssh_status")" \
+        "$( [ "$TAILSCALE_EXPOSE_QBIT_WEBUI" = "true" ] && printf true || printf false )" \
+        "$TAILSCALE_QBIT_WEBUI_PORT" \
+        "$(json_escape "$qbit_url")" \
+        "$( [ "$TAILSCALE_EXPOSE_QBIT_WEBUI" = "true" ] && [ -n "$qbit_url" ] && printf preferred || printf disabled )"
 }
 
 emit_status_text() {

@@ -85,9 +85,8 @@ export default function DashboardV2() {
   const [theme, setTheme] = useState('dark');
   const [styleVariant, setStyleVariant] = useState('classic-v2');
   const [loginNextPath, setLoginNextPath] = useState<string | null>(null);
-  const [utilityMenuOpen, setUtilityMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const utilityMenuRef = useRef<HTMLDivElement | null>(null);
+  const utilityMenuRef = useRef<HTMLDetailsElement | null>(null);
 
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
@@ -168,17 +167,15 @@ export default function DashboardV2() {
   }, [sidebarOpen]);
 
   useEffect(() => {
-    if (!utilityMenuOpen) {
-      return;
-    }
     const handlePointerDown = (event: MouseEvent) => {
-      if (!utilityMenuRef.current?.contains(event.target as Node)) {
-        setUtilityMenuOpen(false);
+      const menu = utilityMenuRef.current;
+      if (menu?.open && !menu.contains(event.target as Node)) {
+        menu.open = false;
       }
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setUtilityMenuOpen(false);
+      if (event.key === 'Escape' && utilityMenuRef.current?.open) {
+        utilityMenuRef.current.open = false;
       }
     };
     document.addEventListener('mousedown', handlePointerDown);
@@ -187,7 +184,7 @@ export default function DashboardV2() {
       document.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [utilityMenuOpen]);
+  }, []);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -460,43 +457,51 @@ export default function DashboardV2() {
               <>
                 <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
                 <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleTimeString() : 'Waiting for snapshot'}</span>
-                <button className="ui-button" type="button" onClick={handleRefresh} disabled={headerBusy}>
+                <button
+                  className="ui-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void handleRefresh();
+                  }}
+                  disabled={headerBusy}
+                >
                   {headerBusy ? 'Refreshing…' : 'Refresh'}
                 </button>
-                <div className="dash2-utility-menu" ref={utilityMenuRef}>
-                  <button
-                    className="ui-button"
-                    type="button"
-                    aria-expanded={utilityMenuOpen}
-                    aria-haspopup="menu"
-                    onClick={() => setUtilityMenuOpen((current) => !current)}
-                  >
+                <details className="dash2-utility-menu" ref={utilityMenuRef}>
+                  <summary className="ui-button dash2-utility-menu__trigger" aria-haspopup="menu">
                     Preferences
-                  </button>
-                  {utilityMenuOpen ? (
-                    <div className="dash2-utility-menu__panel" role="menu" aria-label="Theme and account">
-                      <label className="dash2-theme-picker">
-                        <span>Theme</span>
-                        <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
-                          {THEME_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="dash2-theme-picker">
-                        <span>Style</span>
-                        <select className="ui-input" value={styleVariant} onChange={(event) => setStyleVariant(event.target.value)}>
-                          {STYLE_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <button className="ui-button" type="button" onClick={handleLogout} disabled={headerBusy}>
-                        Log out
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
+                  </summary>
+                  <div className="dash2-utility-menu__panel" role="menu" aria-label="Theme and account">
+                    <label className="dash2-theme-picker">
+                      <span>Theme</span>
+                      <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
+                        {THEME_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="dash2-theme-picker">
+                      <span>Style</span>
+                      <select className="ui-input" value={styleVariant} onChange={(event) => setStyleVariant(event.target.value)}>
+                        {STYLE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="ui-button"
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void handleLogout();
+                      }}
+                      disabled={headerBusy}
+                    >
+                      Log out
+                    </button>
+                  </div>
+                </details>
               </>
             )}
           </div>

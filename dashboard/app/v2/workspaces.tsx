@@ -133,6 +133,22 @@ const compactWorkflowSummary = (value: unknown, fallback: string) => {
   return text;
 };
 
+const resolveGatewayHref = (routeValue: unknown) => {
+  const route = String(routeValue || '').trim();
+  if (!route) {
+    return '';
+  }
+  if (/^https?:\/\//i.test(route)) {
+    return route;
+  }
+  if (typeof window === 'undefined') {
+    return route;
+  }
+  const { protocol, hostname, port } = window.location;
+  const base = port === '8088' ? `${protocol}//${window.location.host}` : `${protocol}//${hostname}:8088`;
+  return `${base}${route.startsWith('/') ? route : `/${route}`}`;
+};
+
 const toHistoryPoint = (value: unknown) => {
   const num = Number(value || 0);
   if (!Number.isFinite(num)) {
@@ -228,6 +244,9 @@ const toneFromStatus = (statusValue: unknown): 'ok' | 'warn' | 'danger' | 'muted
   }
   if (status === 'stalled' || status === 'blocked' || status === 'starting' || status === 'degraded' || status === 'setup') {
     return 'warn';
+  }
+  if (status === 'deferred') {
+    return 'muted';
   }
   if (status === 'error' || status === 'failed' || status === 'unavailable' || status === 'crashed') {
     return 'danger';
@@ -422,10 +441,10 @@ function OverviewWorkspace({
     setMountBusy(true);
     try {
       const response = await checkDrives();
-      setMountStatus(response.success === false ? String(response.error || 'Mount recheck failed') : 'Mount recheck requested.');
+      setMountStatus(response.success === false ? String(response.error || 'Drive check failed') : 'Drive check requested.');
       workspaceActions?.onRefresh();
     } catch (error) {
-      setMountStatus(toErrorMessage(error, 'Mount recheck failed'));
+      setMountStatus(toErrorMessage(error, 'Drive check failed'));
     } finally {
       setMountBusy(false);
     }
@@ -487,7 +506,7 @@ function OverviewWorkspace({
         subtitle="Normalized removable drive inventory shared with the Files workspace."
         actions={(
           <button className="ui-button" type="button" disabled={mountBusy} onClick={() => void handleRecheckMounts()}>
-            {mountBusy ? 'Rechecking…' : 'Recheck mounts'}
+            {mountBusy ? 'Checking…' : 'Check drives (manual)'}
           </button>
         )}
       >
@@ -598,11 +617,13 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
   const subtitles = asRecord(mediaWorkflow.subtitles);
   const servicesByKey = new Map(services.map((entry) => [String(entry.key || ''), entry]));
   const visibleInventory = services.filter((entry) => String(entry.key || '') !== 'postgres');
-  const arrServices = (['sonarr', 'radarr', 'prowlarr', 'bazarr'] as const).map((serviceKey) => {
+  const arrServices = (['sonarr', 'radarr', 'prowlarr', 'bazarr', 'flarearr'] as const).map((serviceKey) => {
     const entry = servicesByKey.get(serviceKey);
     const fallbackStatus = serviceKey === 'bazarr'
       ? String(subtitles.status || 'unknown')
-      : String(automation.status || 'unknown');
+      : serviceKey === 'flarearr'
+        ? String(support.status || 'unknown')
+        : String(automation.status || 'unknown');
     return {
       available: Boolean(entry?.available),
       description: String(entry?.description || entry?.blocker || `${serviceKey} automation surface`),
@@ -662,6 +683,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
             { label: 'Requests', value: `${String(requests.status || 'unknown')} · ${requestServiceKeys.join(', ') || 'none'}` },
             { label: 'Automation', value: `${Number(automation.healthy || 0)}/${Math.max(Number(automation.total || 0), 0)} healthy · ${automationServiceKeys.join(', ') || 'none'}` },
             { label: 'Subtitles', value: `${String(subtitles.status || 'unknown')} · ${compactWorkflowSummary(subtitles.summary, 'Subtitle sync lane')}` },
+            { label: 'Support', value: `${String(support.status || 'unknown')} · ${compactWorkflowSummary(support.summary, 'ARR support services')}` },
             { label: 'Workflow help', value: 'See Admin → Help for the operator workflow and recovery steps.' },
           ]}
         />
@@ -758,7 +780,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
               </div>
               {entry.route ? (
                 <div className="dash2-service-admin-card__actions dash2-service-admin-card__actions--compact">
-                  <a className="ui-button ui-button--primary" href={entry.route} target="_blank" rel="noreferrer">Open</a>
+                  <a className="ui-button ui-button--primary" href={resolveGatewayHref(entry.route)} target="_blank" rel="noreferrer">Open</a>
                 </div>
               ) : null}
             </article>
@@ -818,7 +840,7 @@ function MediaWorkspace({ payload }: { payload: Record<string, unknown> }) {
                 </div>
                 {route ? (
                   <div className="dash2-service-admin-card__actions">
-                    <a className="ui-button ui-button--primary" href={route} target="_blank" rel="noreferrer">Open</a>
+                    <a className="ui-button ui-button--primary" href={resolveGatewayHref(route)} target="_blank" rel="noreferrer">Open</a>
                   </div>
                 ) : null}
               </article>
@@ -911,7 +933,7 @@ function FilesWorkspace({
         actions={(
           <>
             <button className="ui-button" type="button" onClick={runDriveCheck} disabled={actionBusy !== ''}>
-              {actionBusy === 'drives' ? 'Checking…' : 'Check drives'}
+              {actionBusy === 'drives' ? 'Checking…' : 'Check drives (manual)'}
             </button>
             <button className="ui-button" type="button" onClick={runStorageRecheck} disabled={actionBusy !== ''}>
               {actionBusy === 'recheck' ? 'Rechecking…' : 'Recheck storage'}
@@ -1369,7 +1391,7 @@ function TransfersWorkspace({
           <SectionCard
             title="Standalone add-torrent"
             subtitle="Submit one-off torrents to qBittorrent using an explicit destination path."
-            actions={qbitRoute ? <a className="ui-button" href={qbitRoute} target="_blank" rel="noreferrer">Open qBittorrent</a> : null}
+            actions={qbitRoute ? <a className="ui-button" href={resolveGatewayHref(qbitRoute)} target="_blank" rel="noreferrer">Open qBittorrent</a> : null}
           >
             {torrentStatus ? <p className="dash2-admin-note">{torrentStatus}</p> : null}
             <form

@@ -87,7 +87,6 @@ SSHD_MANAGED_CONFIG_PATH="${SSHD_MANAGED_CONFIG_PATH:-$TERMUX_PREFIX/etc/ssh/ssh
 SSHD_SERVICE_LOG_PATH="${SSHD_SERVICE_LOG_PATH:-$LOGDIR_PATH/sv/sshd/current}"
 START_LOCK_WAIT_SECONDS="${START_LOCK_WAIT_SECONDS:-30}"
 TAILSCALE_MODE="${TAILSCALE_MODE:-disabled}"
-DRIVE_AGENT_CMD="${DRIVE_AGENT_CMD:-/data/data/com.termux/files/usr/bin/termux-drive-agent}"
 TERMUX_CLOUD_MOUNT_CMD="${TERMUX_CLOUD_MOUNT_CMD:-/data/data/com.termux/files/usr/bin/termux-cloud-mount}"
 LOOPBACK_LOCKDOWN_CMD="${LOOPBACK_LOCKDOWN_CMD:-$PROJECT/scripts/loopback-lockdown.sh}"
 TAILSCALE_SERVICE_CMD="${TAILSCALE_SERVICE_CMD:-$PROJECT/scripts/tailscale-service.sh}"
@@ -103,6 +102,7 @@ SONARR_SERVICE_CMD="${SONARR_SERVICE_CMD:-$PROJECT/scripts/sonarr-service.sh}"
 RADARR_SERVICE_CMD="${RADARR_SERVICE_CMD:-$PROJECT/scripts/radarr-service.sh}"
 PROWLARR_SERVICE_CMD="${PROWLARR_SERVICE_CMD:-$PROJECT/scripts/prowlarr-service.sh}"
 BAZARR_SERVICE_CMD="${BAZARR_SERVICE_CMD:-$PROJECT/scripts/bazarr-service.sh}"
+FLAREARR_SERVICE_CMD="${FLAREARR_SERVICE_CMD:-$PROJECT/scripts/flarearr-service.sh}"
 JELLYSEERR_SERVICE_CMD="${JELLYSEERR_SERVICE_CMD:-$PROJECT/scripts/jellyseerr-service.sh}"
 CONFIGURE_ARR_STACK_CMD="${CONFIGURE_ARR_STACK_CMD:-$PROJECT/scripts/configure-arr-stack.sh}"
 LLM_BIND_HOST="${LLM_BIND_HOST:-127.0.0.1}"
@@ -124,6 +124,7 @@ SONARR_PID_PATH="${SONARR_PID_PATH:-$RUNTIME_DIR/sonarr.pid}"
 RADARR_PID_PATH="${RADARR_PID_PATH:-$RUNTIME_DIR/radarr.pid}"
 PROWLARR_PID_PATH="${PROWLARR_PID_PATH:-$RUNTIME_DIR/prowlarr.pid}"
 BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
+FLAREARR_PID_PATH="${FLAREARR_PID_PATH:-$RUNTIME_DIR/flarearr.pid}"
 JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
 LLM_PID_PATH="${LLM_PID_PATH:-$RUNTIME_DIR/llm.pid}"
 MEDIA_WORKFLOW_PID_PATH="${MEDIA_WORKFLOW_PID_PATH:-$RUNTIME_DIR/media-workflow.pid}"
@@ -532,28 +533,6 @@ stop_drive_watcher() {
         log_info "Stopping legacy drive watcher"
         pkill -f "$watcher" >/dev/null 2>&1 || true
     fi
-}
-
-run_drive_agent_scan() {
-    local attempt=0
-    local max_attempts=3
-
-    if [ ! -x "$DRIVE_AGENT_CMD" ]; then
-        log_info "termux-drive-agent not installed; only C will be present until the agent is added"
-        return 0
-    fi
-
-    while [ "$attempt" -lt "$max_attempts" ]; do
-        if "$DRIVE_AGENT_CMD" scan >/dev/null 2>&1; then
-            log_info "termux-drive-agent synced removable drive state"
-            return 0
-        fi
-        attempt=$((attempt + 1))
-        sleep 1
-    done
-
-    log_warn "termux-drive-agent scan failed after $max_attempts attempts; check ~/.termux/logs/termux-drive-agent.log"
-    return 0
 }
 
 sync_cloud_mount_links() {
@@ -1525,6 +1504,7 @@ stop_managed_services() {
     stop_pidfile_process "radarr" "$RADARR_PID_PATH"
     stop_pidfile_process "prowlarr" "$PROWLARR_PID_PATH"
     stop_pidfile_process "bazarr" "$BAZARR_PID_PATH"
+    stop_pidfile_process "flarearr" "$FLAREARR_PID_PATH"
     stop_pidfile_process "jellyseerr" "$JELLYSEERR_PID_PATH"
     stop_pidfile_process "llm" "$LLM_PID_PATH"
     stop_pidfile_process "media-workflow" "$MEDIA_WORKFLOW_PID_PATH"
@@ -1552,6 +1532,7 @@ stop_legacy_services() {
     stop_matching_process "radarr" "Radarr -nobrowser"
     stop_matching_process "prowlarr" "Prowlarr -nobrowser"
     stop_matching_process "bazarr" "bazarr.py"
+    stop_matching_process "flarearr" "flaresolverr.py"
     stop_matching_process "jellyseerr" "server/index.js"
     stop_matching_process "llm" "llama-server"
     stop_matching_process "media-workflow" "media-workflow-service.sh run-loop"
@@ -1690,6 +1671,7 @@ start_media_stack_services() {
     start_service_helper "Radarr" "$RADARR_SERVICE_CMD" 7878 "$RADARR_PID_PATH" "127.0.0.1"
     start_service_helper "Prowlarr" "$PROWLARR_SERVICE_CMD" 9696 "$PROWLARR_PID_PATH" "127.0.0.1"
     start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1"
+    start_service_helper "FlareArr" "$FLAREARR_SERVICE_CMD" 8191 "$FLAREARR_PID_PATH" "127.0.0.1"
 
     if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
         start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
@@ -1744,7 +1726,6 @@ warn_conflicting_boot_scripts
 
 stop_drive_watcher
 prepare_drives_root
-run_drive_agent_scan
 DRIVE_MIRROR_MODE=""
 DRIVE_MIRROR_ENTRIES_JSON="[]"
 DRIVE_MIRROR_ALIASES_JSON="[]"
@@ -1852,6 +1833,9 @@ printf '[%s] INFO  Jellyfin:  http://%s:8088/jellyfin/\n' "$(timestamp)" "$HOST_
 printf '[%s] INFO  qBittorrent: http://%s:8088/qb/\n' "$(timestamp)" "$HOST_IP"
 if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
     printf '[%s] INFO  Requests:  http://%s:8088/requests/\n' "$(timestamp)" "$HOST_IP"
+fi
+if [ -f "$HOME/services/flarearr/app/flaresolverr.py" ] || [ -f "$HOME/services/flarearr/app/src/flaresolverr.py" ]; then
+    printf '[%s] INFO  FlareArr:  http://%s:8088/flarearr/\n' "$(timestamp)" "$HOST_IP"
 fi
 
 trap 'reload_launcher' USR1

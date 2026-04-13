@@ -481,6 +481,12 @@ check_role_health() {
     local item=""
     local link_path=""
     local link_target=""
+    local drive_ok=0
+    local root_ok=0
+    local drive_reason=""
+    local root_reason=""
+    local drive_mounted=1
+    local drive_writable=1
 
     ROLE_HEALTHY=1
     ROLE_REASON=""
@@ -494,45 +500,64 @@ check_role_health() {
 
     collect_drive_dirs "$drives_csv" "$roots_csv" "$role_dir" "$subdir" drives
 
-    if [ "${#drives[@]}" -eq 0 ]; then
-        ROLE_HEALTHY=0
-        append_reason ROLE_REASON "No drives resolved for role '$role'"
-    fi
-
     for item in "${drives[@]}"; do
         ROLE_DRIVES+=("$item")
         if [ ! -d "$item" ]; then
-            ROLE_HEALTHY=0
-            append_reason ROLE_REASON "$role drive missing: $item"
+            append_reason drive_reason "$role drive missing: $item"
             continue
         fi
+        drive_mounted=1
         if ! path_is_direct_mount "$item"; then
-            ROLE_HEALTHY=0
-            append_reason ROLE_REASON "$role drive not mounted: $item"
+            drive_mounted=0
+            append_reason drive_reason "$role drive not mounted: $item"
         fi
+        drive_writable=1
         if type is_writable_dir >/dev/null 2>&1 && ! is_writable_dir "$item"; then
-            ROLE_HEALTHY=0
-            append_reason ROLE_REASON "$role drive not writable: $item"
+            drive_writable=0
+            append_reason drive_reason "$role drive not writable: $item"
+        fi
+        if [ "$drive_mounted" -eq 1 ] && [ "$drive_writable" -eq 1 ]; then
+            drive_ok=1
         fi
     done
 
-    if [ "${#roots[@]}" -eq 0 ]; then
+    if [ "${#drives[@]}" -eq 0 ]; then
         ROLE_HEALTHY=0
-        append_reason ROLE_REASON "No roots configured for role '$role'"
+        append_reason ROLE_REASON "No drives resolved for role '$role'"
+    elif [ "$drive_ok" -ne 1 ]; then
+        ROLE_HEALTHY=0
+        if [ -n "$drive_reason" ]; then
+            append_reason ROLE_REASON "$drive_reason"
+        else
+            append_reason ROLE_REASON "No healthy mounted drive found for role '$role'"
+        fi
+    fi
+
+    if [ "${#roots[@]}" -eq 0 ]; then
+        root_reason="No roots configured for role '$role'"
     fi
 
     for item in "${roots[@]}"; do
         ROLE_ROOTS+=("$item")
         if [ ! -d "$item" ]; then
-            ROLE_HEALTHY=0
-            append_reason ROLE_REASON "$role root missing: $item"
+            append_reason root_reason "$role root missing: $item"
             continue
         fi
         if type is_writable_dir >/dev/null 2>&1 && ! is_writable_dir "$item"; then
-            ROLE_HEALTHY=0
-            append_reason ROLE_REASON "$role root not writable: $item"
+            append_reason root_reason "$role root not writable: $item"
+            continue
         fi
+        root_ok=1
     done
+
+    if [ "$root_ok" -ne 1 ]; then
+        ROLE_HEALTHY=0
+        if [ -n "$root_reason" ]; then
+            append_reason ROLE_REASON "$root_reason"
+        else
+            append_reason ROLE_REASON "No healthy root found for role '$role'"
+        fi
+    fi
 
     csv_to_array "$compat_names_csv" compat_names
     for item in "${compat_names[@]}"; do

@@ -70,18 +70,52 @@ QBITTORRENT_CONFIG_PATH="${QBITTORRENT_CONFIG_PATH:-$QBITTORRENT_HOME/qBittorren
 QBITTORRENT_CONFIG_BACKUP_PATH="${QBITTORRENT_CONFIG_BACKUP_PATH:-$QBITTORRENT_HOME/qBittorrent/config/qBittorrent.conf.bak}"
 QBITTORRENT_FINISHED_CMD="${QBITTORRENT_FINISHED_CMD:-$MEDIA_IMPORTER_CMD import --trigger qb-finish --source \"%F\"}"
 SERVICE_NAME="qbittorrent"
+MEDIA_FALLBACK_ROOT="${MEDIA_FALLBACK_ROOT:-$PROJECT/runtime/HmSTxScratch}"
 
-mkdir -p \
-    "$RUNTIME_DIR" \
-    "$LOG_DIR" \
-    "$MEDIA_DOWNLOADS_DIR" \
-    "$MEDIA_DOWNLOADS_MOVIES_DIR" \
-    "$MEDIA_DOWNLOADS_SERIES_DIR" \
-    "$MEDIA_DOWNLOADS_MANUAL_DIR" \
-    "$MEDIA_DOWNLOADS_TORRENT_DIR" \
-    "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR" \
-    "$MEDIA_QBIT_TMP_DIR" \
-    "$(dirname "$QBITTORRENT_CONFIG_PATH")"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$(dirname "$QBITTORRENT_CONFIG_PATH")"
+
+ensure_download_paths() {
+    local path=""
+    local fallback_used=0
+    local try_root="$MEDIA_SCRATCH_ROOT"
+    local retry_required=0
+
+    prepare_paths() {
+        MEDIA_DOWNLOADS_DIR="$try_root/downloads"
+        MEDIA_DOWNLOADS_MOVIES_DIR="$MEDIA_DOWNLOADS_DIR/movies"
+        MEDIA_DOWNLOADS_SERIES_DIR="$MEDIA_DOWNLOADS_DIR/series"
+        MEDIA_DOWNLOADS_MANUAL_DIR="$MEDIA_DOWNLOADS_DIR/manual"
+        MEDIA_DOWNLOADS_TORRENT_DIR="$MEDIA_DOWNLOADS_DIR/torrent"
+        MEDIA_DOWNLOADS_TORRENT_QBIT_DIR="$MEDIA_DOWNLOADS_TORRENT_DIR/qbit"
+        MEDIA_QBIT_TMP_DIR="$try_root/tmp/qbittorrent"
+    }
+
+    while :; do
+        retry_required=0
+        prepare_paths
+        for path in \
+            "$MEDIA_DOWNLOADS_DIR" \
+            "$MEDIA_DOWNLOADS_MOVIES_DIR" \
+            "$MEDIA_DOWNLOADS_SERIES_DIR" \
+            "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+            "$MEDIA_DOWNLOADS_TORRENT_DIR" \
+            "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR" \
+            "$MEDIA_QBIT_TMP_DIR"; do
+            mkdir -p "$path" >/dev/null 2>&1 || {
+                if [ "$fallback_used" -eq 0 ]; then
+                    fallback_used=1
+                    try_root="$MEDIA_FALLBACK_ROOT"
+                    echo "qBittorrent scratch path unavailable; falling back to $try_root" >&2
+                    retry_required=1
+                    break
+                fi
+                echo "qBittorrent path is unavailable: $path" >&2
+                return 1
+            }
+        done
+        [ "$retry_required" -eq 1 ] || break
+    done
+}
 
 upsert_config_key() {
     local key="$1"
@@ -182,10 +216,10 @@ Accepted=true
 Cookies=@Invalid()
 
 [Preferences]
-WebUI\Address=$QBITTORRENT_BIND_HOST
+WebUI\Address=0.0.0.0
 WebUI\Port=$QBITTORRENT_PORT
-WebUI\CSRFProtection=true
-WebUI\HostHeaderValidation=true
+WebUI\CSRFProtection=false
+WebUI\HostHeaderValidation=false
 WebUI\LocalHostAuth=false
 WebUI\SecureCookie=false
 EOF
@@ -218,6 +252,14 @@ EOF
     else
         upsert_config_key 'Session\TorrentFinishedCmdEnabled' "false"
     fi
+    upsert_config_key 'WebUI\Address' "$QBITTORRENT_BIND_HOST"
+    upsert_config_key 'WebUI\Port' "$QBITTORRENT_PORT"
+    upsert_config_key 'WebUI\CSRFProtection' "false"
+    upsert_config_key 'WebUI\HostHeaderValidation' "false"
+    upsert_config_key 'WebUI\LocalHostAuth' "false"
+    upsert_config_key 'WebUI\SecureCookie' "false"
+    upsert_config_key 'WebUI\ReverseProxySupportEnabled' "true"
+    upsert_config_key 'WebUI\ServerDomains' "*"
 }
 
 is_running() {
@@ -239,6 +281,7 @@ start_service() {
         return 0
     fi
 
+    ensure_download_paths
     ensure_config
     rm -f "$QBITTORRENT_PID_PATH"
 

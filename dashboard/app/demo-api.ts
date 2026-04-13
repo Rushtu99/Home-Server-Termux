@@ -145,6 +145,7 @@ const SERVICE_META: DemoServiceCatalogEntry[] = [
   { available: true, controlMode: 'always_on', description: 'Automates movie discovery, tracking, and download handoff.', group: 'arr', key: 'radarr', label: 'Radarr', placeholder: false, route: '/radarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Central indexer manager for Sonarr and Radarr.', group: 'arr', key: 'prowlarr', label: 'Prowlarr', placeholder: false, route: '/prowlarr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Subtitle automation for imported media libraries.', group: 'arr', key: 'bazarr', label: 'Bazarr', placeholder: false, route: '/bazarr/', status: 'working', surface: 'arr' },
+  { available: true, controlMode: 'optional', description: 'Cloudflare challenge bypass helper for ARR/Prowlarr indexer requests.', group: 'arr', key: 'flarearr', label: 'FlareArr', placeholder: false, route: '/flarearr/', status: 'working', surface: 'arr' },
   { available: true, controlMode: 'always_on', description: 'Persistent database for IPTV services and future media metadata.', group: 'data', key: 'postgres', label: 'PostgreSQL', placeholder: false, status: 'working', surface: 'media' },
   { available: true, controlMode: 'always_on', description: 'Cache and worker coordination for IPTV and background jobs.', group: 'data', key: 'redis', label: 'Redis', placeholder: false, status: 'working', surface: 'media' },
   { available: true, controlMode: 'optional', description: 'Legacy remote access and PS4-compatible transfer path.', group: 'access', key: 'ftp', label: 'FTP', placeholder: false, status: 'working', surface: 'ftp' },
@@ -803,7 +804,7 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
   const catalogByKey = new Map(catalog.map((entry) => [entry.key, entry]));
   const watchEntry = catalogByKey.get('jellyfin') || null;
   const requestEntry = catalogByKey.get('jellyseerr') || null;
-  const arrEntries = ['sonarr', 'radarr', 'prowlarr', 'bazarr']
+  const arrEntries = ['sonarr', 'radarr', 'prowlarr', 'bazarr', 'flarearr']
     .map((key) => catalogByKey.get(key))
     .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
   const automationEntries = ['prowlarr', 'sonarr', 'radarr']
@@ -811,7 +812,7 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
     .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
   const subtitleEntry = catalogByKey.get('bazarr') || null;
   const qbEntry = catalogByKey.get('qbittorrent') || null;
-  const supportEntries = ['redis', 'postgres']
+  const supportEntries = ['redis', 'postgres', 'flarearr']
     .map((key) => catalogByKey.get(key))
     .filter((entry): entry is DemoServiceCatalogEntry => Boolean(entry));
   const downloadEntries = catalog.filter((entry) => entry.surface === 'downloads');
@@ -976,7 +977,7 @@ const buildMediaWorkflow = (state: DemoState, catalog: DemoServiceCatalogEntry[]
     support: {
       serviceKeys: supportEntries.map((entry) => entry.key),
       status: aggregateCatalogStatus(supportEntries),
-      summary: 'Redis and PostgreSQL support the media workflow behind the scenes.',
+      summary: 'Redis/PostgreSQL handle media state while FlareArr supports Cloudflare-protected indexers.',
     },
     arr: {
       addEndpoint: DEMO_TORRENT_ADD_ENDPOINT,

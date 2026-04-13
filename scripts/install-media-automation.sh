@@ -17,6 +17,7 @@ INSTALL_SONARR="${INSTALL_SONARR:-1}"
 INSTALL_RADARR="${INSTALL_RADARR:-1}"
 INSTALL_PROWLARR="${INSTALL_PROWLARR:-1}"
 INSTALL_BAZARR="${INSTALL_BAZARR:-0}"
+INSTALL_FLAREARR="${INSTALL_FLAREARR:-0}"
 INSTALL_JELLYSEERR="${INSTALL_JELLYSEERR:-0}"
 CONFIGURE_ARR_STACK="${CONFIGURE_ARR_STACK:-1}"
 
@@ -135,6 +136,24 @@ install_bazarr() {
     "$venv/bin/pip" install -r "$target/requirements.txt"
 }
 
+install_flarearr() {
+    local target="$MEDIA_SERVICES_HOME/flarearr/app"
+    local venv="$MEDIA_SERVICES_HOME/flarearr/venv"
+
+    rm -rf "$target"
+    mkdir -p "$target"
+    python -m venv "$venv"
+    "$venv/bin/pip" install --upgrade pip wheel setuptools
+    "$venv/bin/pip" install FlareSolverr
+
+    cat > "$target/flaresolverr.py" <<'PY'
+from flaresolverr import main
+
+if __name__ == "__main__":
+    main()
+PY
+}
+
 install_jellyseerr() {
     local archive="$RELEASES_DIR/jellyseerr.tar.gz"
     local target="$MEDIA_SERVICES_HOME/jellyseerr/app"
@@ -173,5 +192,6 @@ install_debian
 [ "$INSTALL_RADARR" = "1" ] && install_servarr_app radarr "https://github.com/Radarr/Radarr/releases/download/$RADARR_VERSION/Radarr.master.${RADARR_VERSION#v}.linux-core-arm64.tar.gz" "Radarr"
 [ "$INSTALL_PROWLARR" = "1" ] && install_servarr_app prowlarr "https://github.com/Prowlarr/Prowlarr/releases/download/$PROWLARR_VERSION/Prowlarr.master.${PROWLARR_VERSION#v}.linux-core-arm64.tar.gz" "Prowlarr"
 [ "$INSTALL_BAZARR" = "1" ] && install_bazarr
+[ "$INSTALL_FLAREARR" = "1" ] && install_flarearr
 [ "$INSTALL_JELLYSEERR" = "1" ] && install_jellyseerr
 [ "$CONFIGURE_ARR_STACK" = "1" ] && "$USER_HOME/home-server/scripts/configure-arr-stack.sh"
