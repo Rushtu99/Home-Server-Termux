@@ -215,6 +215,25 @@ resolve_mountpoint_for_device() {
     findmnt -nr -S "$device" -o TARGET 2>/dev/null | head -n 1
 }
 
+path_mount_fstype() {
+    local path="$1"
+    findmnt -nr -T "$path" -o FSTYPE 2>/dev/null | head -n 1
+}
+
+path_is_external_candidate_mount() {
+    local path="$1"
+    local fs_type=""
+
+    path_is_direct_mount_in_proc "$path" || return 1
+    fs_type="$(path_mount_fstype "$path" || true)"
+    case "$fs_type" in
+        ''|f2fs|tmpfs|overlay)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 scan_once() {
     local now
     now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -356,7 +375,7 @@ scan_once() {
 
             for fallback_base in "${mount_paths[@]}"; do
                 for fallback_candidate in "$fallback_base/$fallback_letter" "$fallback_base/$fallback_dir_name"; do
-                    if path_is_direct_mount_in_proc "$fallback_candidate"; then
+                    if path_is_external_candidate_mount "$fallback_candidate"; then
                         fallback_source="$fallback_candidate"
                         break 2
                     fi

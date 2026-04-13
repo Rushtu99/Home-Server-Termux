@@ -972,6 +972,18 @@ path_fs_type() {
     stat -f -c %T "$target" 2>/dev/null || printf 'unknown\n'
 }
 
+fs_type_is_non_external() {
+    local fs_type="$1"
+    case "$fs_type" in
+        ''|unknown|f2fs|tmpfs|overlay)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 run_pool_preflight() {
     local role="$1"
     local roots_name="$2"
@@ -998,9 +1010,13 @@ run_pool_preflight() {
             continue
         fi
 
-        if [ "$expected_min_gb" -gt 0 ] && [ "$total_gb" -lt "$expected_min_gb" ]; then
-            log_warn "$role root capacity ${total_gb}GiB is below expected floor ${expected_min_gb}GiB: $root"
-            failures=$((failures + 1))
+        if [ "$expected_min_gb" -gt 0 ]; then
+            if fs_type_is_non_external "$fs_type"; then
+                log_info "Skipping $role capacity floor check on non-external fs ($fs_type): $root"
+            elif [ "$total_gb" -lt "$expected_min_gb" ]; then
+                log_warn "$role root capacity ${total_gb}GiB is below expected floor ${expected_min_gb}GiB: $root"
+                failures=$((failures + 1))
+            fi
         fi
     done
 
@@ -1127,7 +1143,11 @@ apply_storage_layout_exports() {
     fi
 
     vault_free_gb="$(path_free_gb "$MEDIA_VAULT_ROOT")"
-    if [ "$vault_free_gb" -lt "$MEDIA_IMPORT_ABORT_FREE_GB" ]; then
+    local vault_fs_type=""
+    vault_fs_type="$(path_fs_type "$MEDIA_VAULT_ROOT")"
+    if fs_type_is_non_external "$vault_fs_type"; then
+        log_info "Skipping vault import-floor check on non-external fs ($vault_fs_type): $MEDIA_VAULT_ROOT"
+    elif [ "$vault_free_gb" -lt "$MEDIA_IMPORT_ABORT_FREE_GB" ]; then
         log_warn "Vault free space ${vault_free_gb}GiB is below import abort floor ${MEDIA_IMPORT_ABORT_FREE_GB}GiB"
         if [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
             return 1

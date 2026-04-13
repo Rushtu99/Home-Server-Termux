@@ -343,11 +343,20 @@ list_mirror_drive_dirs() {
 ensure_bind_mount_path() {
     local source="$1"
     local target="$2"
+    local resolved_source=""
+    local resolved_target=""
 
     [ -n "$source" ] || return 1
     [ -n "$target" ] || return 1
     [ -d "$source" ] || return 1
     command -v su >/dev/null 2>&1 || return 1
+
+    resolved_source="$(realpath -m "$source" 2>/dev/null || printf '%s\n' "$source")"
+    resolved_target="$(realpath -m "$target" 2>/dev/null || printf '%s\n' "$target")"
+    # Never create a self bind mount; it can mask the real storage state.
+    if [ "$resolved_source" = "$resolved_target" ]; then
+        return 0
+    fi
 
     su -c "mkdir -p '$target'" >/dev/null 2>&1 || return 1
     if path_mount_source_matches "$target" "$source"; then
