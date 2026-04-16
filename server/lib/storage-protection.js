@@ -3,9 +3,32 @@ const normalizeStringArray = (value) =>
     .map((entry) => String(entry || '').trim())
     .filter(Boolean);
 
+const normalizeBoolish = (value, fallbackValue = true) => {
+  if (value == null) {
+    return fallbackValue;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) {
+    return fallbackValue;
+  }
+  if (['false', '0', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  return fallbackValue;
+};
+
 const normalizeStorageRoleState = (value = {}) => ({
   drives: normalizeStringArray(value?.drives),
-  healthy: value?.healthy !== false,
+  healthy: normalizeBoolish(value?.healthy, true),
   reason: String(value?.reason || ''),
   roots: normalizeStringArray(value?.roots),
 });

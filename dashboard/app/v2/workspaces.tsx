@@ -133,6 +133,17 @@ const compactWorkflowSummary = (value: unknown, fallback: string) => {
   return text;
 };
 
+const compactProtectionSummary = (value: unknown) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return 'Storage watchdog state';
+  }
+  if (text.length <= 180) {
+    return text;
+  }
+  return `${text.slice(0, 177)}…`;
+};
+
 const resolveGatewayHref = (routeValue: unknown) => {
   const route = String(routeValue || '').trim();
   if (!route) {
@@ -924,12 +935,16 @@ function FilesWorkspace({
         <MetricTile label="Mounted drives" value={mountedDriveCount} helper="Derived from manifest drive states" />
         <MetricTile label="Shares" value={shares.length} helper="Managed shares available to dashboard users" />
         <MetricTile label="Users" value={users.length} helper="Account inventory for permission policy" />
-        <MetricTile label="Protection" value={String(protection.state || 'unknown')} helper={String(protection.reason || 'Storage watchdog state')} />
+        <MetricTile
+          label="Protection"
+          value={String(protection.state || 'unknown')}
+          helper={compactProtectionSummary(protection.reasonCompact || protection.reason || 'Storage watchdog state')}
+        />
       </MetricGrid>
 
       <SectionCard
         title="Filesystem workspace"
-        subtitle="Use the dedicated Files route for full browser + operations tools."
+        subtitle="Use the dedicated Files route for browser tools, manual drive checks, and compatibility-link validation."
         actions={(
           <>
             <button className="ui-button" type="button" onClick={runDriveCheck} disabled={actionBusy !== ''}>

@@ -94,6 +94,7 @@ LLM_SERVICE_CMD="${LLM_SERVICE_CMD:-$PROJECT/scripts/llm-service.sh}"
 MEDIA_IMPORTER_CMD="${MEDIA_IMPORTER_CMD:-$PROJECT/scripts/media-importer.sh}"
 MEDIA_WORKFLOW_SERVICE_CMD="${MEDIA_WORKFLOW_SERVICE_CMD:-$PROJECT/scripts/media-workflow-service.sh}"
 STORAGE_WATCHDOG_SERVICE_CMD="${STORAGE_WATCHDOG_SERVICE_CMD:-$PROJECT/scripts/storage-watchdog-service.sh}"
+USB_MOUNT_SERVICE_CMD="${USB_MOUNT_SERVICE_CMD:-$PROJECT/scripts/usb-mount-service.sh}"
 REDIS_SERVICE_CMD="${REDIS_SERVICE_CMD:-$PROJECT/scripts/redis-service.sh}"
 POSTGRES_SERVICE_CMD="${POSTGRES_SERVICE_CMD:-$PROJECT/scripts/postgres-service.sh}"
 JELLYFIN_SERVICE_CMD="${JELLYFIN_SERVICE_CMD:-$PROJECT/scripts/jellyfin-service.sh}"
@@ -185,6 +186,9 @@ MEDIA_SCRATCH_CLEANUP_ENABLED="${MEDIA_SCRATCH_CLEANUP_ENABLED:-true}"
 MEDIA_VAULT_EXPECT_MIN_GB="${MEDIA_VAULT_EXPECT_MIN_GB:-3000}"
 MEDIA_SCRATCH_EXPECT_MIN_GB="${MEDIA_SCRATCH_EXPECT_MIN_GB:-1400}"
 MEDIA_PREFLIGHT_FAIL_CLOSED="${MEDIA_PREFLIGHT_FAIL_CLOSED:-false}"
+MEDIA_VAULT_FALLBACK_TO_SCRATCH="${MEDIA_VAULT_FALLBACK_TO_SCRATCH:-true}"
+MEDIA_SCRATCH_FALLBACK_ROOT="${MEDIA_SCRATCH_FALLBACK_ROOT:-$PROJECT/runtime/HmSTxScratch}"
+MEDIA_LAYOUT_REPAIR_COMPAT_LINKS="${MEDIA_LAYOUT_REPAIR_COMPAT_LINKS:-true}"
 START_LOCK_DIR="${START_LOCK_DIR:-$RUNTIME_DIR/start.lock.d}"
 
 if [ "$MEDIA_PREFLIGHT_FAIL_CLOSED" = "true" ] && [ "$MEDIA_LAYOUT_STRICT" != "true" ]; then
@@ -193,7 +197,10 @@ fi
 
 mkdir -p "$LOG_DIR" "$RUNTIME_DIR" "$MOUNT_RUNTIME_DIR"
 START_LOG="$LOG_DIR/start.log"
-exec > >(tee -a "$START_LOG") 2>&1
+if [ "${START_LOG_PIPE_ATTACHED:-0}" != "1" ]; then
+    export START_LOG_PIPE_ATTACHED=1
+    exec > >(tee -a "$START_LOG") 2>&1
+fi
 
 timestamp() {
     date '+%Y-%m-%d %H:%M:%S'
@@ -213,6 +220,7 @@ log_error() {
 
 HOTKEY_PID=""
 RELOAD_REQUESTED=0
+EXTERNAL_ROLE_MOUNTS_READY="unknown"
 
 acquire_start_lock() {
     local lock_pid_file="$START_LOCK_DIR/pid"
@@ -501,31 +509,6 @@ stop_repo_nginx() {
     rm -f "$NGINX_PID_PATH" "$PROJECT/nginx.pid"
 }
 
-report_mount_status() {
-    local letter="$1"
-    local mount_point="$2"
-    local fs_type="$3"
-    local status="$4"
-
-    case "$status" in
-        mounted)
-            log_info "Drive $letter ready at $mount_point"
-            ;;
-        waiting)
-            log_info "No $fs_type drive detected yet for $letter"
-            ;;
-        missing-ntfs-3g)
-            log_warn "ntfs-3g not found; cannot mount $letter"
-            ;;
-        missing-bindfs)
-            log_warn "bindfs not found; cannot expose exFAT drive $letter cleanly"
-            ;;
-        failed:*)
-            log_warn "Failed to mount $fs_type drive for $letter (${status#failed:})"
-            ;;
-    esac
-}
-
 stop_drive_watcher() {
     local watcher="$PROJECT/scripts/drive-watcher.sh"
 
@@ -555,6 +538,73 @@ sync_cloud_mount_links() {
 
     log_warn "termux-cloud-mount sync-links failed after $max_attempts attempts; check root mount helper state"
     return 0
+}
+
+role_main_mount_dir_name() {
+    local role="$1"
+    case "$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')" in
+        vault)
+            printf 'D (%s)\n' "$VAULT_MAIN_LABEL"
+            ;;
+        scratch)
+            printf 'E (%s)\n' "$SCRATCH_MAIN_LABEL"
+            ;;
+        *)
+            printf '\n'
+            ;;
+    esac
+}
+
+role_main_mount_present() {
+    local role="$1"
+    local dir_name=""
+    local primary_path=""
+    local mirror_path=""
+
+    dir_name="$(role_main_mount_dir_name "$role")"
+    [ -n "$dir_name" ] || return 1
+
+    primary_path="$DRIVES_DIR/$dir_name"
+    mirror_path="$TERMUX_DRIVES_MIRROR_ROOT/$dir_name"
+
+    if path_is_direct_mount_in_proc "$primary_path"; then
+        return 0
+    fi
+    if path_is_direct_mount_in_proc "$mirror_path"; then
+        return 0
+    fi
+    return 1
+}
+
+external_role_mounts_ready() {
+    role_main_mount_present "vault" && role_main_mount_present "scratch"
+}
+
+bootstrap_drive_mounts() {
+    if external_role_mounts_ready; then
+        EXTERNAL_ROLE_MOUNTS_READY="true"
+        log_info "External vault/scratch mounts already active under $DRIVES_DIR and/or $TERMUX_DRIVES_MIRROR_ROOT; skipping drive scan"
+        return 0
+    fi
+
+    if [ ! -x "$USB_MOUNT_SERVICE_CMD" ]; then
+        EXTERNAL_ROLE_MOUNTS_READY="false"
+        log_warn "USB mount helper missing ($USB_MOUNT_SERVICE_CMD); using fallback drive paths"
+        return 0
+    fi
+
+    log_info "Running USB mount scan for vault/scratch external drives"
+    if ! "$USB_MOUNT_SERVICE_CMD" --scan-now >/dev/null 2>&1; then
+        log_warn "USB mount scan failed; using fallback drive paths"
+    fi
+
+    if external_role_mounts_ready; then
+        EXTERNAL_ROLE_MOUNTS_READY="true"
+        log_info "External vault/scratch mounts detected"
+    else
+        EXTERNAL_ROLE_MOUNTS_READY="false"
+        log_warn "No external vault/scratch drives detected; fallback roots will be used and vault-only services stay limited"
+    fi
 }
 
 apply_loopback_lockdown() {
@@ -786,7 +836,10 @@ build_pool_roots() {
     local configured_drives=()
     local all_drives=()
     local direct_mount_drives=()
+    local fallback_first_drives=()
+    local nonfallback_drives=()
     local drive_dir=""
+    local drive_base_lc=""
     local role_root=""
     local -n out_roots_ref="$out_roots_name"
     local -n out_drives_ref="$out_drives_name"
@@ -816,6 +869,21 @@ build_pool_roots() {
 
     if [ "${#direct_mount_drives[@]}" -gt 0 ]; then
         all_drives=("${direct_mount_drives[@]}")
+    else
+        for drive_dir in "${all_drives[@]}"; do
+            drive_base_lc="$(basename "$drive_dir" | tr '[:upper:]' '[:lower:]')"
+            case "$drive_base_lc" in
+                *"fallback"*)
+                    fallback_first_drives+=("$drive_dir")
+                    ;;
+                *)
+                    nonfallback_drives+=("$drive_dir")
+                    ;;
+            esac
+        done
+        if [ "${#fallback_first_drives[@]}" -gt 0 ]; then
+            all_drives=("${fallback_first_drives[@]}" "${nonfallback_drives[@]}")
+        fi
     fi
 
     for drive_dir in "${all_drives[@]}"; do
@@ -856,32 +924,174 @@ build_pool_roots() {
     return 0
 }
 
+MEDIA_COMPAT_ROOT_REBUILT=0
+
+resolve_link_target_absolute() {
+    local link_parent="$1"
+    local raw_target="$2"
+    local resolved=""
+
+    if [ -z "$raw_target" ]; then
+        printf '\n'
+        return 0
+    fi
+
+    if [ "${raw_target#/}" != "$raw_target" ]; then
+        resolved="$(realpath -m "$raw_target" 2>/dev/null || true)"
+        if [ -n "$resolved" ]; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+        printf '%s\n' "$raw_target"
+        return 0
+    fi
+
+    resolved="$(realpath -m "$link_parent/$raw_target" 2>/dev/null || true)"
+    if [ -n "$resolved" ]; then
+        printf '%s\n' "$resolved"
+        return 0
+    fi
+
+    printf '%s\n' "$link_parent/$raw_target"
+}
+
+compat_target_for_name() {
+    local name="$1"
+
+    case "$name" in
+        movies)
+            printf '%s\n' "$MEDIA_MOVIES_DIR"
+            ;;
+        series)
+            printf '%s\n' "$MEDIA_SERIES_DIR"
+            ;;
+        music)
+            printf '%s\n' "$MEDIA_MUSIC_DIR"
+            ;;
+        audiobooks)
+            printf '%s\n' "$MEDIA_AUDIOBOOKS_DIR"
+            ;;
+        downloads)
+            printf '%s\n' "$MEDIA_DOWNLOADS_DIR"
+            ;;
+        iptv-cache)
+            printf '%s\n' "$MEDIA_IPTV_CACHE_DIR"
+            ;;
+        iptv-epg)
+            printf '%s\n' "$MEDIA_IPTV_EPG_DIR"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+rebuild_media_compat_root() {
+    local tmp_root="$MEDIA_ROOT.__compat-rebuild.$$"
+    local stale_root="$MEDIA_ROOT.__compat-stale.$(date '+%Y%m%d%H%M%S').$$"
+    local entry=""
+    local entry_target=""
+    local entries=(movies series music audiobooks downloads iptv-cache iptv-epg)
+
+    if [ "$MEDIA_COMPAT_ROOT_REBUILT" = "1" ]; then
+        return 1
+    fi
+
+    rm -rf "$tmp_root" 2>/dev/null || true
+    if ! mkdir -p "$tmp_root" 2>/dev/null; then
+        log_warn "Unable to create temporary compatibility root at $tmp_root"
+        return 1
+    fi
+
+    for entry in "${entries[@]}"; do
+        entry_target="$(compat_target_for_name "$entry" || true)"
+        if [ -z "$entry_target" ]; then
+            log_warn "Cannot rebuild compatibility root: target is missing for $entry"
+            rm -rf "$tmp_root" 2>/dev/null || true
+            return 1
+        fi
+        mkdir -p "$entry_target"
+        if ! ln -s "$entry_target" "$tmp_root/$entry" 2>/dev/null; then
+            log_warn "Unable to prepare compatibility link $tmp_root/$entry -> $entry_target"
+            rm -rf "$tmp_root" 2>/dev/null || true
+            return 1
+        fi
+    done
+
+    if [ -e "$MEDIA_ROOT" ] && ! mv "$MEDIA_ROOT" "$stale_root" 2>/dev/null; then
+        log_warn "Unable to rotate existing compatibility root at $MEDIA_ROOT"
+        rm -rf "$tmp_root" 2>/dev/null || true
+        return 1
+    fi
+
+    if ! mv "$tmp_root" "$MEDIA_ROOT" 2>/dev/null; then
+        log_warn "Unable to activate rebuilt compatibility root at $MEDIA_ROOT"
+        rm -rf "$tmp_root" 2>/dev/null || true
+        if [ -d "$stale_root" ] && [ ! -e "$MEDIA_ROOT" ]; then
+            mv "$stale_root" "$MEDIA_ROOT" 2>/dev/null || true
+        fi
+        return 1
+    fi
+
+    MEDIA_COMPAT_ROOT_REBUILT=1
+    log_warn "Rebuilt compatibility root at $MEDIA_ROOT to recover locked stale links"
+    if [ -d "$stale_root" ] && ! rm -rf "$stale_root" 2>/dev/null; then
+        log_warn "Retained previous compatibility root for manual cleanup: $stale_root"
+    fi
+    return 0
+}
+
 ensure_compat_link() {
     local name="$1"
     local target="$2"
     local compat_path="$MEDIA_ROOT/$name"
+    local link_parent="$MEDIA_ROOT"
+    local expected_target=""
+    local current_raw_target=""
     local current_target=""
     local has_conflict=0
 
     mkdir -p "$target"
+    expected_target="$(realpath -m "$target" 2>/dev/null || printf '%s\n' "$target")"
 
     if [ -L "$compat_path" ]; then
-        current_target="$(readlink -f "$compat_path" 2>/dev/null || true)"
-        if [ "$current_target" = "$target" ]; then
+        current_raw_target="$(readlink "$compat_path" 2>/dev/null || true)"
+        current_target="$(resolve_link_target_absolute "$link_parent" "$current_raw_target")"
+        if [ "$current_target" = "$expected_target" ]; then
             return 0
         fi
-        log_warn "Compatibility link $compat_path points to $current_target (expected $target)"
+        if [ "$MEDIA_LAYOUT_REPAIR_COMPAT_LINKS" = "true" ]; then
+            if ln -sfn "$target" "$compat_path" 2>/dev/null; then
+                log_info "Repaired compatibility link $compat_path -> $target"
+                return 0
+            fi
+            rm -rf "$compat_path" 2>/dev/null || true
+            if ln -s "$target" "$compat_path" 2>/dev/null; then
+                log_info "Repaired compatibility link $compat_path -> $target (forced relink)"
+                return 0
+            fi
+            if rebuild_media_compat_root; then
+                current_raw_target="$(readlink "$compat_path" 2>/dev/null || true)"
+                current_target="$(resolve_link_target_absolute "$link_parent" "$current_raw_target")"
+                if [ "$current_target" = "$expected_target" ]; then
+                    log_info "Repaired compatibility link $compat_path -> $target (compat root rebuild)"
+                    return 0
+                fi
+            fi
+            log_warn "Failed to repair compatibility link $compat_path -> $target"
+        fi
+        log_warn "Compatibility link $compat_path points to ${current_target:-<unreadable>} (expected $expected_target)"
         has_conflict=1
     elif [ -e "$compat_path" ]; then
         if [ -d "$compat_path" ] && [ "$MEDIA_LAYOUT_AUTO_ADOPT_EMPTY" = "true" ] && [ -z "$(find "$compat_path" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
             rmdir "$compat_path" 2>/dev/null || true
-            ln -sfn "$target" "$compat_path"
+            ln -s "$target" "$compat_path"
             return 0
         fi
         log_warn "Compatibility path exists and is not a managed symlink: $compat_path"
         has_conflict=1
     else
-        ln -sfn "$target" "$compat_path"
+        ln -s "$target" "$compat_path"
         return 0
     fi
 
@@ -1048,13 +1258,70 @@ apply_storage_layout_exports() {
     local vault_roots_csv=""
     local scratch_roots_csv=""
     local vault_free_gb=0
+    local vault_ready=true
+    local scratch_ready=true
+    local fallback_root=""
+    local scratch_root=""
 
     if ! build_pool_roots "vault" "$MEDIA_VAULT_DRIVES" "$MEDIA_VAULT_DIR_NAME" "$MEDIA_VAULT_MEDIA_SUBDIR" vault_roots vault_drives; then
-        return 1
+        vault_ready=false
+        vault_roots=()
+        vault_drives=()
     fi
 
     if ! build_pool_roots "scratch" "$MEDIA_SCRATCH_DRIVES" "$MEDIA_SCRATCH_DIR_NAME" "$MEDIA_SCRATCH_MEDIA_SUBDIR" scratch_roots scratch_drives; then
-        return 1
+        scratch_ready=false
+        scratch_roots=()
+        scratch_drives=()
+    fi
+
+    if [ "$scratch_ready" != "true" ] || [ "${#scratch_roots[@]}" -eq 0 ]; then
+        if [ "$MEDIA_LAYOUT_STRICT" = "true" ] || [ "$MEDIA_PREFLIGHT_FAIL_CLOSED" = "true" ]; then
+            log_error "Scratch roots unavailable and strict mode is enabled"
+            return 1
+        fi
+
+        scratch_root="$MEDIA_SCRATCH_FALLBACK_ROOT"
+        log_warn "Scratch roots unavailable; falling back to local scratch root: $scratch_root"
+        if ! mkdir -p "$scratch_root" 2>/dev/null; then
+            log_error "Unable to create local scratch fallback root: $scratch_root"
+            return 1
+        fi
+        if ! is_writable_dir "$scratch_root"; then
+            log_error "Local scratch fallback root is not writable: $scratch_root"
+            return 1
+        fi
+
+        scratch_roots=("$scratch_root")
+        scratch_drives=("$scratch_root")
+    fi
+
+    if [ "$vault_ready" != "true" ] || [ "${#vault_roots[@]}" -eq 0 ]; then
+        if [ "$MEDIA_LAYOUT_STRICT" = "true" ] || [ "$MEDIA_PREFLIGHT_FAIL_CLOSED" = "true" ] || [ "$MEDIA_VAULT_FALLBACK_TO_SCRATCH" != "true" ]; then
+            log_error "Vault roots unavailable and fallback is disabled"
+            return 1
+        fi
+
+        log_warn "Vault roots unavailable; falling back to scratch media roots"
+        vault_roots=()
+        for scratch_root in "${scratch_roots[@]}"; do
+            fallback_root="$scratch_root/media"
+            if ! mkdir -p "$fallback_root" 2>/dev/null; then
+                log_warn "Unable to create fallback vault root at $fallback_root"
+                continue
+            fi
+            if ! is_writable_dir "$fallback_root"; then
+                log_warn "Fallback vault root is not writable: $fallback_root"
+                continue
+            fi
+            vault_roots+=("$fallback_root")
+        done
+
+        if [ "${#vault_roots[@]}" -eq 0 ]; then
+            log_error "Scratch fallback did not provide any writable vault roots"
+            return 1
+        fi
+        vault_drives=("${scratch_drives[@]}")
     fi
 
     if ! run_storage_preflight vault_roots scratch_roots; then
@@ -1139,7 +1406,7 @@ apply_storage_layout_exports() {
 
     if [ -d "$MEDIA_ROOT/downloads" ] && [ ! -L "$MEDIA_ROOT/downloads" ] && [ "$MEDIA_LAYOUT_AUTO_ADOPT_EMPTY" = "true" ] && ! directory_has_payload "$MEDIA_ROOT/downloads"; then
         rm -rf "$MEDIA_ROOT/downloads"
-        ln -sfn "$MEDIA_DOWNLOADS_DIR" "$MEDIA_ROOT/downloads"
+        ensure_compat_link "downloads" "$MEDIA_DOWNLOADS_DIR" || return 1
     fi
 
     vault_free_gb="$(path_free_gb "$MEDIA_VAULT_ROOT")"
@@ -1685,12 +1952,24 @@ start_worker_helper() {
 start_media_stack_services() {
     start_service_helper "Redis" "$REDIS_SERVICE_CMD" 6379 "$REDIS_PID_PATH" "127.0.0.1"
     start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
-    start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1"
+
+    if [ "$EXTERNAL_ROLE_MOUNTS_READY" = "true" ]; then
+        start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1"
+    else
+        log_warn "Skipping Jellyfin (external vault drive not mounted)"
+    fi
     start_service_helper "qBittorrent" "$QBITTORRENT_SERVICE_CMD" 8081 "$QBITTORRENT_PID_PATH" "127.0.0.1"
+
     start_service_helper "Sonarr" "$SONARR_SERVICE_CMD" 8989 "$SONARR_PID_PATH" "127.0.0.1"
     start_service_helper "Radarr" "$RADARR_SERVICE_CMD" 7878 "$RADARR_PID_PATH" "127.0.0.1"
     start_service_helper "Prowlarr" "$PROWLARR_SERVICE_CMD" 9696 "$PROWLARR_PID_PATH" "127.0.0.1"
-    start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1"
+
+    if [ "$EXTERNAL_ROLE_MOUNTS_READY" = "true" ]; then
+        start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1"
+    else
+        log_warn "Skipping Bazarr (vault drive not mounted)"
+    fi
+
     start_service_helper "FlareArr" "$FLAREARR_SERVICE_CMD" 8191 "$FLAREARR_PID_PATH" "127.0.0.1"
 
     if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
@@ -1746,6 +2025,8 @@ warn_conflicting_boot_scripts
 
 stop_drive_watcher
 prepare_drives_root
+bootstrap_drive_mounts
+export HMSTX_EXTERNAL_DRIVES_READY="$EXTERNAL_ROLE_MOUNTS_READY"
 DRIVE_MIRROR_MODE=""
 DRIVE_MIRROR_ENTRIES_JSON="[]"
 DRIVE_MIRROR_ALIASES_JSON="[]"

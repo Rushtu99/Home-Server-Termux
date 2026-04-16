@@ -16,22 +16,30 @@ FLAREARR_PID_PATH="${FLAREARR_PID_PATH:-$RUNTIME_DIR/flarearr.pid}"
 FLAREARR_LOG_PATH="${FLAREARR_LOG_PATH:-$LOG_DIR/flarearr.log}"
 FLAREARR_LOG_LEVEL="${FLAREARR_LOG_LEVEL:-info}"
 FLAREARR_BROWSER_TIMEOUT="${FLAREARR_BROWSER_TIMEOUT:-40000}"
+FLAREARR_CHROME_EXE_PATH="${FLAREARR_CHROME_EXE_PATH:-}"
 SERVICE_NAME="flarearr"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$FLAREARR_HOME"
 
-resolve_entrypoint() {
-    local candidates=(
-        "$FLAREARR_APP_DIR/flaresolverr.py"
-        "$FLAREARR_APP_DIR/src/flaresolverr.py"
-    )
+resolve_chrome_exe_path() {
     local candidate=""
 
-    for candidate in "${candidates[@]}"; do
-        if [ -f "$candidate" ]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
+    if [ -n "$FLAREARR_CHROME_EXE_PATH" ]; then
+        [ -x "$FLAREARR_CHROME_EXE_PATH" ] || return 1
+        printf '%s\n' "$FLAREARR_CHROME_EXE_PATH"
+        return 0
+    fi
+
+    for candidate in \
+        "$(command -v chromium-browser 2>/dev/null || true)" \
+        "$(command -v chromium 2>/dev/null || true)" \
+        "$(command -v google-chrome 2>/dev/null || true)" \
+        "$(command -v google-chrome-stable 2>/dev/null || true)"; do
+        [ -n "$candidate" ] || continue
+        [ -x "$candidate" ] || continue
+        FLAREARR_CHROME_EXE_PATH="$candidate"
+        printf '%s\n' "$candidate"
+        return 0
     done
 
     return 1
@@ -58,34 +66,28 @@ is_running() {
 }
 
 ensure_install() {
-    local entrypoint=""
-
     [ -x "$FLAREARR_VENV_DIR/bin/python" ] || {
         echo "FlareArr venv is missing; install dependencies under $FLAREARR_VENV_DIR first." >&2
         return 1
     }
 
-    entrypoint="$(resolve_entrypoint || true)"
-    [ -n "$entrypoint" ] || {
-        echo "FlareArr app is missing; expected flaresolverr.py under $FLAREARR_APP_DIR." >&2
+    "$FLAREARR_VENV_DIR/bin/python" -c "import requests, flaresolverr" >/dev/null 2>&1 || {
+        echo "FlareArr dependencies are incomplete; activate $FLAREARR_VENV_DIR and install requirements." >&2
         return 1
     }
 
-    "$FLAREARR_VENV_DIR/bin/python" -c "import requests" >/dev/null 2>&1 || {
-        echo "FlareArr dependencies are incomplete; activate $FLAREARR_VENV_DIR and install requirements." >&2
+    resolve_chrome_exe_path >/dev/null || {
+        echo "FlareArr requires a Chrome/Chromium executable; set FLAREARR_CHROME_EXE_PATH if auto-detection fails." >&2
         return 1
     }
 }
 
 start_service() {
-    local entrypoint=""
-
     if is_running; then
         return 0
     fi
 
     ensure_install
-    entrypoint="$(resolve_entrypoint)"
 
     if command -v setsid >/dev/null 2>&1; then
         setsid env \
@@ -93,14 +95,16 @@ start_service() {
             PORT="$FLAREARR_PORT" \
             LOG_LEVEL="$FLAREARR_LOG_LEVEL" \
             BROWSER_TIMEOUT="$FLAREARR_BROWSER_TIMEOUT" \
-            "$FLAREARR_VENV_DIR/bin/python" "$entrypoint" > "$FLAREARR_LOG_PATH" 2>&1 < /dev/null &
+            CHROME_EXE_PATH="$FLAREARR_CHROME_EXE_PATH" \
+            "$FLAREARR_VENV_DIR/bin/python" -m flaresolverr > "$FLAREARR_LOG_PATH" 2>&1 < /dev/null &
     else
         nohup env \
             HOST="$FLAREARR_BIND_HOST" \
             PORT="$FLAREARR_PORT" \
             LOG_LEVEL="$FLAREARR_LOG_LEVEL" \
             BROWSER_TIMEOUT="$FLAREARR_BROWSER_TIMEOUT" \
-            "$FLAREARR_VENV_DIR/bin/python" "$entrypoint" > "$FLAREARR_LOG_PATH" 2>&1 &
+            CHROME_EXE_PATH="$FLAREARR_CHROME_EXE_PATH" \
+            "$FLAREARR_VENV_DIR/bin/python" -m flaresolverr > "$FLAREARR_LOG_PATH" 2>&1 &
     fi
 
     printf '%s\n' "$!" > "$FLAREARR_PID_PATH"

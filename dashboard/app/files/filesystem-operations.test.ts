@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  collectDirectoryPickerUploadFiles,
+  collectDroppedUploadFiles,
   collectInputUploadFiles,
   dedupeUploadFiles,
   isFsOperationActive,
@@ -53,5 +55,62 @@ describe('filesystem-operations helpers', () => {
     const files = collectInputUploadFiles([file], 'files');
     expect(files).toHaveLength(1);
     expect(files[0].relativePath).toBe('x.txt');
+  });
+
+  it('collects nested files from showDirectoryPicker', async () => {
+    const topFile = new File(['top'], 'notes.txt', { lastModified: 2 });
+    const nestedFile = new File(['nested'], 'movie.mkv', { lastModified: 3 });
+    const makeFileHandle = (file: File) => ({
+      kind: 'file' as const,
+      getFile: async () => file,
+    });
+    const makeDirectoryHandle = (
+      entries: Array<[string, { kind: 'file' | 'directory'; getFile?: () => Promise<File>; entries?: () => AsyncIterable<[string, unknown]> }]>
+    ) => ({
+      kind: 'directory' as const,
+      entries: async function* () {
+        for (const entry of entries) {
+          yield entry;
+        }
+      },
+    });
+
+    const rootDirectory = makeDirectoryHandle([
+      ['notes.txt', makeFileHandle(topFile)],
+      ['movies', makeDirectoryHandle([
+        ['movie.mkv', makeFileHandle(nestedFile)],
+      ])],
+    ]);
+
+    const win = window as Window & typeof globalThis & { showDirectoryPicker?: () => Promise<unknown> };
+    const previous = win.showDirectoryPicker;
+    win.showDirectoryPicker = async () => rootDirectory;
+    try {
+      const files = await collectDirectoryPickerUploadFiles();
+      expect(files.map((entry) => entry.relativePath).sort()).toEqual(['movies/movie.mkv', 'notes.txt']);
+    } finally {
+      win.showDirectoryPicker = previous;
+    }
+  });
+
+  it('collects dropped files via File System Access handles', async () => {
+    const dropped = new File(['drop'], 'sample.txt', { lastModified: 7 });
+    const fileHandle = {
+      kind: 'file' as const,
+      getFile: async () => dropped,
+    };
+    const item = {
+      kind: 'file',
+      getAsFileSystemHandle: async () => fileHandle,
+      getAsFile: () => null,
+    } as unknown as DataTransferItem;
+    const dataTransfer = {
+      items: [item],
+      files: [] as unknown as FileList,
+    } as unknown as DataTransfer;
+
+    const files = await collectDroppedUploadFiles(dataTransfer);
+    expect(files).toHaveLength(1);
+    expect(files[0].relativePath).toBe('sample.txt');
   });
 });

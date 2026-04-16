@@ -145,13 +145,6 @@ install_flarearr() {
     python -m venv "$venv"
     "$venv/bin/pip" install --upgrade pip wheel setuptools
     "$venv/bin/pip" install FlareSolverr
-
-    cat > "$target/flaresolverr.py" <<'PY'
-from flaresolverr import main
-
-if __name__ == "__main__":
-    main()
-PY
 }
 
 install_jellyseerr() {
@@ -172,14 +165,14 @@ install_jellyseerr() {
         if command -v corepack >/dev/null 2>&1; then
             corepack enable
             CYPRESS_INSTALL_BINARY=0 corepack pnpm install --frozen-lockfile --config.engine-strict=false
-            CYPRESS_INSTALL_BINARY=0 corepack pnpm build --config.engine-strict=false
+            CYPRESS_INSTALL_BINARY=0 corepack pnpm build
         else
             command -v npx >/dev/null 2>&1 || {
                 echo "Jellyseerr uses pnpm; install corepack or make npx available before rerunning with INSTALL_JELLYSEERR=1." >&2
                 return 1
             }
             CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 install --frozen-lockfile --config.engine-strict=false
-            CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 build --config.engine-strict=false
+            CYPRESS_INSTALL_BINARY=0 npx --yes pnpm@10.24.0 build
         fi
     else
         CYPRESS_INSTALL_BINARY=0 npm install --legacy-peer-deps

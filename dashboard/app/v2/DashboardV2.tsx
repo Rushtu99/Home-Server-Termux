@@ -47,7 +47,7 @@ const statusTone = (status: string) => {
 const fallbackNav: UiNavItem[] = [
   { key: 'overview', label: 'Overview', summary: 'System health and telemetry', available: true, status: 'working', legacyTabs: ['home'] },
   { key: 'media', label: 'Media', summary: 'Jellyfin + automation flow', available: true, status: 'working', legacyTabs: ['media', 'downloads', 'arr'] },
-  { key: 'files', label: 'Files', summary: 'Filesystem and share management', available: true, status: 'working', legacyTabs: ['filesystem'] },
+  { key: 'files', label: 'Files', summary: 'Filesystem, shares, and compatibility links', available: true, status: 'working', legacyTabs: ['filesystem'] },
   { key: 'transfers', label: 'Transfers', summary: 'FTP and remote transfer tools', available: true, status: 'working', legacyTabs: ['ftp'] },
   { key: 'ai', label: 'AI', summary: 'LLM runtime management', available: true, status: 'working', legacyTabs: ['ai'] },
   { key: 'terminal', label: 'Terminal', summary: 'Shell access route', available: true, status: 'working', legacyTabs: ['terminal'] },

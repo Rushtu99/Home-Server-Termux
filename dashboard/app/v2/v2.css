@@ -1122,6 +1122,7 @@ html[data-style="filesystem"] .dash2-chatbox-layout {
     border-right: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
     transform: translateX(-102%);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    z-index: 140;
   }
 
   .dash2-sidebar--open {
@@ -1134,7 +1135,7 @@ html[data-style="filesystem"] .dash2-chatbox-layout {
     inset: 0;
     background: rgba(0, 0, 0, 0.42);
     border: 0;
-    z-index: 40;
+    z-index: 130;
   }
 
   .dash2-nav {

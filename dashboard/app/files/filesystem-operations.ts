@@ -52,6 +52,27 @@ type FileSystemDirectoryReaderLike = {
   ) => void;
 };
 
+type FileSystemHandleLike = {
+  kind?: 'file' | 'directory';
+  name?: string;
+};
+
+type FileSystemFileHandleLike = FileSystemHandleLike & {
+  getFile?: () => Promise<File>;
+};
+
+type FileSystemDirectoryHandleLike = FileSystemHandleLike & {
+  entries?: () => AsyncIterable<[string, FileSystemHandleLike]>;
+};
+
+type DirectoryPickerWindow = Window & typeof globalThis & {
+  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandleLike>;
+};
+
+type FileSystemHandleDataTransferItemLike = DataTransferItem & {
+  getAsFileSystemHandle?: () => Promise<FileSystemHandleLike | null>;
+};
+
 const normalizeRelativePath = (value = '') =>
   String(value || '')
     .replace(/\\/g, '/')
@@ -144,6 +165,57 @@ const collectEntryFiles = async (entry: FileSystemEntryLike, prefix = ''): Promi
   return [];
 };
 
+const collectFileHandle = async (handle: FileSystemFileHandleLike, prefix = ''): Promise<FsUploadFile[]> => {
+  if (!handle?.getFile) {
+    return [];
+  }
+  const file = await handle.getFile();
+  const relativePath = normalizeRelativePath(prefix ? `${prefix}/${file.name}` : file.name);
+  if (!relativePath) {
+    return [];
+  }
+  return [{
+    file,
+    lastModified: Math.max(0, Number(file.lastModified || 0) || 0),
+    relativePath,
+    size: Math.max(0, Number(file.size || 0) || 0),
+  }];
+};
+
+const collectDirectoryHandleFiles = async (
+  handle: FileSystemDirectoryHandleLike,
+  prefix = ''
+): Promise<FsUploadFile[]> => {
+  if (!handle?.entries) {
+    return [];
+  }
+  const files: FsUploadFile[] = [];
+  for await (const [name, childHandle] of handle.entries()) {
+    const nextPrefix = normalizeRelativePath(prefix ? `${prefix}/${name}` : name);
+    if (childHandle?.kind === 'directory') {
+      files.push(...(await collectDirectoryHandleFiles(childHandle as FileSystemDirectoryHandleLike, nextPrefix)));
+      continue;
+    }
+    if (childHandle?.kind === 'file') {
+      files.push(...(await collectFileHandle(childHandle as FileSystemFileHandleLike, prefix)));
+    }
+  }
+  return files;
+};
+
+export const collectDirectoryPickerUploadFiles = async (): Promise<FsUploadFile[]> => {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
+  if (typeof picker !== 'function') {
+    return [];
+  }
+  const directoryHandle = await picker();
+  const files = await collectDirectoryHandleFiles(directoryHandle);
+  return dedupeUploadFiles(files);
+};
+
 export const collectInputUploadFiles = (
   fileList: FileList | File[] | null | undefined,
   mode: 'files' | 'folder'
@@ -168,6 +240,17 @@ export const collectInputUploadFiles = (
 export const collectDroppedUploadFiles = async (dataTransfer: DataTransfer): Promise<FsUploadFile[]> => {
   const items = Array.from(dataTransfer.items || []);
   const entryFiles = await Promise.all(items.map(async (item) => {
+    const getFileSystemHandle = (item as FileSystemHandleDataTransferItemLike).getAsFileSystemHandle;
+    if (typeof getFileSystemHandle === 'function') {
+      const handle = await getFileSystemHandle.call(item);
+      if (handle?.kind === 'directory') {
+        return collectDirectoryHandleFiles(handle as FileSystemDirectoryHandleLike);
+      }
+      if (handle?.kind === 'file') {
+        return collectFileHandle(handle as FileSystemFileHandleLike);
+      }
+    }
+
     const getEntry = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }).webkitGetAsEntry;
     if (typeof getEntry === 'function') {
       const entry = getEntry.call(item);

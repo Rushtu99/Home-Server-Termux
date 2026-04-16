@@ -43,12 +43,36 @@ load_shell_env_file() {
 
 load_shell_env_file "$SERVER_ENV_FILE"
 
+is_dir_writable() {
+    local directory="$1"
+    local probe=""
+
+    if type is_writable_dir >/dev/null 2>&1; then
+        is_writable_dir "$directory"
+        return $?
+    fi
+
+    if ! mkdir -p "$directory" 2>/dev/null; then
+        return 1
+    fi
+
+    probe="$directory/.hmstx-write-test.$$"
+    if ! : > "$probe" 2>/dev/null; then
+        return 1
+    fi
+
+    rm -f "$probe" 2>/dev/null || true
+    return 0
+}
+
 MEDIA_VAULT_DRIVES="${MEDIA_VAULT_DRIVES:-D}"
 MEDIA_SCRATCH_DRIVES="${MEDIA_SCRATCH_DRIVES:-E}"
 MEDIA_VAULT_DIR_NAME="${MEDIA_VAULT_DIR_NAME:-VAULT}"
 MEDIA_SCRATCH_DIR_NAME="${MEDIA_SCRATCH_DIR_NAME:-SCRATCH}"
 MEDIA_VAULT_MEDIA_SUBDIR="${MEDIA_VAULT_MEDIA_SUBDIR:-Media}"
 MEDIA_SCRATCH_MEDIA_SUBDIR="${MEDIA_SCRATCH_MEDIA_SUBDIR:-HmSTxScratch}"
+MEDIA_VAULT_FALLBACK_TO_SCRATCH="${MEDIA_VAULT_FALLBACK_TO_SCRATCH:-true}"
+MEDIA_SCRATCH_FALLBACK_ROOT="${MEDIA_SCRATCH_FALLBACK_ROOT:-$PROJECT/runtime/HmSTxScratch}"
 DEFAULT_VAULT_DRIVE_DIR=""
 DEFAULT_SCRATCH_DRIVE_DIR=""
 if type resolve_drive_dir >/dev/null 2>&1; then
@@ -58,11 +82,30 @@ fi
 MEDIA_VAULT_ROOT="${MEDIA_VAULT_ROOT:-${DEFAULT_VAULT_DRIVE_DIR:+$DEFAULT_VAULT_DRIVE_DIR/$MEDIA_VAULT_DIR_NAME/$MEDIA_VAULT_MEDIA_SUBDIR}}"
 MEDIA_SCRATCH_ROOT="${MEDIA_SCRATCH_ROOT:-${DEFAULT_SCRATCH_DRIVE_DIR:+$DEFAULT_SCRATCH_DRIVE_DIR/$MEDIA_SCRATCH_DIR_NAME/$MEDIA_SCRATCH_MEDIA_SUBDIR}}"
 if [ -z "$MEDIA_VAULT_ROOT" ]; then
-    MEDIA_VAULT_ROOT="$USER_HOME/Drives/D/$MEDIA_VAULT_DIR_NAME/$MEDIA_VAULT_MEDIA_SUBDIR"
+    MEDIA_VAULT_ROOT="${DRIVES_D_DIR:-$USER_HOME/Drives/D (VAULT_fallback)}/$MEDIA_VAULT_DIR_NAME/$MEDIA_VAULT_MEDIA_SUBDIR"
 fi
 if [ -z "$MEDIA_SCRATCH_ROOT" ]; then
-    MEDIA_SCRATCH_ROOT="$USER_HOME/Drives/E/$MEDIA_SCRATCH_DIR_NAME/$MEDIA_SCRATCH_MEDIA_SUBDIR"
+    MEDIA_SCRATCH_ROOT="${DRIVES_E_DIR:-$USER_HOME/Drives/E (SCRATCH_fallback)}/$MEDIA_SCRATCH_DIR_NAME/$MEDIA_SCRATCH_MEDIA_SUBDIR"
 fi
+
+if ! is_dir_writable "$MEDIA_SCRATCH_ROOT"; then
+    MEDIA_SCRATCH_ROOT="$MEDIA_SCRATCH_FALLBACK_ROOT"
+fi
+if ! is_dir_writable "$MEDIA_SCRATCH_ROOT"; then
+    echo "configure-arr-stack: scratch root not writable: $MEDIA_SCRATCH_ROOT" >&2
+    exit 1
+fi
+
+if ! is_dir_writable "$MEDIA_VAULT_ROOT"; then
+    if [ "$MEDIA_VAULT_FALLBACK_TO_SCRATCH" = "true" ]; then
+        MEDIA_VAULT_ROOT="$MEDIA_SCRATCH_ROOT/media"
+    fi
+fi
+if ! is_dir_writable "$MEDIA_VAULT_ROOT"; then
+    echo "configure-arr-stack: vault root not writable: $MEDIA_VAULT_ROOT" >&2
+    exit 1
+fi
+
 MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-$MEDIA_SCRATCH_ROOT/downloads}"
 MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-$MEDIA_DOWNLOADS_DIR/movies}"
 MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-$MEDIA_DOWNLOADS_DIR/series}"

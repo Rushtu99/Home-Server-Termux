@@ -13,10 +13,43 @@ import type {
 } from './types';
 
 const API = '/api';
+const DEFAULT_REQUEST_TIMEOUT_MS = 20000;
 
 const parseError = async (response: Response) => {
   const payload = await response.json().catch(() => ({} as Record<string, unknown>));
   return String(payload?.error || `Request failed with ${response.status}`);
+};
+
+const appFetchWithTimeout = async (
+  input: string,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+) => {
+  const controller = new AbortController();
+  const hasExternalSignal = Boolean(init.signal);
+  let timedOut = false;
+  const timeoutId = hasExternalSignal
+    ? null
+    : window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+
+  try {
+    return await appFetch(input, {
+      ...init,
+      signal: init.signal || controller.signal,
+    });
+  } catch (error) {
+    if (timedOut && error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
 };
 
 const buildOkSection = (generatedAt?: string) => ({
@@ -65,7 +98,7 @@ export const parseUiInitialResponse = (payload: UiInitialResponse): NormalizedUi
 };
 
 const fetchJson = async <T>(url: string): Promise<T> => {
-  const response = await appFetch(url, { credentials: 'include' });
+  const response = await appFetchWithTimeout(url, { credentials: 'include' });
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -81,7 +114,7 @@ export const fetchWorkspacePayload = (workspace: WorkspaceKey) =>
   fetchJson<UiWorkspaceResponse>(`${API}/ui/workspaces/${workspace}`);
 
 const postJson = async <T>(url: string, body: Record<string, unknown> = {}): Promise<T> => {
-  const response = await appFetch(url, {
+  const response = await appFetchWithTimeout(url, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -96,7 +129,7 @@ const postJson = async <T>(url: string, body: Record<string, unknown> = {}): Pro
 };
 
 const deleteJson = async <T>(url: string): Promise<T> => {
-  const response = await appFetch(url, {
+  const response = await appFetchWithTimeout(url, {
     method: 'DELETE',
     credentials: 'include',
   });
@@ -151,7 +184,7 @@ export const createFtpFavourite = (payload: Record<string, unknown>) =>
 
 export const updateFtpFavourite = (id: number, payload: Record<string, unknown>) => {
   return (async () => {
-    const response = await appFetch(`${API}/ftp/favourites/${id}`, {
+    const response = await appFetchWithTimeout(`${API}/ftp/favourites/${id}`, {
       method: 'PUT',
       credentials: 'include',
       headers: {

@@ -6,8 +6,16 @@ DRIVES_DIR="${DRIVES_DIR:-$USER_HOME/Drives}"
 DRIVES_STATE_DIR="${DRIVES_STATE_DIR:-$DRIVES_DIR/.state}"
 LEGACY_ALIAS_BACKUP_DIR="${LEGACY_ALIAS_BACKUP_DIR:-$DRIVES_STATE_DIR/legacy-alias-backups}"
 DRIVES_C_DIR="${DRIVES_C_DIR:-$DRIVES_DIR/C}"
-DRIVES_D_DIR="${DRIVES_D_DIR:-$DRIVES_DIR/D}"
-DRIVES_E_DIR="${DRIVES_E_DIR:-$DRIVES_DIR/E}"
+VAULT_MAIN_LABEL="${VAULT_MAIN_LABEL:-Rushtu 4TB}"
+SCRATCH_MAIN_LABEL="${SCRATCH_MAIN_LABEL:-T exFAT 2TB}"
+VAULT_FALLBACK_LABEL="${VAULT_FALLBACK_LABEL:-VAULT_fallback}"
+SCRATCH_FALLBACK_LABEL="${SCRATCH_FALLBACK_LABEL:-SCRATCH_fallback}"
+DRIVES_D_MAIN_DIR="${DRIVES_D_MAIN_DIR:-$DRIVES_DIR/D ($VAULT_MAIN_LABEL)}"
+DRIVES_E_MAIN_DIR="${DRIVES_E_MAIN_DIR:-$DRIVES_DIR/E ($SCRATCH_MAIN_LABEL)}"
+DRIVES_D_FALLBACK_DIR="${DRIVES_D_FALLBACK_DIR:-$DRIVES_DIR/D ($VAULT_FALLBACK_LABEL)}"
+DRIVES_E_FALLBACK_DIR="${DRIVES_E_FALLBACK_DIR:-$DRIVES_DIR/E ($SCRATCH_FALLBACK_LABEL)}"
+DRIVES_D_DIR="${DRIVES_D_DIR:-$DRIVES_D_FALLBACK_DIR}"
+DRIVES_E_DIR="${DRIVES_E_DIR:-$DRIVES_E_FALLBACK_DIR}"
 DRIVES_PS4_DIR="${DRIVES_PS4_DIR:-$DRIVES_DIR/PS4}"
 TERMUX_DRIVES_MIRROR_ROOT="${TERMUX_DRIVES_MIRROR_ROOT:-/mnt/termux-drives}"
 INTERNAL_STORAGE="${INTERNAL_STORAGE:-/storage/emulated/0}"
@@ -95,6 +103,8 @@ block_device_exists() {
 
 prepare_drives_root() {
     mkdir -p "$DRIVES_DIR" "$DRIVES_STATE_DIR" "$MOUNT_RUNTIME_DIR" "$LEGACY_ALIAS_BACKUP_DIR"
+    mkdir -p "$DRIVES_D_MAIN_DIR" "$DRIVES_E_MAIN_DIR"
+    mkdir -p "$DRIVES_D_FALLBACK_DIR" "$DRIVES_E_FALLBACK_DIR"
 
     if [ ! -e "$DRIVES_C_DIR" ]; then
         mkdir -p "$DRIVES_C_DIR"
@@ -239,7 +249,7 @@ list_external_drive_dirs() {
     find "$DRIVES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
         | while IFS= read -r drive_dir; do
             case "$(basename "$drive_dir")" in
-                C|Media|.state|.recycle-bin|Vault|SCRATCH)
+                C|D|E|Media|.state|.recycle-bin|Vault|SCRATCH)
                     continue
                     ;;
                 *)
@@ -257,6 +267,7 @@ resolve_drive_dir() {
     local drive_dir=""
     local base_name=""
     local fallback_match=""
+    local fallback_labeled_match=""
 
     case "$token" in
         /*)
@@ -283,12 +294,24 @@ resolve_drive_dir() {
                         printf '%s\n' "$drive_dir"
                         return 0
                     fi
+                    case "$(printf '%s' "$base_name" | tr '[:upper:]' '[:lower:]')" in
+                        *"fallback"* )
+                            if [ -z "$fallback_labeled_match" ]; then
+                                fallback_labeled_match="$drive_dir"
+                            fi
+                            ;;
+                    esac
                     if [ -z "$fallback_match" ]; then
                         fallback_match="$drive_dir"
                     fi
                     ;;
             esac
         done < <(list_external_drive_dirs)
+    fi
+
+    if [ -n "$fallback_labeled_match" ]; then
+        printf '%s\n' "$fallback_labeled_match"
+        return 0
     fi
 
     if [ -n "$fallback_match" ]; then
@@ -419,23 +442,12 @@ cleanup_legacy_drive_aliases() {
     for alias_name in D E; do
         alias_path="$DRIVES_DIR/$alias_name"
         backup_path=""
-        # D/E are now first-class service mount points; never archive/remove them.
         if [ ! -e "$alias_path" ]; then
-            mkdir -p "$alias_path" 2>/dev/null || true
-            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"created-service-mount-dir\"}")
-            continue
-        fi
-        if [ -d "$alias_path" ]; then
-            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"preserved-service-mount-dir\"}")
+            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"absent\"}")
             continue
         fi
         if path_is_direct_mount_in_proc "$alias_path"; then
             entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"conflict-active-mount\"}")
-            continue
-        fi
-        if [ -d "$alias_path" ] && [ -z "$(find "$alias_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
-            rmdir "$alias_path" 2>/dev/null || true
-            entries+=("{\"alias\":\"$(json_escape "$alias_path")\",\"status\":\"removed-empty\"}")
             continue
         fi
 

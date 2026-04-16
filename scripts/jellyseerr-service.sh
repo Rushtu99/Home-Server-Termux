@@ -11,6 +11,7 @@ JELLYSEERR_HOME="${JELLYSEERR_HOME:-$MEDIA_SERVICES_HOME/jellyseerr}"
 JELLYSEERR_APP_DIR="${JELLYSEERR_APP_DIR:-$JELLYSEERR_HOME/app}"
 JELLYSEERR_PACKAGE_JSON="${JELLYSEERR_PACKAGE_JSON:-$JELLYSEERR_APP_DIR/package.json}"
 JELLYSEERR_DIST_PATH="${JELLYSEERR_DIST_PATH:-$JELLYSEERR_APP_DIR/dist/index.js}"
+JELLYSEERR_NEXT_BUILD_ID_PATH="${JELLYSEERR_NEXT_BUILD_ID_PATH:-$JELLYSEERR_APP_DIR/.next/BUILD_ID}"
 JELLYSEERR_BIND_HOST="${JELLYSEERR_BIND_HOST:-127.0.0.1}"
 JELLYSEERR_PORT="${JELLYSEERR_PORT:-5055}"
 JELLYSEERR_BASE_PATH="${JELLYSEERR_BASE_PATH:-/requests}"
@@ -22,6 +23,18 @@ JELLYSEERR_NODE_BIN="${JELLYSEERR_NODE_BIN:-}"
 JELLYSEERR_COREPACK_CLI="${JELLYSEERR_COREPACK_CLI:-}"
 JELLYSEERR_NPM_CLI="${JELLYSEERR_NPM_CLI:-}"
 JELLYSEERR_NODE_SHIMS_DIR="${JELLYSEERR_NODE_SHIMS_DIR:-}"
+POSTGRES_BIND_HOST="${POSTGRES_BIND_HOST:-127.0.0.1}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+POSTGRES_DB="${POSTGRES_DB:-homeserver_media}"
+POSTGRES_USER="${POSTGRES_USER:-homeserver_media}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+JELLYSEERR_DB_TYPE="${JELLYSEERR_DB_TYPE:-postgres}"
+JELLYSEERR_DB_HOST="${JELLYSEERR_DB_HOST:-$POSTGRES_BIND_HOST}"
+JELLYSEERR_DB_PORT="${JELLYSEERR_DB_PORT:-$POSTGRES_PORT}"
+JELLYSEERR_DB_NAME="${JELLYSEERR_DB_NAME:-$POSTGRES_DB}"
+JELLYSEERR_DB_USER="${JELLYSEERR_DB_USER:-$POSTGRES_USER}"
+JELLYSEERR_DB_PASS="${JELLYSEERR_DB_PASS:-$POSTGRES_PASSWORD}"
+JELLYSEERR_BCRYPT_SHIM="${JELLYSEERR_BCRYPT_SHIM:-$PROJECT/scripts/jellyseerr-bcrypt-shim.cjs}"
 SERVICE_NAME="jellyseerr"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYSEERR_HOME" "$JELLYSEERR_DATA_DIR"
@@ -92,7 +105,7 @@ run_jellyseerr_package_manager() {
         if [ -f "$JELLYSEERR_COREPACK_CLI" ]; then
             case "$action" in
                 install) PATH="$runtime_path" CYPRESS_INSTALL_BINARY=0 "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_COREPACK_CLI" pnpm install --frozen-lockfile --config.engine-strict=false ;;
-                build) PATH="$runtime_path" CYPRESS_INSTALL_BINARY=0 "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_COREPACK_CLI" pnpm build --config.engine-strict=false ;;
+                build) PATH="$runtime_path" CYPRESS_INSTALL_BINARY=0 "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_COREPACK_CLI" pnpm build ;;
                 *) echo "Unsupported Jellyseerr package-manager action: $action" >&2; return 1 ;;
             esac
             return 0
@@ -112,8 +125,65 @@ run_jellyseerr_package_manager() {
     esac
 }
 
+patch_next_swc_for_android() {
+    local platform=""
+    local swc_file=""
+    local patch_status=0
+
+    platform="$("$JELLYSEERR_NODE_BIN" -p "process.platform" 2>/dev/null || true)"
+    [ "$platform" = "android" ] || return 0
+
+    swc_file="$JELLYSEERR_APP_DIR/node_modules/next/dist/build/swc/index.js"
+    [ -f "$swc_file" ] || return 0
+
+    if grep -q 'process.platform === "android"' "$swc_file"; then
+        return 0
+    fi
+
+    "$JELLYSEERR_NODE_BIN" - "$swc_file" <<'NODE'
+const fs = require('fs');
+const path = process.argv[2];
+const source = fs.readFileSync(path, 'utf8');
+const from = 'const shouldLoadWasmFallbackFirst = !disableWasmFallback && unsupportedPlatform && useWasmBinary || isWebContainer;';
+const to = 'const shouldLoadWasmFallbackFirst = !disableWasmFallback && unsupportedPlatform && (useWasmBinary || process.platform === "android") || isWebContainer;';
+if (!source.includes(from)) {
+  process.exit(2);
+}
+fs.writeFileSync(path, source.replace(from, to), 'utf8');
+NODE
+    patch_status=$?
+    if [ "$patch_status" -eq 2 ]; then
+        echo "Jellyseerr SWC patch target did not match expected content: $swc_file" >&2
+        return 1
+    fi
+    return "$patch_status"
+}
+
+build_node_options() {
+    local options="${NODE_OPTIONS:-}"
+    local platform=""
+
+    platform="$("$JELLYSEERR_NODE_BIN" -p "process.platform" 2>/dev/null || true)"
+    if [ "$platform" = "android" ] && [ -f "$JELLYSEERR_BCRYPT_SHIM" ]; then
+        case " $options " in
+            *" --require=$JELLYSEERR_BCRYPT_SHIM "*) ;;
+            *)
+                if [ -n "$options" ]; then
+                    options="$options --require=$JELLYSEERR_BCRYPT_SHIM"
+                else
+                    options="--require=$JELLYSEERR_BCRYPT_SHIM"
+                fi
+                ;;
+        esac
+    fi
+
+    printf '%s\n' "$options"
+}
+
 ensure_build_output() {
-    [ -f "$JELLYSEERR_DIST_PATH" ] && return 0
+    if [ -f "$JELLYSEERR_DIST_PATH" ] && [ -f "$JELLYSEERR_NEXT_BUILD_ID_PATH" ]; then
+        return 0
+    fi
 
     ensure_compatible_node || return 1
 
@@ -126,15 +196,19 @@ ensure_build_output() {
     fi
 
     printf '[%s] Jellyseerr build output missing; attempting local rebuild.\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$JELLYSEERR_LOG_PATH"
+    patch_next_swc_for_android >> "$JELLYSEERR_LOG_PATH" 2>&1 || {
+        echo "Jellyseerr SWC Android patch failed; inspect $JELLYSEERR_LOG_PATH" >&2
+        return 1
+    }
     (cd "$JELLYSEERR_APP_DIR" && run_jellyseerr_package_manager build) >> "$JELLYSEERR_LOG_PATH" 2>&1 || {
         echo "Jellyseerr build failed; inspect $JELLYSEERR_LOG_PATH" >&2
         return 1
     }
 
-    [ -f "$JELLYSEERR_DIST_PATH" ] || {
-        echo "Jellyseerr build completed without producing $JELLYSEERR_DIST_PATH; inspect $JELLYSEERR_LOG_PATH" >&2
+    if [ ! -f "$JELLYSEERR_DIST_PATH" ] || [ ! -f "$JELLYSEERR_NEXT_BUILD_ID_PATH" ]; then
+        echo "Jellyseerr build completed without required outputs ($JELLYSEERR_DIST_PATH, $JELLYSEERR_NEXT_BUILD_ID_PATH); inspect $JELLYSEERR_LOG_PATH" >&2
         return 1
-    }
+    fi
 }
 
 doctor_install() {
@@ -150,10 +224,10 @@ doctor_install() {
         return 1
     }
 
-    [ -f "$JELLYSEERR_DIST_PATH" ] || {
-        echo "Jellyseerr build output is missing; run '$0 start' to trigger a rebuild after fixing prerequisites, or rerun scripts/install-media-automation.sh with INSTALL_JELLYSEERR=1." >&2
+    if [ ! -f "$JELLYSEERR_DIST_PATH" ] || [ ! -f "$JELLYSEERR_NEXT_BUILD_ID_PATH" ]; then
+        echo "Jellyseerr build outputs are missing; run '$0 start' to trigger a rebuild after fixing prerequisites, or rerun scripts/install-media-automation.sh with INSTALL_JELLYSEERR=1." >&2
         return 1
-    }
+    fi
 
     echo "Jellyseerr install is ready."
 }
@@ -187,11 +261,14 @@ ensure_install() {
 }
 
 start_service() {
+    local node_options=""
+
     if is_running; then
         return 0
     fi
 
     ensure_install
+    node_options="$(build_node_options)"
     local runtime_path="$PATH"
     if [ -d "$JELLYSEERR_NODE_ROOT/bin" ]; then
         runtime_path="$JELLYSEERR_NODE_ROOT/bin:$runtime_path"
@@ -200,11 +277,21 @@ start_service() {
         runtime_path="$JELLYSEERR_NODE_SHIMS_DIR:$runtime_path"
     fi
     if command -v setsid >/dev/null 2>&1; then
-        setsid env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
-            "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 < /dev/null &
+        (
+            cd "$JELLYSEERR_APP_DIR"
+            exec setsid env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
+            DB_TYPE="$JELLYSEERR_DB_TYPE" DB_HOST="$JELLYSEERR_DB_HOST" DB_PORT="$JELLYSEERR_DB_PORT" DB_NAME="$JELLYSEERR_DB_NAME" DB_USER="$JELLYSEERR_DB_USER" DB_PASS="$JELLYSEERR_DB_PASS" \
+            NODE_OPTIONS="$node_options" \
+            "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 < /dev/null
+        ) &
     else
-        nohup env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
-            "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 &
+        (
+            cd "$JELLYSEERR_APP_DIR"
+            exec nohup env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
+            DB_TYPE="$JELLYSEERR_DB_TYPE" DB_HOST="$JELLYSEERR_DB_HOST" DB_PORT="$JELLYSEERR_DB_PORT" DB_NAME="$JELLYSEERR_DB_NAME" DB_USER="$JELLYSEERR_DB_USER" DB_PASS="$JELLYSEERR_DB_PASS" \
+            NODE_OPTIONS="$node_options" \
+            "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1
+        ) &
     fi
     printf '%s\n' "$!" > "$JELLYSEERR_PID_PATH"
     for _ in $(seq 1 30); do

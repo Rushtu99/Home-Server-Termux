@@ -2648,7 +2648,7 @@ export default function Dashboard() {
     && storageStoppedByWatchdog.length > 0
   );
   const storageProtectionSummary = storageProtectionDegraded
-    ? (storageProtection?.reason || 'Storage watchdog detected missing vault or scratch mounts.')
+    ? (storageProtection?.reasonCompact || storageProtection?.reason || 'Storage watchdog detected missing vault or scratch mounts.')
     : storageProtectionRecoverable
       ? `Storage recovered; ${storageStoppedByWatchdog.length} service(s) need manual resume`
       : 'Storage watchdog reports healthy mount state';

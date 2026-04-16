@@ -7,6 +7,7 @@ import { isDemoMode } from '../demo-mode';
 import type { DrivePayload } from '../dashboard-utils';
 import { EMPTY_DRIVE_PAYLOAD as EMPTY_PAYLOAD, formatBytes, normalizeDrivePayload } from '../dashboard-utils';
 import {
+  collectDirectoryPickerUploadFiles,
   collectDroppedUploadFiles,
   collectInputUploadFiles,
   dedupeUploadFiles,
@@ -214,6 +215,29 @@ const topLevelName = (value: string) => value.split('/').filter(Boolean)[0] || v
 const normalizeDefaultRoleAccess = (value: string | null | undefined) => (value === 'read' || value === 'write' ? value : 'deny');
 const normalizeUserOverrideAccess = (value: string | null | undefined): 'inherit' | 'deny' | 'read' | 'write' =>
   value === 'deny' || value === 'read' || value === 'write' ? value : 'inherit';
+const applyFolderInputAttributes = (input: HTMLInputElement | null) => {
+  if (!input) {
+    return;
+  }
+  const folderInput = input as HTMLInputElement & {
+    directory?: boolean;
+    mozdirectory?: boolean;
+    webkitdirectory?: boolean;
+  };
+  folderInput.multiple = true;
+  folderInput.webkitdirectory = true;
+  folderInput.directory = true;
+  folderInput.mozdirectory = true;
+  folderInput.setAttribute('webkitdirectory', '');
+  folderInput.setAttribute('directory', '');
+  folderInput.setAttribute('mozdirectory', '');
+};
+const hasDragType = (dataTransfer: DataTransfer, type: string) =>
+  Array.from(dataTransfer.types || []).includes(type);
+const hasExternalFileDragPayload = (dataTransfer: DataTransfer) =>
+  hasDragType(dataTransfer, 'Files')
+  || Array.from(dataTransfer.types || []).some((entry) => entry.toLowerCase().includes('file'))
+  || Array.from(dataTransfer.items || []).some((item) => item.kind === 'file');
 
 const normalizeShareRecord = (payload: Partial<ShareRecord> | null | undefined): ShareRecord => ({
   createdAt: String(payload?.createdAt || ''),
@@ -424,11 +448,7 @@ export default function FilesPage() {
   }, []);
 
   useEffect(() => {
-    if (!uploadFolderInputRef.current) {
-      return;
-    }
-    uploadFolderInputRef.current.setAttribute('webkitdirectory', '');
-    uploadFolderInputRef.current.setAttribute('directory', '');
+    applyFolderInputAttributes(uploadFolderInputRef.current);
   }, []);
 
   const selectedShare = browser.path === ''
@@ -462,6 +482,7 @@ export default function FilesPage() {
         method: 'POST',
         credentials: 'include',
       });
+      const rawPayload = await res.json().catch(() => ({}));
 
       if (res.status === 403) {
         setDriveAccessDenied(true);
@@ -469,10 +490,14 @@ export default function FilesPage() {
         return;
       }
       if (!res.ok) {
-        throw new Error(res.status === 401 ? 'Login required to run a drive check' : 'Drive check failed');
+        throw new Error(
+          res.status === 401
+            ? 'Login required to run a drive check'
+            : String((rawPayload as { error?: unknown })?.error || 'Drive check failed')
+        );
       }
 
-      const payload = normalizeDrivePayload(await res.json());
+      const payload = normalizeDrivePayload(rawPayload as DrivePayload);
       startTransition(() => {
         setDriveState(payload);
         setLoadError('');
@@ -920,8 +945,34 @@ export default function FilesPage() {
     }
   };
 
-  const handleUploadTrigger = (mode: 'files' | 'folder') => {
+  const handleUploadTrigger = async (mode: 'files' | 'folder') => {
     if (mode === 'folder') {
+      if (typeof window !== 'undefined') {
+        const supportsDirectoryPicker = typeof (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function';
+        const supportsInputDirectory = Boolean(
+          uploadFolderInputRef.current
+          && ('webkitdirectory' in (uploadFolderInputRef.current as HTMLInputElement & { webkitdirectory?: boolean }))
+        );
+        if (supportsDirectoryPicker) {
+          try {
+            const files = await collectDirectoryPickerUploadFiles();
+            if (files.length > 0) {
+              await startUploadOperation(browser.path, files);
+            }
+          } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') {
+              return;
+            }
+            setBrowserError(String(error instanceof Error ? error.message : error || 'Unable to open folder picker'));
+          }
+          return;
+        }
+        if (!supportsInputDirectory) {
+          setBrowserError('This browser does not support folder selection. Use drag-and-drop or a Chromium-based browser.');
+          return;
+        }
+      }
+      applyFolderInputAttributes(uploadFolderInputRef.current);
       uploadFolderInputRef.current?.click();
       return;
     }
@@ -995,11 +1046,19 @@ export default function FilesPage() {
   };
 
   const handleDropHover = (event: React.DragEvent<HTMLElement>, destinationPath: string, allowWrite: boolean) => {
-    if (!allowWrite) {
+    const hasTransferPayload = hasDragType(event.dataTransfer, 'application/x-home-server-fs-paths')
+      || hasExternalFileDragPayload(event.dataTransfer);
+    if (!hasTransferPayload) {
       return;
     }
     event.preventDefault();
-    event.dataTransfer.dropEffect = event.dataTransfer.types.includes('application/x-home-server-fs-paths') ? 'move' : 'copy';
+    event.stopPropagation();
+    if (!allowWrite) {
+      event.dataTransfer.dropEffect = 'none';
+      setDropTargetPath('');
+      return;
+    }
+    event.dataTransfer.dropEffect = hasDragType(event.dataTransfer, 'application/x-home-server-fs-paths') ? 'move' : 'copy';
     setDropTargetPath(destinationPath);
   };
 
@@ -1007,9 +1066,18 @@ export default function FilesPage() {
     setDropTargetPath((current) => current === destinationPath ? '' : current);
   };
 
-  const handleExternalDrop = async (event: React.DragEvent<HTMLElement>, destinationPath: string) => {
+  const handleExternalDrop = async (
+    event: React.DragEvent<HTMLElement>,
+    destinationPath: string,
+    allowWrite: boolean
+  ) => {
     event.preventDefault();
+    event.stopPropagation();
     setDropTargetPath('');
+    if (!allowWrite) {
+      setBrowserError('Current location is read-only. Choose a writable folder before dropping files.');
+      return;
+    }
     const sourcePathsRaw = event.dataTransfer.getData('application/x-home-server-fs-paths');
     if (sourcePathsRaw) {
       try {
@@ -1045,10 +1113,10 @@ export default function FilesPage() {
   const statusText = driveAccessDenied
     ? 'Drive management is admin-only. Share browsing remains available for accounts with share access.'
     : !driveState.agentInstalled
-    ? 'USB mount service is not installed yet. Only internal storage will appear until it is available.'
+    ? 'USB mount service is not installed yet. Only internal storage and fallback compatibility links will appear.'
     : drives.length > 0
       ? `${drives.length} removable drive${drives.length === 1 ? '' : 's'} detected.`
-      : 'Only internal storage is currently present. Connect a removable drive or run Check drives (manual).';
+      : 'Only internal storage is currently present. Connect a removable drive or run Check drives (manual) to validate external mounts + compatibility links.';
 
   const selectedEntry = browser.entries.find((entry) => entry.path === selectedPath) || null;
   const filteredEntries = deferredSearch
@@ -1085,7 +1153,7 @@ export default function FilesPage() {
   return (
     <ToolPage
       title="Filesystem"
-      subtitle="Drives, shares, and local transfers."
+      subtitle="Drives, shares, local transfers, and explicit compatibility-link checks."
       className="tool-page--filesystem"
       actions={(
         <>
@@ -1114,6 +1182,7 @@ export default function FilesPage() {
               <strong>{statusText}</strong>
               <p className="tool-banner__meta">Last agent scan: {formatTimestamp(driveState.manifest.generatedAt)}</p>
               <p className="tool-banner__meta">Last page refresh: {formatTimestamp(driveState.checkedAt)}</p>
+              <p className="tool-banner__meta">Compatibility links: <code>~/Drives/Media/{'{'}movies,series,music,audiobooks,downloads,iptv-cache,iptv-epg{'}'}</code></p>
             </div>
             {!driveAccessDenied ? (
               <div className="tool-inline-actions">
@@ -1378,10 +1447,10 @@ export default function FilesPage() {
                 <button className="ui-button" type="button" onClick={createFolder} disabled={browser.path === '' ? !canCreateShare : !canWriteCurrentFolder}>
                   {browser.path === '' ? 'New Share' : 'New Folder'}
                 </button>
-                <button className="ui-button" type="button" onClick={() => handleUploadTrigger('files')} disabled={uploadBusy || !canWriteCurrentFolder}>
+                <button className="ui-button" type="button" onClick={() => void handleUploadTrigger('files')} disabled={uploadBusy || !canWriteCurrentFolder}>
                   {uploadBusy ? 'Uploading…' : 'Upload Files'}
                 </button>
-                <button className="ui-button" type="button" onClick={() => handleUploadTrigger('folder')} disabled={uploadBusy || !canWriteCurrentFolder}>
+                <button className="ui-button" type="button" onClick={() => void handleUploadTrigger('folder')} disabled={uploadBusy || !canWriteCurrentFolder}>
                   Upload Folder
                 </button>
                 <button className="ui-button" type="button" onClick={renameSelected} disabled={!canRenameSelection}>
@@ -1537,7 +1606,7 @@ export default function FilesPage() {
               className={`fs-browser-list ${dropTargetPath === browser.path ? 'fs-browser-list--drop' : ''}`}
               onDragLeave={() => handleDropLeave(browser.path)}
               onDragOver={(event) => handleDropHover(event, browser.path, canWriteCurrentFolder)}
-              onDrop={(event) => { if (canWriteCurrentFolder) { void handleExternalDrop(event, browser.path); } }}
+              onDrop={(event) => { void handleExternalDrop(event, browser.path, canWriteCurrentFolder); }}
             >
               <div className="fs-list-head">
                 <label className="fs-check fs-check--head">
@@ -1568,7 +1637,7 @@ export default function FilesPage() {
                       onDragLeave={() => handleDropLeave(entry.path)}
                       onDragOver={(event) => handleDropHover(event, entry.path, canDropIntoEntry)}
                       onDragStart={(event) => handleRowDragStart(event, entry)}
-                      onDrop={(event) => { if (canDropIntoEntry) { void handleExternalDrop(event, entry.path); } }}
+                      onDrop={(event) => { void handleExternalDrop(event, entry.path, canDropIntoEntry); }}
                     >
                       <label className="fs-check" onClick={(event) => event.stopPropagation()}>
                         <input

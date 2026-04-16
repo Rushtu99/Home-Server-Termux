@@ -33,10 +33,10 @@ fi
 MEDIA_VAULT_ROOT="${MEDIA_VAULT_ROOT:-${DEFAULT_VAULT_DRIVE_DIR:+$DEFAULT_VAULT_DRIVE_DIR/$MEDIA_VAULT_DIR_NAME/$MEDIA_VAULT_MEDIA_SUBDIR}}"
 MEDIA_SCRATCH_ROOT="${MEDIA_SCRATCH_ROOT:-${DEFAULT_SCRATCH_DRIVE_DIR:+$DEFAULT_SCRATCH_DRIVE_DIR/$MEDIA_SCRATCH_DIR_NAME/$MEDIA_SCRATCH_MEDIA_SUBDIR}}"
 if [ -z "$MEDIA_VAULT_ROOT" ]; then
-    MEDIA_VAULT_ROOT="${DRIVES_D_DIR:-$USER_HOME/Drives/D}/$MEDIA_VAULT_DIR_NAME/$MEDIA_VAULT_MEDIA_SUBDIR"
+    MEDIA_VAULT_ROOT="${DRIVES_D_DIR:-$USER_HOME/Drives/D (VAULT_fallback)}/$MEDIA_VAULT_DIR_NAME/$MEDIA_VAULT_MEDIA_SUBDIR"
 fi
 if [ -z "$MEDIA_SCRATCH_ROOT" ]; then
-    MEDIA_SCRATCH_ROOT="${DRIVES_E_DIR:-$USER_HOME/Drives/E}/$MEDIA_SCRATCH_DIR_NAME/$MEDIA_SCRATCH_MEDIA_SUBDIR"
+    MEDIA_SCRATCH_ROOT="${DRIVES_E_DIR:-$USER_HOME/Drives/E (SCRATCH_fallback)}/$MEDIA_SCRATCH_DIR_NAME/$MEDIA_SCRATCH_MEDIA_SUBDIR"
 fi
 MEDIA_VAULT_ROOTS="${MEDIA_VAULT_ROOTS:-$MEDIA_VAULT_ROOT}"
 MEDIA_SCRATCH_ROOTS="${MEDIA_SCRATCH_ROOTS:-$MEDIA_SCRATCH_ROOT}"
@@ -45,6 +45,12 @@ JELLYFIN_SERVICE_CMD="${JELLYFIN_SERVICE_CMD:-$PROJECT/scripts/jellyfin-service.
 QBITTORRENT_SERVICE_CMD="${QBITTORRENT_SERVICE_CMD:-$PROJECT/scripts/qbittorrent-service.sh}"
 BAZARR_SERVICE_CMD="${BAZARR_SERVICE_CMD:-$PROJECT/scripts/bazarr-service.sh}"
 MEDIA_WORKFLOW_SERVICE_CMD="${MEDIA_WORKFLOW_SERVICE_CMD:-$PROJECT/scripts/media-workflow-service.sh}"
+MEDIA_IMPORTER_CMD="${MEDIA_IMPORTER_CMD:-$PROJECT/scripts/media-importer.sh}"
+QBITTORRENT_BIND_HOST="${QBITTORRENT_BIND_HOST:-127.0.0.1}"
+QBITTORRENT_PORT="${QBITTORRENT_PORT:-8081}"
+QBITTORRENT_WEBUI_USERNAME="${QBITTORRENT_WEBUI_USERNAME:-}"
+QBITTORRENT_WEBUI_PASSWORD="${QBITTORRENT_WEBUI_PASSWORD:-}"
+QBIT_FALLBACK_PAUSED_HASHES_FILE="${QBIT_FALLBACK_PAUSED_HASHES_FILE:-$RUNTIME_DIR/qb-fallback-paused.hashes}"
 
 load_shell_env_file() {
     local env_file="$1"
@@ -172,6 +178,60 @@ append_reason() {
     else
         out_ref="$out_ref; $message"
     fi
+}
+
+reason_count() {
+    local reason_text="$1"
+    local count=0
+    local item=""
+
+    while IFS= read -r item; do
+        item="$(printf '%s' "$item" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$item" ] || continue
+        count=$((count + 1))
+    done < <(printf '%s\n' "$reason_text" | tr ';' '\n')
+
+    printf '%s\n' "$count"
+}
+
+first_reason_item() {
+    local reason_text="$1"
+    local item=""
+
+    while IFS= read -r item; do
+        item="$(printf '%s' "$item" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$item" ] || continue
+        printf '%s\n' "$item"
+        return 0
+    done < <(printf '%s\n' "$reason_text" | tr ';' '\n')
+
+    return 1
+}
+
+summarize_role_reason() {
+    local role="$1"
+    local reason_text="$2"
+    local issue_count=0
+    local first_item=""
+    local role_label=""
+
+    role_label="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
+    issue_count="$(reason_count "$reason_text")"
+    if [ "$issue_count" -le 0 ]; then
+        printf '%s issue detected\n' "$role_label"
+        return 0
+    fi
+
+    first_item="$(first_reason_item "$reason_text" || true)"
+    if [ -z "$first_item" ]; then
+        printf '%s: %s issue%s\n' "$role_label" "$issue_count" "$([ "$issue_count" -eq 1 ] && printf '' || printf 's')"
+        return 0
+    fi
+
+    if [ "${#first_item}" -gt 96 ]; then
+        first_item="${first_item:0:93}..."
+    fi
+    printf '%s: %s issue%s (e.g. %s)\n' "$role_label" "$issue_count" "$([ "$issue_count" -eq 1 ] && printf '' || printf 's')" "$first_item"
 }
 
 path_is_direct_mount() {
@@ -466,6 +526,7 @@ ROLE_HEALTHY=1
 ROLE_REASON=""
 ROLE_ROOTS=()
 ROLE_DRIVES=()
+QBIT_FALLBACK_MODE="unknown"
 
 check_role_health() {
     local role="$1"
@@ -487,6 +548,9 @@ check_role_health() {
     local root_reason=""
     local drive_mounted=1
     local drive_writable=1
+    local drive=""
+    local root_maps_to_drive=0
+    local require_drive_health=1
 
     ROLE_HEALTHY=1
     ROLE_REASON=""
@@ -521,18 +585,6 @@ check_role_health() {
         fi
     done
 
-    if [ "${#drives[@]}" -eq 0 ]; then
-        ROLE_HEALTHY=0
-        append_reason ROLE_REASON "No drives resolved for role '$role'"
-    elif [ "$drive_ok" -ne 1 ]; then
-        ROLE_HEALTHY=0
-        if [ -n "$drive_reason" ]; then
-            append_reason ROLE_REASON "$drive_reason"
-        else
-            append_reason ROLE_REASON "No healthy mounted drive found for role '$role'"
-        fi
-    fi
-
     if [ "${#roots[@]}" -eq 0 ]; then
         root_reason="No roots configured for role '$role'"
     fi
@@ -556,6 +608,39 @@ check_role_health() {
             append_reason ROLE_REASON "$root_reason"
         else
             append_reason ROLE_REASON "No healthy root found for role '$role'"
+        fi
+    fi
+
+    if [ "${#roots[@]}" -gt 0 ] && [ "$root_ok" -eq 1 ]; then
+        for item in "${roots[@]}"; do
+            for drive in "${drives[@]}"; do
+                case "$item" in
+                    "$drive"|"$drive"/*)
+                        root_maps_to_drive=1
+                        break
+                        ;;
+                esac
+            done
+            if [ "$root_maps_to_drive" -eq 1 ]; then
+                break
+            fi
+        done
+        if [ "$root_maps_to_drive" -eq 0 ]; then
+            require_drive_health=0
+        fi
+    fi
+
+    if [ "$require_drive_health" -eq 1 ]; then
+        if [ "${#drives[@]}" -eq 0 ]; then
+            ROLE_HEALTHY=0
+            append_reason ROLE_REASON "No drives resolved for role '$role'"
+        elif [ "$drive_ok" -ne 1 ]; then
+            ROLE_HEALTHY=0
+            if [ -n "$drive_reason" ]; then
+                append_reason ROLE_REASON "$drive_reason"
+            else
+                append_reason ROLE_REASON "No healthy mounted drive found for role '$role'"
+            fi
         fi
     fi
 
@@ -591,16 +676,224 @@ check_role_health() {
 }
 
 compute_blocked_services() {
+    local scratch_fallback_ready=0
+    local vault_fallback_ready=0
+
+    if role_fallback_usable SCRATCH_ROOTS; then
+        scratch_fallback_ready=1
+    fi
+    if role_fallback_usable VAULT_ROOTS; then
+        vault_fallback_ready=1
+    fi
+
     BLOCKED_SERVICES=()
-    if [ "$SCRATCH_HEALTHY" -ne 1 ]; then
+    if [ "$SCRATCH_HEALTHY" -ne 1 ] && [ "$scratch_fallback_ready" -ne 1 ]; then
         array_push_unique BLOCKED_SERVICES "qbittorrent"
         array_push_unique BLOCKED_SERVICES "media-workflow"
     fi
-    if [ "$VAULT_HEALTHY" -ne 1 ]; then
+    if [ "$VAULT_HEALTHY" -ne 1 ] && [ "$vault_fallback_ready" -ne 1 ]; then
         array_push_unique BLOCKED_SERVICES "jellyfin"
         array_push_unique BLOCKED_SERVICES "bazarr"
         array_push_unique BLOCKED_SERVICES "media-workflow"
     fi
+}
+
+role_has_writable_root() {
+    local roots_name="$1"
+    local root=""
+    local -n roots_ref="$roots_name"
+
+    for root in "${roots_ref[@]}"; do
+        [ -d "$root" ] || continue
+        if type is_writable_dir >/dev/null 2>&1; then
+            if is_writable_dir "$root"; then
+                return 0
+            fi
+            continue
+        fi
+        return 0
+    done
+
+    return 1
+}
+
+role_fallback_usable() {
+    local roots_name="$1"
+    role_has_writable_root "$roots_name"
+}
+
+vault_main_mount_ready() {
+    [ -n "${DRIVES_D_MAIN_DIR:-}" ] || return 1
+    path_is_direct_mount "$DRIVES_D_MAIN_DIR"
+}
+
+run_qb_webui_fallback_action() {
+    local action="$1"
+    local vault_roots_csv="$2"
+
+    command -v node >/dev/null 2>&1 || return 1
+
+    node - "$action" "$QBITTORRENT_BIND_HOST" "$QBITTORRENT_PORT" "$QBITTORRENT_WEBUI_USERNAME" "$QBITTORRENT_WEBUI_PASSWORD" "$vault_roots_csv" "$QBIT_FALLBACK_PAUSED_HASHES_FILE" <<'JS'
+const fs = require('fs');
+const [action, host, port, username, password, vaultRootsCsv, pausedFile] = process.argv.slice(2);
+const base = `http://${host}:${port}`;
+const vaultRoots = String(vaultRootsCsv || '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .map((entry) => (entry.endsWith('/') ? entry : `${entry}/`));
+let sidCookie = '';
+
+const readPausedHashes = () => {
+  try {
+    return String(fs.readFileSync(pausedFile, 'utf8'))
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
+const writePausedHashes = (hashes) => {
+  const payload = [...new Set(hashes.map((entry) => String(entry || '').trim()).filter(Boolean))];
+  if (payload.length === 0) {
+    try { fs.unlinkSync(pausedFile); } catch {}
+    return;
+  }
+  fs.writeFileSync(pausedFile, `${payload.join('\n')}\n`);
+};
+
+const login = async () => {
+  if (!username && !password) return false;
+  const body = new URLSearchParams({ username, password });
+  const response = await fetch(`${base}/api/v2/auth/login`, {
+    method: 'POST',
+    body,
+    headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+  });
+  if (!response.ok) return false;
+  const setCookie = response.headers.get('set-cookie') || '';
+  const sidPair = setCookie
+    .split(';')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith('SID='));
+  if (!sidPair) return false;
+  sidCookie = sidPair;
+  return true;
+};
+
+const qbFetch = async (path, options = {}, allowRetry = true) => {
+  const headers = { ...(options.headers || {}) };
+  if (sidCookie) headers.Cookie = sidCookie;
+  const response = await fetch(`${base}${path}`, { ...options, headers });
+  if (response.status === 403 && allowRetry) {
+    const authed = await login();
+    if (authed) {
+      return qbFetch(path, options, false);
+    }
+  }
+  return response;
+};
+
+const pauseVaultDownloads = async () => {
+  const response = await qbFetch('/api/v2/torrents/info');
+  if (!response.ok) {
+    process.stdout.write('mode=pause action=skip reason=unreachable\n');
+    return;
+  }
+  const torrents = await response.json().catch(() => []);
+  const hashesToPause = [];
+
+  for (const torrent of Array.isArray(torrents) ? torrents : []) {
+    const hash = String(torrent.hash || '').trim();
+    if (!hash) continue;
+    const state = String(torrent.state || '').toLowerCase();
+    if (state.startsWith('paused') || Number(torrent.progress || 0) >= 1) continue;
+
+    const savePath = String(torrent.save_path || '');
+    const contentPath = String(torrent.content_path || '');
+    let inVault = savePath.includes('/VAULT/') || contentPath.includes('/VAULT/');
+    if (!inVault && vaultRoots.length > 0) {
+      const saveNorm = savePath.endsWith('/') ? savePath : `${savePath}/`;
+      const contentNorm = contentPath.endsWith('/') ? contentPath : `${contentPath}/`;
+      inVault = vaultRoots.some((root) => saveNorm.startsWith(root) || contentNorm.startsWith(root));
+    }
+    if (!inVault) continue;
+    hashesToPause.push(hash);
+  }
+
+  if (hashesToPause.length > 0) {
+    const body = new URLSearchParams({ hashes: hashesToPause.join('|') });
+    const pauseResponse = await qbFetch('/api/v2/torrents/pause', { method: 'POST', body });
+    if (!pauseResponse.ok) {
+      process.stdout.write(`mode=pause action=error count=${hashesToPause.length}\n`);
+      return;
+    }
+  }
+
+  const knownPaused = readPausedHashes();
+  writePausedHashes([...knownPaused, ...hashesToPause]);
+  process.stdout.write(`mode=pause action=ok count=${hashesToPause.length}\n`);
+};
+
+const resumeFallbackPaused = async () => {
+  const pausedHashes = readPausedHashes();
+  if (pausedHashes.length === 0) {
+    process.stdout.write('mode=resume action=ok count=0\n');
+    return;
+  }
+
+  const body = new URLSearchParams({ hashes: pausedHashes.join('|') });
+  const response = await qbFetch('/api/v2/torrents/resume', { method: 'POST', body });
+  if (!response.ok) {
+    process.stdout.write(`mode=resume action=error count=${pausedHashes.length}\n`);
+    return;
+  }
+  writePausedHashes([]);
+  process.stdout.write(`mode=resume action=ok count=${pausedHashes.length}\n`);
+};
+
+if (action === 'pause') {
+  pauseVaultDownloads().catch(() => process.stdout.write('mode=pause action=error count=0\n'));
+} else if (action === 'resume') {
+  resumeFallbackPaused().catch(() => process.stdout.write('mode=resume action=error count=0\n'));
+} else {
+  process.stdout.write('mode=unknown action=skip\n');
+}
+JS
+}
+
+enforce_qb_fallback_policy() {
+    local mode="fallback"
+    local action_result=""
+    local vault_roots_csv=""
+
+    if vault_main_mount_ready; then
+        mode="normal"
+    fi
+
+    vault_roots_csv="$(join_csv VAULT_ROOTS)"
+    if service_is_running "qbittorrent"; then
+        if [ "$mode" = "fallback" ]; then
+            action_result="$(run_qb_webui_fallback_action "pause" "$vault_roots_csv" 2>/dev/null || true)"
+            if printf '%s' "$action_result" | grep -Fq 'action=ok'; then
+                log INFO "qB fallback policy active; vault-target downloads paused as needed"
+            fi
+        elif [ "$QBIT_FALLBACK_MODE" = "fallback" ]; then
+            action_result="$(run_qb_webui_fallback_action "resume" "$vault_roots_csv" 2>/dev/null || true)"
+            if printf '%s' "$action_result" | grep -Fq 'action=ok'; then
+                log INFO "qB fallback policy cleared; previously paused vault downloads resumed"
+            fi
+        fi
+    fi
+
+    if [ "$QBIT_FALLBACK_MODE" = "fallback" ] && [ "$mode" = "normal" ] && [ -x "$MEDIA_IMPORTER_CMD" ]; then
+        "$MEDIA_IMPORTER_CMD" import --trigger hdd-reconcile >/dev/null 2>&1 || true
+        log INFO "Triggered media import reconcile after external mount recovery"
+    fi
+
+    QBIT_FALLBACK_MODE="$mode"
 }
 
 enforce_blocked_services() {
@@ -703,18 +996,16 @@ run_health_cycle() {
         enforce_blocked_services
         next_state="degraded"
         LAST_DEGRADED_AT="$now_utc"
+        local vault_summary=""
+        local scratch_summary=""
+        vault_summary="$(summarize_role_reason "vault" "$VAULT_REASON")"
+        scratch_summary="$(summarize_role_reason "scratch" "$SCRATCH_REASON")"
         if [ "$VAULT_HEALTHY" -ne 1 ] && [ "$SCRATCH_HEALTHY" -ne 1 ]; then
-            reason="Vault and scratch degraded"
+            reason="Vault and scratch degraded ($vault_summary; $scratch_summary)"
         elif [ "$VAULT_HEALTHY" -ne 1 ]; then
-            reason="Vault degraded"
+            reason="Vault degraded ($vault_summary)"
         else
-            reason="Scratch degraded"
-        fi
-        if [ -n "$VAULT_REASON" ]; then
-            reason="$reason: $VAULT_REASON"
-        fi
-        if [ -n "$SCRATCH_REASON" ]; then
-            reason="$reason: $SCRATCH_REASON"
+            reason="Scratch degraded ($scratch_summary)"
         fi
         if [ "$previous_state" != "degraded" ]; then
             LAST_TRANSITION_AT="$now_utc"
@@ -742,6 +1033,8 @@ run_health_cycle() {
     scratch_roots_csv="$(join_csv SCRATCH_ROOTS)"
     vault_drives_csv="$(join_csv VAULT_DRIVES)"
     scratch_drives_csv="$(join_csv SCRATCH_DRIVES)"
+
+    enforce_qb_fallback_policy
 
     write_state_file \
         "$CURRENT_STATE" \

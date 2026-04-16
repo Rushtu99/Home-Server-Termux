@@ -82,6 +82,10 @@ MEDIA_IMPORT_STATUS_FILE="${MEDIA_IMPORT_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR/impo
 MEDIA_CLEANUP_STATUS_FILE="${MEDIA_CLEANUP_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR/cleanup-status.json}"
 MEDIA_IMPORTED_INDEX_FILE="${MEDIA_IMPORTED_INDEX_FILE:-$MEDIA_IMPORT_LOG_DIR/imported-items.tsv}"
 MEDIA_IMPORT_EVENTS_FILE="${MEDIA_IMPORT_EVENTS_FILE:-$MEDIA_IMPORT_LOG_DIR/import-events.tsv}"
+QBITTORRENT_BIND_HOST="${QBITTORRENT_BIND_HOST:-127.0.0.1}"
+QBITTORRENT_PORT="${QBITTORRENT_PORT:-8081}"
+QBITTORRENT_WEBUI_USERNAME="${QBITTORRENT_WEBUI_USERNAME:-}"
+QBITTORRENT_WEBUI_PASSWORD="${QBITTORRENT_WEBUI_PASSWORD:-}"
 
 LOGFILE="$MEDIA_IMPORT_LOG_DIR/media-importer.log"
 LOCK_FILE="$MEDIA_IMPORT_LOG_DIR/media-importer.lock"
@@ -134,6 +138,10 @@ DELETED_IMPORTED_ITEMS=0
 DELETED_CACHE_ITEMS=0
 SCRATCH_PRESSURE_BEFORE=0
 SCRATCH_PRESSURE_AFTER=0
+declare -a DOWNLOAD_SCAN_ROOTS=()
+declare -a QB_COMPLETED_SOURCES=()
+declare -A QB_SOURCE_HINTS=()
+declare -A IMPORT_SOURCE_SEEN=()
 
 usage() {
     cat <<'EOF'
@@ -239,6 +247,173 @@ path_within() {
             return 1
             ;;
     esac
+}
+
+normalize_csv_list_local() {
+    local input="$1"
+    printf '%s\n' "$input" | tr ';' ',' | tr '\n' ',' | tr -s ',' | sed 's/^,*//; s/,*$//'
+}
+
+csv_to_array_local() {
+    local csv="$1"
+    local out_name="$2"
+    local token=""
+    local -n out_ref="$out_name"
+
+    out_ref=()
+    csv="$(normalize_csv_list_local "$csv")"
+    [ -n "$csv" ] || return 0
+
+    while IFS= read -r token; do
+        token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$token" ] || continue
+        out_ref+=("$token")
+    done < <(printf '%s\n' "$csv" | tr ',' '\n')
+}
+
+array_push_unique_local() {
+    local out_name="$1"
+    local value="$2"
+    local item=""
+    local -n out_ref="$out_name"
+
+    for item in "${out_ref[@]}"; do
+        if [ "$item" = "$value" ]; then
+            return 0
+        fi
+    done
+    out_ref+=("$value")
+}
+
+build_download_scan_roots() {
+    local scratch_roots=()
+    local scratch_root=""
+    local downloads_root=""
+
+    DOWNLOAD_SCAN_ROOTS=()
+    array_push_unique_local DOWNLOAD_SCAN_ROOTS "$MEDIA_DOWNLOADS_DIR"
+
+    csv_to_array_local "$MEDIA_SCRATCH_ROOTS" scratch_roots
+    for scratch_root in "${scratch_roots[@]}"; do
+        downloads_root="$scratch_root/downloads"
+        array_push_unique_local DOWNLOAD_SCAN_ROOTS "$downloads_root"
+    done
+
+    if [ -n "$MEDIA_SCRATCH_ROOT" ]; then
+        array_push_unique_local DOWNLOAD_SCAN_ROOTS "$MEDIA_SCRATCH_ROOT/downloads"
+    fi
+}
+
+normalize_qb_source_type() {
+    case "${1,,}" in
+        movies|movie)
+            printf 'movies\n'
+            ;;
+        series|tv|sonarr)
+            printf 'series\n'
+            ;;
+        *)
+            printf 'manual\n'
+            ;;
+    esac
+}
+
+populate_qb_source_hints() {
+    local qb_lines=""
+    local line=""
+    local source_type=""
+    local source_path=""
+    local parsed_type=""
+
+    QB_COMPLETED_SOURCES=()
+    QB_SOURCE_HINTS=()
+    command -v node >/dev/null 2>&1 || return 0
+
+    qb_lines="$(node - "$QBITTORRENT_BIND_HOST" "$QBITTORRENT_PORT" "$QBITTORRENT_WEBUI_USERNAME" "$QBITTORRENT_WEBUI_PASSWORD" <<'JS'
+const [host, port, username, password] = process.argv.slice(2);
+const base = `http://${host}:${port}`;
+let sidCookie = '';
+
+const login = async () => {
+  if (!username && !password) return false;
+  const body = new URLSearchParams({ username, password });
+  const response = await fetch(`${base}/api/v2/auth/login`, {
+    method: 'POST',
+    body,
+    headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+  });
+  if (!response.ok) return false;
+  const setCookie = response.headers.get('set-cookie') || '';
+  const sidPair = setCookie
+    .split(';')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith('SID='));
+  if (!sidPair) return false;
+  sidCookie = sidPair;
+  return true;
+};
+
+const qbFetch = async (path, allowRetry = true) => {
+  const headers = {};
+  if (sidCookie) headers.Cookie = sidCookie;
+  const response = await fetch(`${base}${path}`, { headers });
+  if (response.status === 403 && allowRetry) {
+    const authed = await login();
+    if (authed) {
+      return qbFetch(path, false);
+    }
+  }
+  return response;
+};
+
+const categoryToType = (value) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'movies' || raw === 'movie') return 'movies';
+  if (raw === 'series' || raw === 'tv' || raw === 'sonarr') return 'series';
+  return 'manual';
+};
+
+const emitPath = (type, pathValue) => {
+  const normalized = String(pathValue || '').trim();
+  if (!normalized) return;
+  process.stdout.write(`${type}\t${normalized}\n`);
+};
+
+qbFetch('/api/v2/torrents/info')
+  .then(async (response) => {
+    if (!response.ok) return;
+    const torrents = await response.json().catch(() => []);
+    for (const torrent of Array.isArray(torrents) ? torrents : []) {
+      const completionOn = Number(torrent.completion_on || 0);
+      const progress = Number(torrent.progress || 0);
+      if (completionOn <= 0 && progress < 1) continue;
+
+      const type = categoryToType(torrent.category);
+      const contentPath = String(torrent.content_path || '').trim();
+      const savePath = String(torrent.save_path || '').trim();
+      const name = String(torrent.name || '').trim();
+
+      if (contentPath) emitPath(type, contentPath);
+      if (savePath && name) emitPath(type, `${savePath}/${name}`);
+    }
+  })
+  .catch(() => {});
+JS
+)" || true
+
+    [ -n "$qb_lines" ] || return 0
+
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        IFS=$'\t' read -r source_type source_path <<EOF
+$line
+EOF
+        [ -n "$source_path" ] || continue
+        [ -e "$source_path" ] || continue
+        parsed_type="$(normalize_qb_source_type "$source_type")"
+        QB_SOURCE_HINTS["$source_path"]="$parsed_type"
+        QB_COMPLETED_SOURCES+=("$source_path")
+    done <<< "$qb_lines"
 }
 
 write_file_atomic() {
@@ -501,17 +676,50 @@ heuristic_manual_dest() {
     printf '%s\n' "$MEDIA_IMPORT_REVIEW_DIR"
 }
 
+lookup_source_hint() {
+    local path="$1"
+    local probe="$path"
+    local hint=""
+
+    while [ -n "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do
+        hint="${QB_SOURCE_HINTS[$probe]:-}"
+        if [ -n "$hint" ]; then
+            printf '%s\n' "$hint"
+            return 0
+        fi
+        probe="$(dirname "$probe")"
+    done
+
+    return 1
+}
+
 resolve_source_type() {
     local path="$1"
-    if path_within "$path" "$MEDIA_DOWNLOADS_MOVIES_DIR"; then
-        printf 'movies\n'
-    elif path_within "$path" "$MEDIA_DOWNLOADS_SERIES_DIR"; then
-        printf 'series\n'
-    elif path_within "$path" "$MEDIA_DOWNLOADS_MANUAL_DIR"; then
-        printf 'manual\n'
-    else
-        printf 'manual\n'
+    local hint=""
+    local downloads_root=""
+
+    hint="$(lookup_source_hint "$path" || true)"
+    if [ -n "$hint" ]; then
+        printf '%s\n' "$hint"
+        return 0
     fi
+
+    for downloads_root in "${DOWNLOAD_SCAN_ROOTS[@]}"; do
+        if path_within "$path" "$downloads_root/movies"; then
+            printf 'movies\n'
+            return 0
+        fi
+        if path_within "$path" "$downloads_root/series"; then
+            printf 'series\n'
+            return 0
+        fi
+        if path_within "$path" "$downloads_root/manual"; then
+            printf 'manual\n'
+            return 0
+        fi
+    done
+
+    printf 'manual\n'
 }
 
 resolve_dest_for_source() {
@@ -615,6 +823,13 @@ process_source_path() {
     local entry="$1"
     local source_type=""
     local dest_root=""
+    local resolved_entry=""
+
+    resolved_entry="$(realpath -m "$entry" 2>/dev/null || printf '%s\n' "$entry")"
+    if [ -n "${IMPORT_SOURCE_SEEN[$resolved_entry]:-}" ]; then
+        return 0
+    fi
+    IMPORT_SOURCE_SEEN["$resolved_entry"]=1
 
     if [ ! -e "$entry" ]; then
         FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -640,12 +855,18 @@ process_root_directory() {
     local source_type="$3"
     local label="$4"
     local entry=""
+    local resolved_entry=""
 
     [ -d "$source_root" ] || return 0
 
     shopt -s nullglob dotglob
     for entry in "$source_root"/*; do
         [ -e "$entry" ] || continue
+        resolved_entry="$(realpath -m "$entry" 2>/dev/null || printf '%s\n' "$entry")"
+        if [ -n "${IMPORT_SOURCE_SEEN[$resolved_entry]:-}" ]; then
+            continue
+        fi
+        IMPORT_SOURCE_SEEN["$resolved_entry"]=1
         copy_entry "$entry" "$dest_root" "$source_type" "$label $(basename "$entry")"
     done
     shopt -u nullglob dotglob
@@ -653,6 +874,11 @@ process_root_directory() {
 
 run_import_pass() {
     local entry=""
+    local downloads_root=""
+
+    IMPORT_SOURCE_SEEN=()
+    build_download_scan_roots
+    populate_qb_source_hints
 
     if [ "${#SOURCE_PATHS[@]}" -gt 0 ]; then
         local source=""
@@ -662,17 +888,26 @@ run_import_pass() {
         return 0
     fi
 
-    process_root_directory "$MEDIA_DOWNLOADS_MOVIES_DIR" "$MEDIA_MOVIES_DIR" "movies" "movie"
-    process_root_directory "$MEDIA_DOWNLOADS_SERIES_DIR" "$MEDIA_SERIES_DIR" "series" "series"
+    if [ "${#QB_COMPLETED_SOURCES[@]}" -gt 0 ]; then
+        for entry in "${QB_COMPLETED_SOURCES[@]}"; do
+            process_source_path "$entry"
+        done
+    fi
 
-    if [ -d "$MEDIA_DOWNLOADS_MANUAL_DIR" ]; then
+    for downloads_root in "${DOWNLOAD_SCAN_ROOTS[@]}"; do
+        process_root_directory "$downloads_root/movies" "$MEDIA_MOVIES_DIR" "movies" "movie"
+        process_root_directory "$downloads_root/series" "$MEDIA_SERIES_DIR" "series" "series"
+
+        if [ ! -d "$downloads_root/manual" ]; then
+            continue
+        fi
         shopt -s nullglob dotglob
-        for entry in "$MEDIA_DOWNLOADS_MANUAL_DIR"/*; do
+        for entry in "$downloads_root/manual"/*; do
             [ -e "$entry" ] || continue
             process_source_path "$entry"
         done
         shopt -u nullglob dotglob
-    fi
+    done
 }
 
 should_delete_path() {

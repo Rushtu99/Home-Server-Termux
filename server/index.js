@@ -41,8 +41,10 @@ const FTP_ROOT = process.env.FTP_ROOT || FILEBROWSER_ROOT;
 const FTP_CLIENT_DOWNLOAD_ROOT = process.env.FTP_CLIENT_DOWNLOAD_ROOT || FILEBROWSER_ROOT;
 const MEDIA_SHARE_NAME = process.env.MEDIA_SHARE_NAME || 'Media';
 const MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(FILEBROWSER_ROOT, MEDIA_SHARE_NAME);
-const MEDIA_VAULT_ROOT = process.env.MEDIA_VAULT_ROOT || path.join(FILEBROWSER_ROOT, 'D', 'VAULT', 'Media');
-const MEDIA_SCRATCH_ROOT = process.env.MEDIA_SCRATCH_ROOT || path.join(FILEBROWSER_ROOT, 'E', 'SCRATCH', 'HmSTxScratch');
+const VAULT_FALLBACK_LABEL = process.env.VAULT_FALLBACK_LABEL || 'VAULT_fallback';
+const SCRATCH_FALLBACK_LABEL = process.env.SCRATCH_FALLBACK_LABEL || 'SCRATCH_fallback';
+const MEDIA_VAULT_ROOT = process.env.MEDIA_VAULT_ROOT || path.join(FILEBROWSER_ROOT, `D (${VAULT_FALLBACK_LABEL})`, 'VAULT', 'Media');
+const MEDIA_SCRATCH_ROOT = process.env.MEDIA_SCRATCH_ROOT || path.join(FILEBROWSER_ROOT, `E (${SCRATCH_FALLBACK_LABEL})`, 'SCRATCH', 'HmSTxScratch');
 const MEDIA_VAULT_ROOTS = String(process.env.MEDIA_VAULT_ROOTS || MEDIA_VAULT_ROOT)
   .split(',')
   .map((entry) => entry.trim())
@@ -833,15 +835,45 @@ const SERVICE_STATS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SERVICE_HISTORY_LIMIT = 400;
 const TORRENT_LANE_SET = new Set(['arr', 'standalone']);
 const TORRENT_ARR_MEDIA_TYPE_SET = new Set(['movies', 'series']);
-const TORRENT_LANE_MAPPING = {
-  arr: {
-    movies: { category: 'movies', savePath: MEDIA_DOWNLOADS_MOVIES_DIR },
-    series: { category: 'series', savePath: MEDIA_DOWNLOADS_SERIES_DIR },
-  },
-  standalone: {
-    category: 'standalone',
-    savePath: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
-  },
+const SCRATCH_FALLBACK_ROOT = path.join(FILEBROWSER_ROOT, `E (${SCRATCH_FALLBACK_LABEL})`, 'SCRATCH', 'HmSTxScratch');
+const isWritableDirectory = (directoryPath) => {
+  try {
+    fs.mkdirSync(directoryPath, { recursive: true });
+    fs.accessSync(directoryPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const resolveActiveScratchRoot = (storageProtection) => {
+  const candidates = [
+    ...normalizeStringArray(storageProtection?.scratch?.roots),
+    MEDIA_SCRATCH_ROOT,
+    SCRATCH_FALLBACK_ROOT,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || '').trim();
+    if (!normalized) {
+      continue;
+    }
+    if (isWritableDirectory(normalized)) {
+      return normalized;
+    }
+  }
+  return MEDIA_SCRATCH_ROOT;
+};
+const buildTorrentLaneMapping = (scratchRoot) => {
+  const downloadsRoot = path.join(scratchRoot, 'downloads');
+  return {
+    arr: {
+      movies: { category: 'movies', savePath: path.join(downloadsRoot, 'movies') },
+      series: { category: 'series', savePath: path.join(downloadsRoot, 'series') },
+    },
+    standalone: {
+      category: 'standalone',
+      savePath: path.join(downloadsRoot, 'torrent', 'qbit'),
+    },
+  };
 };
 
 eventLoopDelay.enable();
@@ -2270,6 +2302,7 @@ const buildMediaWorkflowSnapshot = (catalog) => {
         manualResume: storageProtection.manualResume,
         overallHealthy: storageProtection.overallHealthy,
         reason: storageProtection.reason,
+        reasonCompact: storageProtection.reasonCompact,
         resumeRequired: storageProtection.resumeRequired,
         state: storageProtection.state,
         stoppedByWatchdog: storageProtection.stoppedByWatchdog,
@@ -3073,6 +3106,58 @@ const writeJsonFileAtomic = (filePath, payload) => {
   fs.renameSync(tmpPath, filePath);
 };
 
+const compactText = (value, maxLength = 180) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '';
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+};
+
+const buildStorageProtectionReasonCompact = (state = {}) => {
+  const vaultHealthy = state?.vault?.healthy !== false;
+  const scratchHealthy = state?.scratch?.healthy !== false;
+  const blockedServices = Array.isArray(state?.blockedServices) ? state.blockedServices : [];
+  const blockedCount = blockedServices.length;
+  const qbBlocked = blockedServices.includes('qbittorrent');
+  const workflowBlocked = blockedServices.includes('media-workflow');
+  const jellyfinBlocked = blockedServices.includes('jellyfin');
+  const bazarrBlocked = blockedServices.includes('bazarr');
+  const resumeCount = Array.isArray(state?.stoppedByWatchdog) ? state.stoppedByWatchdog.length : 0;
+
+  if (state?.state === 'degraded' || !state?.overallHealthy || blockedCount > 0) {
+    if (!vaultHealthy && !scratchHealthy) {
+      if (blockedCount === 0) {
+        return 'Vault and scratch degraded. Fallback roots active; downloads and import workflow remain online.';
+      }
+      return 'Vault and scratch degraded. External mounts missing; fallback paths active and storage-critical services blocked.';
+    }
+    if (!vaultHealthy) {
+      if (!jellyfinBlocked && !bazarrBlocked && !workflowBlocked) {
+        return 'Vault degraded. External vault mount missing; fallback vault root active.';
+      }
+      return 'Vault degraded. External vault mount missing; Jellyfin/Bazarr/media workflow are blocked.';
+    }
+    if (!scratchHealthy) {
+      if (!qbBlocked && !workflowBlocked) {
+        return 'Scratch degraded. External scratch mount missing; fallback download path active.';
+      }
+      return 'Scratch degraded. External scratch mount missing; qBittorrent/media workflow are blocked.';
+    }
+    return compactText(state?.reason || 'Storage degraded.', 180);
+  }
+
+  if (resumeCount > 0) {
+    return `${resumeCount} service${resumeCount === 1 ? '' : 's'} await manual resume.`;
+  }
+
+  if (state?.state === 'healthy' || state?.overallHealthy) {
+    return 'Storage watchdog healthy.';
+  }
+
+  return compactText(state?.reason || 'Storage watchdog state unknown.', 180);
+};
+
 const readStorageProtectionState = () => {
   const raw = readJsonFile(STORAGE_WATCHDOG_STATE_FILE, null);
   const fallbackRole = {
@@ -3093,6 +3178,7 @@ const readStorageProtectionState = () => {
     manualResume: true,
     overallHealthy: true,
     reason: '',
+    reasonCompact: 'Storage watchdog state unknown.',
     resumeRequired: false,
     schema: 1,
     state: 'unknown',
@@ -3108,7 +3194,7 @@ const readStorageProtectionState = () => {
   const blockedServices = normalizeStringArray(raw.blockedServices);
   const stoppedByWatchdog = normalizeStringArray(raw.stoppedByWatchdog);
 
-  return {
+  const nextState = {
     available: fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD),
     blockedServices,
     enabled: true,
@@ -3120,6 +3206,7 @@ const readStorageProtectionState = () => {
     manualResume: raw.manualResume !== false,
     overallHealthy: Boolean(raw.overallHealthy),
     reason: String(raw.reason || ''),
+    reasonCompact: '',
     resumeRequired: Boolean(raw.resumeRequired) && stoppedByWatchdog.length > 0,
     schema: Math.max(1, Number(raw.schema || 1) || 1),
     state: String(raw.state || (blockedServices.length > 0 ? 'degraded' : 'healthy')),
@@ -3127,6 +3214,8 @@ const readStorageProtectionState = () => {
     vault: normalizeStorageRoleState(raw.vault || {}),
     scratch: normalizeStorageRoleState(raw.scratch || {}),
   };
+  nextState.reasonCompact = buildStorageProtectionReasonCompact(nextState);
+  return nextState;
 };
 
 const clearStorageResumeRequirementForService = (serviceName) => {
@@ -6171,7 +6260,7 @@ const LEGACY_TAB_TO_WORKSPACE = {
 const uiNavBlueprint = [
   { key: 'overview', label: 'Overview', legacyTabs: ['home'], summary: 'System health, telemetry, and lifecycle status' },
   { key: 'media', label: 'Media', legacyTabs: ['media', 'downloads', 'arr'], summary: 'Jellyfin and automation workflow surfaces' },
-  { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, and filesystem management' },
+  { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, filesystem management, and compatibility links' },
   { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools' },
   { key: 'ai', label: 'AI', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace' },
   { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface' },
@@ -6672,7 +6761,12 @@ const ensureMediaCompatibilityLayout = () => {
     try {
       const stat = fs.lstatSync(linkPath);
       if (stat.isSymbolicLink()) {
-        const currentTarget = fs.realpathSync.native(linkPath);
+        let currentTarget = '';
+        try {
+          currentTarget = fs.realpathSync.native(linkPath);
+        } catch {
+          currentTarget = '';
+        }
         if (currentTarget === expectedTarget) {
           continue;
         }
@@ -6685,23 +6779,38 @@ const ensureMediaCompatibilityLayout = () => {
       // Path does not exist; create managed symlink below.
     }
 
-    fs.symlinkSync(target, linkPath);
+    try {
+      fs.symlinkSync(target, linkPath);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        throw error;
+      }
+      let existing = null;
+      try {
+        existing = fs.lstatSync(linkPath);
+      } catch {
+        throw error;
+      }
+      if (!existing.isSymbolicLink()) {
+        continue;
+      }
+      let currentTarget = '';
+      try {
+        currentTarget = fs.realpathSync.native(linkPath);
+      } catch {
+        currentTarget = '';
+      }
+      if (currentTarget === expectedTarget) {
+        continue;
+      }
+      fs.unlinkSync(linkPath);
+      fs.symlinkSync(target, linkPath);
+    }
   }
 };
 
 const resumeStorageBlockedServices = async () => {
   const currentState = readStorageProtectionState();
-
-  if (!currentState.overallHealthy || currentState.state === 'degraded') {
-    return {
-      success: false,
-      blocked: true,
-      resumed: [],
-      failed: [],
-      storageProtection: currentState,
-      error: currentState.reason || 'Storage is still degraded',
-    };
-  }
 
   const pending = normalizeStringArray(currentState.stoppedByWatchdog);
   if (pending.length === 0) {
@@ -6716,12 +6825,19 @@ const resumeStorageBlockedServices = async () => {
 
   const resumed = [];
   const failed = [];
+  let blockedByStorage = false;
+  let blockedError = '';
 
   for (const service of pending) {
     const latestState = readStorageProtectionState();
     const storageBlock = getStorageBlockForService(service, latestState);
     if (storageBlock.blocked) {
-      failed.push({ service, error: storageBlock.reason || 'Still blocked by storage watchdog' });
+      blockedByStorage = true;
+      const error = storageBlock.reason || 'Still blocked by storage watchdog';
+      if (!blockedError) {
+        blockedError = error;
+      }
+      failed.push({ service, error });
       continue;
     }
 
@@ -6769,7 +6885,8 @@ const resumeStorageBlockedServices = async () => {
   const nextState = readStorageProtectionState();
   return {
     success: failed.length === 0,
-    blocked: false,
+    blocked: blockedByStorage,
+    error: blockedError || (blockedByStorage ? (nextState.reason || 'Storage is still degraded') : ''),
     resumed,
     failed,
     storageProtection: nextState,
@@ -8334,9 +8451,6 @@ const mediaTorrentAddHandler = async (req, res) => {
   }
 
   const mediaType = lane === 'arr' ? requestedMediaType : null;
-  const mappedQb = lane === 'arr'
-    ? TORRENT_LANE_MAPPING.arr[mediaType]
-    : TORRENT_LANE_MAPPING.standalone;
 
   try {
     const storageProtection = readStorageProtectionState();
@@ -8355,6 +8469,11 @@ const mediaTorrentAddHandler = async (req, res) => {
         code: 'storage_blocked',
       });
     }
+    const activeScratchRoot = resolveActiveScratchRoot(storageProtection);
+    const torrentLaneMapping = buildTorrentLaneMapping(activeScratchRoot);
+    const mappedQb = lane === 'arr'
+      ? torrentLaneMapping.arr[mediaType]
+      : torrentLaneMapping.standalone;
 
     const qbInstall = await resolveServiceInstall('qbittorrent', SERVICES.qbittorrent);
     if (!qbInstall.available) {
