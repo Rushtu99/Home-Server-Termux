@@ -4,7 +4,7 @@
   grid-template-columns: 224px 1fr;
   background: var(--background);
   color: var(--foreground);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .dash2-sidebar {
@@ -12,26 +12,26 @@
   background: color-mix(in srgb, var(--panel) 92%, var(--background));
   display: flex;
   flex-direction: column;
-  padding: 10px;
-  gap: 10px;
+  padding: 8px;
+  gap: 8px;
   transition: transform 180ms ease, background 140ms ease, border-color 140ms ease;
   z-index: 50;
 }
 
 .dash2-brand strong {
   display: block;
-  font-size: 17px;
+  font-size: 16px;
   letter-spacing: 0.02em;
 }
 
 .dash2-brand span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-nav {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .dash2-nav__item {
@@ -39,7 +39,7 @@
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   background: color-mix(in srgb, var(--panel) 88%, var(--background));
   border-radius: 6px;
-  padding: 6px 7px;
+  padding: 5px 6px;
   color: inherit;
   cursor: pointer;
   transition: border-color 140ms ease, background 140ms ease;
@@ -58,9 +58,9 @@
 
 .dash2-nav__item small {
   display: block;
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.35;
 }
 
@@ -68,15 +68,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .dash2-sidebar__footer {
   margin-top: auto;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .dash2-sidebar__links {
@@ -86,9 +86,9 @@
 }
 
 .dash2-main {
-  padding: 10px;
+  padding: 8px;
   display: grid;
-  gap: 9px;
+  gap: 8px;
 }
 
 .dash2-sidebar-backdrop {
@@ -99,53 +99,53 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 90%, var(--background));
-  padding: 6px 8px;
+  padding: 5px 7px;
   overflow: visible;
   position: relative;
   z-index: 60;
 }
 
 .dash2-header--auth {
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 
 .dash2-header h1 {
   margin: 0;
-  font-size: clamp(18px, 1.6vw, 24px);
+  font-size: clamp(16px, 1.4vw, 20px);
 }
 
 .dash2-header p {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-header__meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 11px;
+  gap: 5px;
+  font-size: 10px;
   color: var(--muted);
   justify-content: flex-end;
   min-width: 0;
-  row-gap: 4px;
+  row-gap: 3px;
 }
 
 .dash2-header__search {
   position: relative;
-  min-width: min(100%, 260px);
-  flex: 1 1 240px;
+  min-width: min(100%, 220px);
+  flex: 1 1 220px;
 }
 
 .dash2-header__search .ui-input {
-  min-height: 34px;
-  font-size: 12px;
+  min-height: 32px;
+  font-size: 11px;
 }
 
 .dash2-search-results {
@@ -153,8 +153,8 @@
   inset: calc(100% + 4px) 0 auto;
   z-index: 30;
   display: grid;
-  gap: 4px;
-  padding: 5px;
+  gap: 3px;
+  padding: 4px;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 95%, var(--background));
@@ -164,7 +164,7 @@
   display: grid;
   gap: 2px;
   text-align: left;
-  padding: 6px 7px;
+  padding: 5px 6px;
   border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
@@ -207,12 +207,12 @@
 .dash2-utility-menu__panel {
   position: absolute;
   right: 0;
-  top: calc(100% + 4px);
+  top: calc(100% + 3px);
   z-index: 180;
   min-width: 176px;
   display: none;
-  gap: 6px;
-  padding: 7px;
+  gap: 5px;
+  padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 95%, var(--background));
@@ -223,9 +223,9 @@
 }
 
 .dash2-sidebar-toggle {
-  min-height: 32px;
-  min-width: 32px;
-  padding: 5px;
+  min-height: 30px;
+  min-width: 30px;
+  padding: 4px;
 }
 
 .dash2-sidebar-toggle__icon {
@@ -244,7 +244,7 @@
 
 .dash2-content {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .dash2-card {
@@ -257,49 +257,49 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .dash2-card__header h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .dash2-card__header p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-card__body {
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .dash2-card__actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .dash2-overview-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
-  gap: 10px;
+  gap: 8px;
 }
 
 .dash2-overview-layout__main,
 .dash2-overview-layout__side {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
 }
 
 .dash2-graph-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
 .dash2-graph-card {
@@ -352,7 +352,7 @@
 
 .dash2-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 8px;
 }
 
@@ -360,7 +360,7 @@
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
-  padding: 9px;
+  padding: 8px;
 }
 
 .dash2-metric__label {
@@ -370,13 +370,13 @@
 }
 
 .dash2-metric__value {
-  margin: 5px 0 0;
-  font-size: 16px;
+  margin: 4px 0 0;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .dash2-metric__helper {
-  margin: 5px 0 0;
+  margin: 4px 0 0;
   color: var(--muted);
   font-size: 10px;
 }
@@ -413,15 +413,15 @@
 
 .dash2-kv {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   margin: 0;
 }
 
 .dash2-kv > div {
   display: grid;
   grid-template-columns: minmax(140px, 180px) 1fr;
-  gap: 8px;
-  padding: 5px 0;
+  gap: 6px;
+  padding: 4px 0;
   border-bottom: 1px dashed color-mix(in srgb, var(--border) 55%, transparent);
 }
 
@@ -440,7 +440,7 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .dash2-list li,
@@ -448,10 +448,10 @@
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 88%, var(--background));
-  padding: 8px 10px;
+  padding: 7px 8px;
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -462,9 +462,9 @@
 
 .dash2-list p,
 .dash2-service-list p {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .dash2-small-copy {
@@ -477,7 +477,7 @@
 .dash2-list__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -487,7 +487,7 @@
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
-  padding: 8px 10px;
+  padding: 7px 8px;
 }
 
 .dash2-loading {
@@ -521,32 +521,32 @@
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
-  padding: 10px;
+  padding: 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   max-width: 420px;
 }
 
 .dash2-login-card h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .dash2-login-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .dash2-login-form {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .dash2-login-form label {
   display: grid;
-  gap: 6px;
-  font-size: 12px;
+  gap: 5px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -562,7 +562,7 @@
 
 .dash2-admin-controls {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .dash2-admin-controls label {
@@ -647,7 +647,7 @@
 .dash2-llm-controls {
   display: grid;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .dash2-llm-controls label {
@@ -709,8 +709,8 @@
 .dash2-chatbox-layout {
   display: grid;
   grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
-  gap: 10px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .dash2-chatbox-rail {
@@ -742,9 +742,9 @@
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-raised) 84%, transparent);
-  padding: 8px;
+  padding: 7px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .dash2-chat-log__meta {
@@ -777,9 +777,9 @@
   border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-raised) 88%, transparent);
-  padding: 12px 12px 10px;
+  padding: 10px 10px 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
 }
 
@@ -798,29 +798,29 @@
 
 .dash2-workflow-card__header h3 {
   margin: 4px 0 0;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .dash2-workflow-card__summary {
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.45;
   color: color-mix(in srgb, var(--foreground) 88%, var(--muted));
 }
 
 .dash2-workflow-card__bullets {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
   display: grid;
-  gap: 8px;
-  font-size: 11px;
+  gap: 6px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
 .dash2-media-health-grid {
-  margin-top: 10px;
+  margin-top: 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
@@ -855,13 +855,13 @@
 
 .dash2-chat-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   align-items: center;
 }
 
 .dash2-chat-log {
-  margin-top: 10px;
+  margin-top: 8px;
   display: grid;
   gap: 8px;
 }
@@ -961,11 +961,11 @@
 }
 
 .dash2-header--auth .dash2-header__copy h1 {
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .dash2-header--auth .dash2-header__copy p {
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-login-wrap {
@@ -1017,7 +1017,7 @@
 .dash2-drive-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dash2-chip-row {
@@ -1067,8 +1067,8 @@ html[data-style="filesystem"] .dash2-utility-menu__panel {
 
 html[data-style="filesystem"] .dash2-main,
 html[data-style="filesystem"] .dash2-sidebar {
-  padding: 10px;
-  gap: 10px;
+  padding: 8px;
+  gap: 8px;
 }
 
 html[data-style="filesystem"] .dash2-header,
@@ -1103,11 +1103,11 @@ html[data-style="filesystem"] .dash2-nav__item small {
 html[data-style="filesystem"] .dash2-workflow-card__summary,
 html[data-style="filesystem"] .dash2-chat-log__entry p,
 html[data-style="filesystem"] .dash2-list li p {
-  font-size: 12px;
+  font-size: 11px;
 }
 
 html[data-style="filesystem"] .dash2-chatbox-layout {
-  gap: 10px;
+  gap: 8px;
 }
 
 @media (max-width: 980px) {
@@ -1118,7 +1118,7 @@ html[data-style="filesystem"] .dash2-chatbox-layout {
   .dash2-sidebar {
     position: fixed;
     inset: 0 auto 0 0;
-    width: min(88vw, 320px);
+    width: min(90vw, 280px);
     border-right: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
     transform: translateX(-102%);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
@@ -1139,11 +1139,11 @@ html[data-style="filesystem"] .dash2-chatbox-layout {
   }
 
   .dash2-nav {
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
 
   .dash2-main {
-    padding: 10px;
+    padding: 8px;
   }
 
   .dash2-overview-layout {
@@ -1163,16 +1163,201 @@ html[data-style="filesystem"] .dash2-chatbox-layout {
   }
 
   .dash2-terminal-mini {
-    min-height: 420px;
+    min-height: 380px;
   }
 }
 
 @media (max-width: 640px) {
+  .dash2-main {
+    padding: 6px;
+    gap: 7px;
+  }
+
+  .dash2-header {
+    padding: 5px 6px;
+  }
+
+  .dash2-content {
+    gap: 7px;
+  }
+
+  .dash2-card__header,
+  .dash2-card__body {
+    padding: 7px 8px;
+  }
+
+  .dash2-list li,
+  .dash2-service-list li {
+    padding: 6px 7px;
+  }
+
+  .dash2-chatbox-layout {
+    gap: 7px;
+  }
+
+  .dash2-media-health-grid,
+  .dash2-workflow-carousel,
+  .dash2-drive-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dash2-log-line {
     grid-template-columns: 1fr;
   }
 
   .dash2-terminal-mini {
     min-height: 320px;
+  }
+}
+
+@media (max-width: 480px) {
+  .dash2-header__meta {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .dash2-header__search {
+    min-width: 100%;
+    flex-basis: 100%;
+  }
+}
+
+/* Obsidian stitch visual layer */
+html[data-style="obsidian-stitch"] .dash2-shell {
+  grid-template-columns: 184px minmax(0, 1fr);
+  background:
+    radial-gradient(1200px 480px at 100% -10%, rgba(56, 189, 248, 0.12), transparent 62%),
+    linear-gradient(180deg, #060f25 0%, #08142b 42%, #071126 100%);
+}
+
+html[data-style="obsidian-stitch"] .dash2-sidebar {
+  border-right: 1px solid rgba(85, 129, 176, 0.24);
+  background: linear-gradient(180deg, rgba(2, 9, 27, 0.98), rgba(3, 10, 29, 0.95));
+  box-shadow: inset -1px 0 0 rgba(28, 62, 104, 0.5);
+}
+
+html[data-style="obsidian-stitch"] .dash2-brand strong,
+html[data-style="obsidian-stitch"] .dash2-topbar__brand span {
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #44c7ff;
+}
+
+html[data-style="obsidian-stitch"] .dash2-nav__item {
+  border-radius: 0;
+  border: 0;
+  border-left: 3px solid transparent;
+  background: transparent;
+  padding: 12px 10px;
+}
+
+html[data-style="obsidian-stitch"] .dash2-nav__item strong {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+html[data-style="obsidian-stitch"] .dash2-nav__item small {
+  margin-top: 4px;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--muted) 88%, transparent);
+}
+
+html[data-style="obsidian-stitch"] .dash2-nav__item:hover,
+html[data-style="obsidian-stitch"] .dash2-nav__item:focus-visible {
+  background: rgba(41, 88, 138, 0.2);
+  border-left-color: rgba(111, 188, 255, 0.6);
+}
+
+html[data-style="obsidian-stitch"] .dash2-nav__item--active {
+  background: rgba(37, 133, 204, 0.22);
+  border-left-color: #50c8ff;
+}
+
+html[data-style="obsidian-stitch"] .dash2-main {
+  padding: 0 14px 14px;
+}
+
+html[data-style="obsidian-stitch"] .dash2-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 120;
+  border-bottom: 1px solid rgba(88, 131, 176, 0.24);
+  background: linear-gradient(180deg, rgba(3, 11, 33, 0.94), rgba(4, 13, 35, 0.86));
+  backdrop-filter: blur(12px);
+}
+
+html[data-style="obsidian-stitch"] .dash2-topbar__actions .ui-button,
+html[data-style="obsidian-stitch"] .dash2-utility-menu__trigger {
+  min-height: 36px;
+}
+
+html[data-style="obsidian-stitch"] .dash2-header,
+html[data-style="obsidian-stitch"] .dash2-card,
+html[data-style="obsidian-stitch"] .dash2-login-card,
+html[data-style="obsidian-stitch"] .dash2-metric,
+html[data-style="obsidian-stitch"] .dash2-list li,
+html[data-style="obsidian-stitch"] .dash2-service-list li,
+html[data-style="obsidian-stitch"] .dash2-drive-card,
+html[data-style="obsidian-stitch"] .dash2-workflow-card,
+html[data-style="obsidian-stitch"] .dash2-media-health-card,
+html[data-style="obsidian-stitch"] .dash2-chatbox-thread,
+html[data-style="obsidian-stitch"] .dash2-chatbox-rail {
+  border-color: rgba(86, 129, 173, 0.22);
+  background:
+    linear-gradient(180deg, rgba(18, 36, 67, 0.78), rgba(13, 30, 56, 0.78));
+  box-shadow:
+    inset 0 1px 0 rgba(145, 195, 242, 0.08),
+    0 10px 30px rgba(2, 8, 24, 0.26);
+}
+
+html[data-style="obsidian-stitch"] .dash2-card__header h2,
+html[data-style="obsidian-stitch"] .dash2-metric__label {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #9ab5d6;
+}
+
+html[data-style="obsidian-stitch"] .dash2-badge--ok {
+  box-shadow: 0 0 0 1px rgba(87, 239, 173, 0.2) inset;
+}
+
+html[data-style="obsidian-stitch"] .dash2-badge--warn {
+  box-shadow: 0 0 0 1px rgba(255, 195, 116, 0.22) inset;
+}
+
+html[data-style="obsidian-stitch"] .dash2-badge--danger {
+  box-shadow: 0 0 0 1px rgba(255, 130, 142, 0.22) inset;
+}
+
+@media (max-width: 980px) {
+  html[data-style="obsidian-stitch"] .dash2-shell {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-style="obsidian-stitch"] .dash2-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(84vw, 300px);
+    transform: translateX(-104%);
+    z-index: 180;
+    border-right-color: rgba(93, 137, 186, 0.44);
+  }
+
+  html[data-style="obsidian-stitch"] .dash2-sidebar--open {
+    transform: translateX(0);
+  }
+
+  html[data-style="obsidian-stitch"] .dash2-main {
+    padding: 0 10px 10px;
+  }
+
+  html[data-style="obsidian-stitch"] .dash2-topbar {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  html[data-style="obsidian-stitch"] .dash2-topbar__search {
+    display: none;
   }
 }

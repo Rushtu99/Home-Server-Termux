@@ -38,6 +38,10 @@ export type UiBootstrapResponse = {
 export type UiWorkspaceResponse = {
   generatedAt: string;
   workspaceKey: WorkspaceKey;
+  designTelemetry?: {
+    workspace?: WorkspaceKey;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 };
 

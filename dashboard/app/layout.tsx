@@ -10,12 +10,14 @@ const themeBootScript = `
       ? storedTheme
       : 'dark';
     const storedStyle = localStorage.getItem('hmstx-style');
-    const style = storedStyle === 'filesystem' ? 'filesystem' : 'classic-v2';
+    const style = ['obsidian-stitch', 'filesystem', 'classic-v2'].includes(storedStyle || '')
+      ? storedStyle
+      : 'obsidian-stitch';
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.style = style;
   } catch {
     document.documentElement.dataset.theme = 'dark';
-    document.documentElement.dataset.style = 'classic-v2';
+    document.documentElement.dataset.style = 'obsidian-stitch';
   }
 })();
 `;

@@ -488,13 +488,9 @@ const seedState = (): DemoState => {
     ],
     controllerLocked: true,
     driveEvents: [
-      { event: 'Mounted Media archive', filesystem: 'ext4', level: 'info', letter: 'D', mountPoint: '/mnt/media', name: 'Media Archive', timestamp: currentTime },
       { event: 'Drive check completed', level: 'info', timestamp: currentTime },
     ],
-    drives: [
-      { device: '/dev/block/sda1', dirName: 'D (Media Archive)', error: '', filesystem: 'ext4', letter: 'D', mountPoint: '/mnt/media', name: 'Media Archive', rawMountPoint: '/mnt/media', state: 'mounted', uuid: 'media-001' },
-      { device: '/dev/block/sdb1', dirName: 'E (Cold Backup)', error: '', filesystem: 'exfat', letter: 'E', mountPoint: '/mnt/backup', name: 'Cold Backup', rawMountPoint: '/mnt/backup', state: 'mounted', uuid: 'backup-002' },
-    ],
+    drives: [],
     ftpDefaults: {
       defaultName: 'PS4',
       downloadRoot: '~/Drives',
@@ -1143,11 +1139,11 @@ const buildUiBootstrapPayload = (state: DemoState) => {
     nav: [
       { key: 'overview', label: 'Overview', legacyTabs: ['home'], summary: 'System health, telemetry, and lifecycle status', available: true, status: 'working' },
       { key: 'media', label: 'Media', legacyTabs: ['media', 'downloads', 'arr'], summary: 'Jellyfin and automation workflow surfaces', available: true, status: lifecycle.state },
-      { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, and filesystem management', available: canUseFilesWorkspace, status: canUseFilesWorkspace ? 'working' : 'blocked' },
+      { key: 'files', label: 'Storage', legacyTabs: ['filesystem'], summary: 'Drive, share, and filesystem management', available: canUseFilesWorkspace, status: canUseFilesWorkspace ? 'working' : 'blocked' },
       { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools', available: canUseTransfersWorkspace, status: canUseTransfersWorkspace ? aggregateCatalogStatus(transferServices) : 'unavailable' },
-      { key: 'ai', label: 'AI', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace', available: Boolean(aiService?.available), status: aiService?.status || 'unavailable' },
+      { key: 'ai', label: 'AI Chat', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace', available: Boolean(aiService?.available), status: aiService?.status || 'unavailable' },
       { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface', available: Boolean(terminalService?.available), status: terminalService?.status || 'unavailable' },
-      { key: 'admin', label: 'Admin', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations', available: true, status: lifecycle.state },
+      { key: 'admin', label: 'Analytics', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations', available: true, status: lifecycle.state },
     ],
     legacyTabMap: LEGACY_TAB_TO_WORKSPACE,
     capabilities: {
@@ -1185,6 +1181,115 @@ const buildLlmStatePayload = (state: DemoState) => {
   };
 };
 
+const buildOverviewDesignTelemetry = (dashboard: ReturnType<typeof buildDashboardPayload>) => ({
+  workspace: 'overview',
+  integrityIndexPct: 99.9,
+  subsystemBars: [
+    { label: 'CPU', value: Number(dashboard.monitor.cpuLoad || 0), status: Number(dashboard.monitor.cpuLoad || 0) >= 80 ? 'warn' : 'ok' },
+    { label: 'Memory', value: Number(dashboard.monitor.totalMem || 0) > 0 ? Math.round((Number(dashboard.monitor.usedMem || 0) / Number(dashboard.monitor.totalMem || 1)) * 100) : 0, status: 'ok' },
+    { label: 'Storage', value: Number(dashboard.storage?.mounts?.[0]?.usePercent || 0), status: Number(dashboard.storage?.mounts?.[0]?.usePercent || 0) >= 85 ? 'warn' : 'ok' },
+  ],
+  nodeCluster: (dashboard.connections?.users || []).slice(0, 5).map((entry) => ({
+    label: String(entry.username || 'node'),
+    status: String(entry.status || 'active'),
+  })),
+  recentEvents: (dashboard.logs?.entries || []).slice(0, 12),
+});
+
+const buildMediaDesignTelemetry = (state: DemoState) => {
+  const mediaHealth = buildDemoMediaHealth(state);
+  return {
+    workspace: 'media',
+    activeSessions: mediaHealth.activeSessions || [],
+    libraryTotals: mediaHealth.totals || {},
+    libraries: mediaHealth.libraries || [],
+  };
+};
+
+const buildFilesDesignTelemetry = (state: DemoState) => {
+  const total = state.storage.reduce((sum, entry) => sum + Number(entry.size || 0), 0);
+  const used = state.storage.reduce((sum, entry) => sum + Number(entry.used || 0), 0);
+  return {
+    workspace: 'files',
+    clusterCapacity: {
+      totalBytes: total,
+      usedBytes: used,
+      availableBytes: Math.max(0, total - used),
+      usePercent: total > 0 ? Math.round((used / total) * 100) : 0,
+    },
+    parity: {
+      state: 'synced',
+      reason: 'Demo parity signal nominal',
+    },
+    mountMatrix: state.drives.slice(0, 8),
+    mountLog: state.driveEvents.slice(0, 20),
+  };
+};
+
+const buildTransfersDesignTelemetry = (state: DemoState) => ({
+  workspace: 'transfers',
+  globalThroughput: {
+    ingressBps: 840_000_000,
+    egressBps: 124_000_000,
+    totalGbps: 0.96,
+  },
+  activePipelines: state.ftpFavourites.length + 2,
+  mountParity: state.ftpFavourites.slice(0, 8).map((entry) => ({
+    name: entry.name,
+    state: entry.mount.state,
+    mounted: entry.mount.mounted,
+  })),
+  geoNodes: [
+    { id: 'nyc', label: 'NYC', activeMbps: 426 },
+    { id: 'fra', label: 'FRA', activeMbps: 118 },
+    { id: 'syd', label: 'SYD', activeMbps: 98 },
+  ],
+});
+
+const buildAiDesignTelemetry = (state: DemoState) => ({
+  workspace: 'ai',
+  nodeId: 'OBS-V4-ALPHA',
+  models: state.llmModels.slice(0, 6).map((entry) => ({
+    id: entry.id,
+    label: entry.label || entry.id,
+    loaded: entry.id === state.llmActiveModelId,
+    status: entry.id === state.llmActiveModelId ? 'active' : 'standby',
+  })),
+  neuralMap: [
+    { id: 'core', x: 50, y: 50, status: 'active' },
+    { id: 'vision', x: 23, y: 44, status: 'standby' },
+    { id: 'speech', x: 76, y: 42, status: 'standby' },
+  ],
+  parameters: {
+    temperature: 0.7,
+    topP: 0.9,
+    repeatPenalty: 1.1,
+  },
+});
+
+const buildTerminalDesignTelemetry = (terminal: unknown) => ({
+  workspace: 'terminal',
+  accessMode: 'shell',
+  status: String((terminal as Record<string, unknown> | null)?.status || 'unknown'),
+  route: String((terminal as Record<string, unknown> | null)?.route || ''),
+});
+
+const buildAdminDesignTelemetry = (dashboard: ReturnType<typeof buildDashboardPayload>) => ({
+  workspace: 'admin',
+  computeCoreAnalysisPct: Number(dashboard.monitor.cpuLoad || 0),
+  clusterTemperatureC: 42,
+  memoryRss: {
+    usedBytes: Number(dashboard.monitor.processRss || 0),
+    totalBytes: Number(dashboard.monitor.totalMem || 0),
+  },
+  traffic: {
+    ingressBps: Number(dashboard.monitor.network?.rxRate || 0),
+    egressBps: Number(dashboard.monitor.network?.txRate || 0),
+  },
+  hardwareInventory: ['NVMe RAID Controller', `${Number(dashboard.monitor.cpuCores || 0)} Core CPU`, 'ECC DRAM'],
+  kernelLogTail: (dashboard.logs?.entries || []).slice(0, 20),
+});
+
 const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
   const dashboard = buildDashboardPayload(state);
   const telemetry = buildTelemetryPayload(state);
@@ -1197,6 +1302,7 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
       telemetry,
       connections: dashboard.connections,
       storage: dashboard.storage,
+      designTelemetry: buildOverviewDesignTelemetry(dashboard),
     };
   }
 
@@ -1215,6 +1321,7 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
       mediaHealth: buildDemoMediaHealth(state),
       services: combinedServices,
       arr: (dashboard.mediaWorkflow as { arr?: unknown })?.arr || null,
+      designTelemetry: buildMediaDesignTelemetry(state),
     };
   }
 
@@ -1237,6 +1344,7 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
       storageProtection: protection,
       shares: clone(state.shares),
       users: clone(state.users),
+      designTelemetry: buildFilesDesignTelemetry(state),
     };
   }
 
@@ -1277,6 +1385,7 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
           standalone: clone(DEMO_TORRENT_LANES.standalone),
         },
       },
+      designTelemetry: buildTransfersDesignTelemetry(state),
     };
   }
 
@@ -1289,14 +1398,17 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
         cpuLoad: Number(telemetry.monitor?.cpuLoad || 0),
         timestamp: nowIso(),
       },
+      designTelemetry: buildAiDesignTelemetry(state),
     };
   }
 
   if (workspaceKey === 'terminal') {
+    const terminal = serviceCatalog.find((entry) => entry.key === 'ttyd') || null;
     return {
       generatedAt: nowIso(),
       workspaceKey,
-      terminal: serviceCatalog.find((entry) => entry.key === 'ttyd') || null,
+      terminal,
+      designTelemetry: buildTerminalDesignTelemetry(terminal),
     };
   }
 
@@ -1305,6 +1417,7 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
     workspaceKey,
     dashboard,
     services: clone(state.services),
+    designTelemetry: buildAdminDesignTelemetry(dashboard),
   };
 };
 

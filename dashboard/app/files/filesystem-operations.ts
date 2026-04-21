@@ -1,6 +1,6 @@
 'use client';
 
-export type FsOperationStatus = 'queued' | 'receiving' | 'running' | 'cancelling' | 'success' | 'partial' | 'failed' | 'cancelled';
+export type FsOperationStatus = 'queued' | 'receiving' | 'running' | 'standby' | 'cancelling' | 'success' | 'partial' | 'failed' | 'cancelled';
 export type FsOperationKind = 'upload' | 'copy' | 'move' | 'delete';
 
 export type FsOperationFailure = {
@@ -25,6 +25,20 @@ export type FsOperation = {
   totalItems: number;
   updatedAt: string;
   uploadedFiles?: string[];
+  conflict?: {
+    reason: string;
+    sourcePath: string;
+    sourceSize: number | null;
+    sourceType: string;
+    targetPath: string;
+    targetSize: number | null;
+    targetType: string;
+    sizeRelation: 'same' | 'different' | 'unknown';
+  } | null;
+  conflictPolicy?: {
+    replaceAllDifferentSize: boolean;
+    skipAllSameSize: boolean;
+  };
 };
 
 export type FsUploadManifestEntry = {
@@ -104,6 +118,7 @@ export const normalizeFsOperation = (payload: Partial<FsOperation> | null | unde
   processedItems: Math.max(0, Number(payload?.processedItems || 0) || 0),
   sourcePaths: Array.isArray(payload?.sourcePaths) ? payload.sourcePaths.map((entry) => String(entry || '')).filter(Boolean) : [],
   status: payload?.status === 'queued' || payload?.status === 'receiving' || payload?.status === 'running' || payload?.status === 'cancelling' || payload?.status === 'success' || payload?.status === 'partial' || payload?.status === 'cancelled'
+    || payload?.status === 'standby'
     ? payload.status
     : 'failed',
   totalBytes: Math.max(0, Number(payload?.totalBytes || 0) || 0),
@@ -112,10 +127,26 @@ export const normalizeFsOperation = (payload: Partial<FsOperation> | null | unde
   uploadedFiles: Array.isArray(payload?.uploadedFiles)
     ? payload.uploadedFiles.map((entry) => normalizeRelativePath(entry || '')).filter(Boolean)
     : [],
+  conflict: payload?.conflict && typeof payload.conflict === 'object'
+    ? {
+        reason: String(payload.conflict.reason || 'exists'),
+        sourcePath: normalizeRelativePath(payload.conflict.sourcePath || ''),
+        sourceSize: Number.isFinite(Number(payload.conflict.sourceSize)) ? Number(payload.conflict.sourceSize) : null,
+        sourceType: String(payload.conflict.sourceType || ''),
+        targetPath: normalizeRelativePath(payload.conflict.targetPath || ''),
+        targetSize: Number.isFinite(Number(payload.conflict.targetSize)) ? Number(payload.conflict.targetSize) : null,
+        targetType: String(payload.conflict.targetType || ''),
+        sizeRelation: payload.conflict.sizeRelation === 'same' || payload.conflict.sizeRelation === 'different' ? payload.conflict.sizeRelation : 'unknown',
+      }
+    : null,
+  conflictPolicy: {
+    replaceAllDifferentSize: Boolean(payload?.conflictPolicy?.replaceAllDifferentSize),
+    skipAllSameSize: Boolean(payload?.conflictPolicy?.skipAllSameSize),
+  },
 });
 
 export const isFsOperationActive = (operation: FsOperation) =>
-  operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'cancelling';
+  operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'standby' || operation.status === 'cancelling';
 
 const fileFromEntry = (entry: FileSystemEntryLike) => new Promise<File>((resolve, reject) => {
   if (!entry.file) {

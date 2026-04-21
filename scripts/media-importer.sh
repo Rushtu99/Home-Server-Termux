@@ -38,6 +38,10 @@ load_shell_env_file() {
 load_shell_env_file "$SERVER_ENV_FILE"
 . "$PROJECT/scripts/drive-common.sh"
 
+if type ensure_primary_mounts_checked_cached >/dev/null 2>&1; then
+    ensure_primary_mounts_checked_cached "vault,scratch" >/dev/null 2>&1 || true
+fi
+
 MEDIA_VAULT_DRIVES="${MEDIA_VAULT_DRIVES:-D}"
 MEDIA_SCRATCH_DRIVES="${MEDIA_SCRATCH_DRIVES:-E}"
 DEFAULT_VAULT_DRIVE_DIR=""
@@ -78,6 +82,7 @@ MEDIA_SCRATCH_RETENTION_DAYS="${MEDIA_SCRATCH_RETENTION_DAYS:-30}"
 MEDIA_SCRATCH_MIN_FREE_GB="${MEDIA_SCRATCH_MIN_FREE_GB:-200}"
 MEDIA_SCRATCH_WARN_USED_PERCENT="${MEDIA_SCRATCH_WARN_USED_PERCENT:-85}"
 MEDIA_SCRATCH_CLEANUP_ENABLED="${MEDIA_SCRATCH_CLEANUP_ENABLED:-true}"
+MEDIA_IMPORT_REQUIRE_EXTERNAL_VAULT="${MEDIA_IMPORT_REQUIRE_EXTERNAL_VAULT:-true}"
 MEDIA_IMPORT_STATUS_FILE="${MEDIA_IMPORT_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR/import-status.json}"
 MEDIA_CLEANUP_STATUS_FILE="${MEDIA_CLEANUP_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR/cleanup-status.json}"
 MEDIA_IMPORTED_INDEX_FILE="${MEDIA_IMPORTED_INDEX_FILE:-$MEDIA_IMPORT_LOG_DIR/imported-items.tsv}"
@@ -247,6 +252,147 @@ path_within() {
             return 1
             ;;
     esac
+}
+
+canonical_path() {
+    local raw_path="$1"
+    if [ -e "$raw_path" ]; then
+        realpath "$raw_path" 2>/dev/null || realpath -m "$raw_path" 2>/dev/null || printf '%s\n' "$raw_path"
+        return 0
+    fi
+    realpath -m "$raw_path" 2>/dev/null || printf '%s\n' "$raw_path"
+}
+
+path_mount_fstype_import() {
+    local target="$1"
+    findmnt -nr -T "$target" -o FSTYPE 2>/dev/null | head -n 1
+}
+
+path_mount_source_import() {
+    local target="$1"
+    findmnt -nr -T "$target" -o SOURCE 2>/dev/null | head -n 1
+}
+
+fs_type_is_non_external_import() {
+    case "$1" in
+        ''|unknown|f2fs|tmpfs|overlay)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+path_on_external_mount() {
+    local target="$1"
+    local fs_type=""
+    fs_type="$(path_mount_fstype_import "$target" || true)"
+    [ -n "$fs_type" ] || return 1
+    if fs_type_is_non_external_import "$fs_type"; then
+        return 1
+    fi
+    return 0
+}
+
+path_looks_like_fallback_root() {
+    local target="$1"
+    case "$target" in
+        *"(VAULT_fallback)"*|*"(SCRATCH_fallback)"*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+path_within_resolved() {
+    local maybe_child="$1"
+    local maybe_parent="$2"
+    local resolved_child=""
+    local resolved_parent=""
+
+    resolved_child="$(canonical_path "$maybe_child")"
+    resolved_parent="$(canonical_path "$maybe_parent")"
+    path_within "$resolved_child" "$resolved_parent"
+}
+
+path_is_device_endpoint() {
+    local maybe_path="$1"
+    local resolved=""
+    resolved="$(canonical_path "$maybe_path")"
+    [ -b "$resolved" ] && return 0
+    case "$resolved" in
+        /dev|/dev/*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+path_allowed_for_cleanup_delete() {
+    local maybe_path="$1"
+    local scratch_roots=()
+    local scratch_root=""
+    local role_root=""
+
+    csv_to_array_local "$MEDIA_SCRATCH_ROOTS" scratch_roots
+    array_push_unique_local scratch_roots "$MEDIA_SCRATCH_ROOT"
+
+    for scratch_root in "${scratch_roots[@]}"; do
+        [ -n "$scratch_root" ] || continue
+        for role_root in \
+            "$scratch_root/downloads" \
+            "$scratch_root/tmp/qbittorrent" \
+            "$scratch_root/cache/jellyfin" \
+            "$scratch_root/cache/misc" \
+            "$scratch_root/iptv-cache" \
+            "$scratch_root/iptv-epg"; do
+            if path_within_resolved "$maybe_path" "$role_root"; then
+                return 0
+            fi
+        done
+    done
+
+    return 1
+}
+
+path_is_within_vault_roots() {
+    local maybe_path="$1"
+    local vault_roots=()
+    local vault_root=""
+
+    csv_to_array_local "$MEDIA_VAULT_ROOTS" vault_roots
+    array_push_unique_local vault_roots "$MEDIA_VAULT_ROOT"
+    for vault_root in "${vault_roots[@]}"; do
+        [ -n "$vault_root" ] || continue
+        if path_within_resolved "$maybe_path" "$vault_root"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+copy_paths_are_safe() {
+    local src="$1"
+    local dest="$2"
+    local src_resolved=""
+    local dest_resolved=""
+
+    src_resolved="$(canonical_path "$src")"
+    dest_resolved="$(canonical_path "$dest")"
+
+    if path_is_device_endpoint "$src_resolved" || path_is_device_endpoint "$dest_resolved"; then
+        return 1
+    fi
+    if [ "$src_resolved" = "$dest_resolved" ]; then
+        return 1
+    fi
+    if path_within "$dest_resolved" "$src_resolved"; then
+        return 1
+    fi
+    if path_within "$src_resolved" "$dest_resolved"; then
+        return 1
+    fi
+
+    return 0
 }
 
 normalize_csv_list_local() {
@@ -517,6 +663,10 @@ scratch_is_under_pressure() {
 }
 
 ensure_runtime_paths() {
+    local vault_resolved=""
+    local scratch_resolved=""
+    local vault_fs_type=""
+    local vault_mount_source=""
     if [ ! -d "$MEDIA_VAULT_ROOT" ]; then
         ABORTED=1
         ABORT_REASON="vault root missing: $MEDIA_VAULT_ROOT"
@@ -527,6 +677,40 @@ ensure_runtime_paths() {
         ABORTED=1
         ABORT_REASON="scratch root missing: $MEDIA_SCRATCH_ROOT"
         return 1
+    fi
+
+    if path_is_device_endpoint "$MEDIA_VAULT_ROOT"; then
+        ABORTED=1
+        ABORT_REASON="vault root points to a device endpoint: $MEDIA_VAULT_ROOT"
+        return 1
+    fi
+    if path_is_device_endpoint "$MEDIA_SCRATCH_ROOT"; then
+        ABORTED=1
+        ABORT_REASON="scratch root points to a device endpoint: $MEDIA_SCRATCH_ROOT"
+        return 1
+    fi
+
+    vault_resolved="$(canonical_path "$MEDIA_VAULT_ROOT")"
+    scratch_resolved="$(canonical_path "$MEDIA_SCRATCH_ROOT")"
+    if [ "$vault_resolved" = "$scratch_resolved" ]; then
+        ABORTED=1
+        ABORT_REASON="vault and scratch roots resolve to the same path: $vault_resolved"
+        return 1
+    fi
+
+    if [ "$MEDIA_IMPORT_REQUIRE_EXTERNAL_VAULT" = "true" ]; then
+        if path_looks_like_fallback_root "$MEDIA_VAULT_ROOT"; then
+            ABORTED=1
+            ABORT_REASON="vault root resolves to fallback path while strict external-vault mode is enabled: $MEDIA_VAULT_ROOT"
+            return 1
+        fi
+        if ! path_on_external_mount "$MEDIA_VAULT_ROOT"; then
+            vault_fs_type="$(path_mount_fstype_import "$MEDIA_VAULT_ROOT" || true)"
+            vault_mount_source="$(path_mount_source_import "$MEDIA_VAULT_ROOT" || true)"
+            ABORTED=1
+            ABORT_REASON="vault root is not on an external mount (source=${vault_mount_source:-unknown}, fstype=${vault_fs_type:-unknown}): $MEDIA_VAULT_ROOT"
+            return 1
+        fi
     fi
 
     mkdir -p \
@@ -555,10 +739,28 @@ mtime_seconds() {
 
 safe_remove_path() {
     local path="$1"
+    local resolved=""
     if [ "$DRY_RUN" -eq 1 ]; then
         return 0
     fi
-    rm -rf -- "$path"
+    resolved="$(canonical_path "$path")"
+    if [ -z "$resolved" ] || [ "$resolved" = "/" ]; then
+        log WARN "Refusing cleanup delete for unsafe path: ${path:-<empty>}"
+        return 1
+    fi
+    if path_is_device_endpoint "$resolved"; then
+        log WARN "Refusing cleanup delete for device path: $resolved"
+        return 1
+    fi
+    if path_is_within_vault_roots "$resolved"; then
+        log WARN "Refusing cleanup delete inside vault root: $resolved"
+        return 1
+    fi
+    if ! path_allowed_for_cleanup_delete "$resolved"; then
+        log WARN "Refusing cleanup delete outside approved scratch/cache roots: $resolved"
+        return 1
+    fi
+    rm -rf -- "$resolved"
 }
 
 record_event() {
@@ -753,11 +955,18 @@ copy_entry() {
     [ -e "$src" ] || return 0
     SCANNED_ITEMS=$((SCANNED_ITEMS + 1))
 
-    if [ -e "$dest" ]; then
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
         SKIPPED_EXISTING_COUNT=$((SKIPPED_EXISTING_COUNT + 1))
         COLLISION_COUNT=$((COLLISION_COUNT + 1))
         log INFO "$label skipped (destination exists): $dest"
         record_event "import" "skipped-existing" "$src" "$dest" "destination exists"
+        return 0
+    fi
+
+    if ! copy_paths_are_safe "$src" "$dest"; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log WARN "$label blocked by safety guard (unsafe copy path pair): $src -> $dest"
+        record_event "import" "failed" "$src" "$dest" "blocked by safety guard"
         return 0
     fi
 
@@ -785,14 +994,21 @@ copy_entry() {
 
     if [ -d "$src" ]; then
         mkdir -p "$dest"
+        if find "$dest" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+            SKIPPED_EXISTING_COUNT=$((SKIPPED_EXISTING_COUNT + 1))
+            COLLISION_COUNT=$((COLLISION_COUNT + 1))
+            log INFO "$label skipped (destination directory became non-empty): $dest"
+            record_event "import" "skipped-existing" "$src" "$dest" "destination directory not empty"
+            return 0
+        fi
         if [ "$HAS_RSYNC" -eq 1 ]; then
-            rsync -a --ignore-existing "$src/" "$dest/" >/dev/null
+            rsync -a --ignore-existing --safe-links --no-specials --no-devices "$src/" "$dest/" >/dev/null
         else
-            cp -a "$src/." "$dest/"
+            cp -a -n "$src/." "$dest/"
         fi
     else
         if [ "$HAS_RSYNC" -eq 1 ]; then
-            rsync -a --ignore-existing "$src" "$dest_base/" >/dev/null
+            rsync -a --ignore-existing --safe-links --no-specials --no-devices "$src" "$dest_base/" >/dev/null
         else
             cp -a -n "$src" "$dest_base/"
         fi
@@ -841,6 +1057,13 @@ process_source_path() {
     if path_within "$entry" "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR"; then
         log INFO "source skipped (standalone qbit root): $entry"
         record_event "import" "skip-standalone" "$entry" "" "source under standalone qbit root"
+        return 0
+    fi
+
+    if path_is_within_vault_roots "$entry"; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log WARN "source skipped (inside vault roots): $entry"
+        record_event "import" "failed" "$entry" "" "source inside vault roots"
         return 0
     fi
 

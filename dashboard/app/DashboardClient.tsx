@@ -140,6 +140,7 @@ type StorageProtectionState = {
   manualResume?: boolean;
   overallHealthy?: boolean;
   reason?: string;
+  reasonCompact?: string;
   resumeRequired?: boolean;
   state?: 'healthy' | 'degraded' | 'recovered' | string;
   stoppedByWatchdog?: string[];

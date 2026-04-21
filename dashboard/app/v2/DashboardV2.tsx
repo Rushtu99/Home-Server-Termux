@@ -26,7 +26,8 @@ const THEME_OPTIONS = [
 ] as const;
 
 const STYLE_OPTIONS = [
-  { value: 'classic-v2', label: 'Style 1' },
+  { value: 'obsidian-stitch', label: 'Obsidian Stitch' },
+  { value: 'classic-v2', label: 'Classic V2' },
   { value: 'filesystem', label: 'Style 2 (Filesystem)' },
 ] as const;
 
@@ -47,11 +48,11 @@ const statusTone = (status: string) => {
 const fallbackNav: UiNavItem[] = [
   { key: 'overview', label: 'Overview', summary: 'System health and telemetry', available: true, status: 'working', legacyTabs: ['home'] },
   { key: 'media', label: 'Media', summary: 'Jellyfin + automation flow', available: true, status: 'working', legacyTabs: ['media', 'downloads', 'arr'] },
-  { key: 'files', label: 'Files', summary: 'Filesystem, shares, and compatibility links', available: true, status: 'working', legacyTabs: ['filesystem'] },
+  { key: 'files', label: 'Storage', summary: 'Filesystem, shares, and capacity matrix', available: true, status: 'working', legacyTabs: ['filesystem'] },
   { key: 'transfers', label: 'Transfers', summary: 'FTP and remote transfer tools', available: true, status: 'working', legacyTabs: ['ftp'] },
-  { key: 'ai', label: 'AI', summary: 'LLM runtime management', available: true, status: 'working', legacyTabs: ['ai'] },
+  { key: 'ai', label: 'AI Chat', summary: 'LLM runtime management', available: true, status: 'working', legacyTabs: ['ai'] },
   { key: 'terminal', label: 'Terminal', summary: 'Shell access route', available: true, status: 'working', legacyTabs: ['terminal'] },
-  { key: 'admin', label: 'Admin', summary: 'Service controls and operations', available: true, status: 'working', legacyTabs: ['settings'] },
+  { key: 'admin', label: 'Analytics', summary: 'Service controls and analytics operations', available: true, status: 'working', legacyTabs: ['settings'] },
 ];
 
 export default function DashboardV2() {
@@ -83,7 +84,7 @@ export default function DashboardV2() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [theme, setTheme] = useState('dark');
-  const [styleVariant, setStyleVariant] = useState('classic-v2');
+  const [styleVariant, setStyleVariant] = useState('obsidian-stitch');
   const [loginNextPath, setLoginNextPath] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const utilityMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -91,6 +92,21 @@ export default function DashboardV2() {
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
   const lifecycleState = String(bootstrap?.lifecycle?.state || 'unknown');
+  const lastCommitDateRaw = process.env.NEXT_PUBLIC_LAST_COMMIT_DATE;
+  const lastCommitDateLabel = useMemo(() => {
+    if (!lastCommitDateRaw) {
+      return '';
+    }
+    const parsed = new Date(lastCommitDateRaw);
+    if (Number.isNaN(parsed.getTime())) {
+      return lastCommitDateRaw;
+    }
+    return parsed.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }, [lastCommitDateRaw]);
   const authRequired = useMemo(
     () => /login required|session expired|unauthorized|401/i.test(bootstrapError),
     [bootstrapError]
@@ -105,7 +121,7 @@ export default function DashboardV2() {
       ? String(stored)
       : 'dark';
     const storedStyle = window.localStorage.getItem(STYLE_STORAGE_KEY);
-    const initialStyle = STYLE_OPTIONS.some((entry) => entry.value === storedStyle) ? String(storedStyle) : 'classic-v2';
+    const initialStyle = STYLE_OPTIONS.some((entry) => entry.value === storedStyle) ? String(storedStyle) : 'obsidian-stitch';
     setTheme(initial);
     setStyleVariant(initialStyle);
     document.documentElement.dataset.theme = initial;
@@ -457,6 +473,11 @@ export default function DashboardV2() {
               <>
                 <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
                 <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleTimeString() : 'Waiting for snapshot'}</span>
+                {lastCommitDateLabel ? (
+                  <StatusBadge tone="muted" title={lastCommitDateRaw || undefined}>
+                    Demo commit {lastCommitDateLabel}
+                  </StatusBadge>
+                ) : null}
                 <button
                   className="ui-button"
                   type="button"

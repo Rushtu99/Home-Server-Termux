@@ -51,6 +51,9 @@ QBITTORRENT_PORT="${QBITTORRENT_PORT:-8081}"
 QBITTORRENT_WEBUI_USERNAME="${QBITTORRENT_WEBUI_USERNAME:-}"
 QBITTORRENT_WEBUI_PASSWORD="${QBITTORRENT_WEBUI_PASSWORD:-}"
 QBIT_FALLBACK_PAUSED_HASHES_FILE="${QBIT_FALLBACK_PAUSED_HASHES_FILE:-$RUNTIME_DIR/qb-fallback-paused.hashes}"
+MEDIA_RECONCILE_MIN_INTERVAL_SEC="${MEDIA_RECONCILE_MIN_INTERVAL_SEC:-1800}"
+MEDIA_RECONCILE_LAST_EPOCH_FILE="${MEDIA_RECONCILE_LAST_EPOCH_FILE:-$RUNTIME_DIR/media-reconcile.last-epoch}"
+MEDIA_RECONCILE_AUTO_IMPORT="${MEDIA_RECONCILE_AUTO_IMPORT:-false}"
 
 load_shell_env_file() {
     local env_file="$1"
@@ -80,6 +83,10 @@ load_shell_env_file() {
 
 load_shell_env_file "$SERVER_ENV_FILE"
 
+if type ensure_primary_mounts_checked_cached >/dev/null 2>&1; then
+    ensure_primary_mounts_checked_cached "vault,scratch" >/dev/null 2>&1 || true
+fi
+
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
 timestamp() {
@@ -98,6 +105,96 @@ log() {
 
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g; s/\n/\\n/g'
+}
+
+canonical_path_watchdog() {
+    local raw_path="$1"
+    if [ -e "$raw_path" ]; then
+        realpath "$raw_path" 2>/dev/null || realpath -m "$raw_path" 2>/dev/null || printf '%s\n' "$raw_path"
+        return 0
+    fi
+    realpath -m "$raw_path" 2>/dev/null || printf '%s\n' "$raw_path"
+}
+
+path_prefix_match_watchdog() {
+    local path="$1"
+    local parent="$2"
+    case "$path" in
+        "$parent"|"$parent"/*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+roots_safe_for_reconcile() {
+    local vault_resolved=""
+    local scratch_resolved=""
+
+    vault_resolved="$(canonical_path_watchdog "$MEDIA_VAULT_ROOT")"
+    scratch_resolved="$(canonical_path_watchdog "$MEDIA_SCRATCH_ROOT")"
+    [ -n "$vault_resolved" ] || return 1
+    [ -n "$scratch_resolved" ] || return 1
+    [ "$vault_resolved" = "$scratch_resolved" ] && return 1
+    if path_prefix_match_watchdog "$vault_resolved" "$scratch_resolved"; then
+        return 1
+    fi
+    if path_prefix_match_watchdog "$scratch_resolved" "$vault_resolved"; then
+        return 1
+    fi
+    return 0
+}
+
+read_last_reconcile_epoch() {
+    local raw=""
+    [ -f "$MEDIA_RECONCILE_LAST_EPOCH_FILE" ] || {
+        printf '0\n'
+        return 0
+    }
+    raw="$(tr -d '[:space:]' < "$MEDIA_RECONCILE_LAST_EPOCH_FILE" 2>/dev/null || true)"
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    printf '0\n'
+}
+
+record_reconcile_epoch() {
+    local now_epoch="$1"
+    printf '%s\n' "$now_epoch" > "$MEDIA_RECONCILE_LAST_EPOCH_FILE"
+}
+
+reconcile_cooldown_elapsed() {
+    local last_epoch=0
+    local now_epoch=0
+
+    last_epoch="$(read_last_reconcile_epoch)"
+    now_epoch="$(date +%s)"
+    [ "$MEDIA_RECONCILE_MIN_INTERVAL_SEC" -le 0 ] && return 0
+    [ "$now_epoch" -lt "$last_epoch" ] && return 1
+    [ $((now_epoch - last_epoch)) -ge "$MEDIA_RECONCILE_MIN_INTERVAL_SEC" ]
+}
+
+should_trigger_hdd_reconcile() {
+    if [ "$MEDIA_RECONCILE_AUTO_IMPORT" != "true" ]; then
+        return 1
+    fi
+    if [ "$QBIT_FALLBACK_MODE" != "fallback" ] || [ "$1" != "normal" ]; then
+        return 1
+    fi
+    if [ "$VAULT_HEALTHY" -ne 1 ] || [ "$SCRATCH_HEALTHY" -ne 1 ]; then
+        log WARN "Skipping hdd-reconcile import because storage health is not stable"
+        return 1
+    fi
+    if ! roots_safe_for_reconcile; then
+        log WARN "Skipping hdd-reconcile import because vault/scratch roots overlap or are ambiguous"
+        return 1
+    fi
+    if ! reconcile_cooldown_elapsed; then
+        log INFO "Skipping hdd-reconcile import because reconcile cooldown is active"
+        return 1
+    fi
+    return 0
 }
 
 normalize_csv_list() {
@@ -691,10 +788,13 @@ compute_blocked_services() {
         array_push_unique BLOCKED_SERVICES "qbittorrent"
         array_push_unique BLOCKED_SERVICES "media-workflow"
     fi
-    if [ "$VAULT_HEALTHY" -ne 1 ] && [ "$vault_fallback_ready" -ne 1 ]; then
+    if [ "$VAULT_HEALTHY" -ne 1 ]; then
         array_push_unique BLOCKED_SERVICES "jellyfin"
         array_push_unique BLOCKED_SERVICES "bazarr"
         array_push_unique BLOCKED_SERVICES "media-workflow"
+    elif [ "$vault_fallback_ready" -ne 1 ]; then
+        array_push_unique BLOCKED_SERVICES "jellyfin"
+        array_push_unique BLOCKED_SERVICES "bazarr"
     fi
 }
 
@@ -868,6 +968,7 @@ enforce_qb_fallback_policy() {
     local mode="fallback"
     local action_result=""
     local vault_roots_csv=""
+    local now_epoch=0
 
     if vault_main_mount_ready; then
         mode="normal"
@@ -888,8 +989,10 @@ enforce_qb_fallback_policy() {
         fi
     fi
 
-    if [ "$QBIT_FALLBACK_MODE" = "fallback" ] && [ "$mode" = "normal" ] && [ -x "$MEDIA_IMPORTER_CMD" ]; then
+    if should_trigger_hdd_reconcile "$mode" && [ -x "$MEDIA_IMPORTER_CMD" ]; then
         "$MEDIA_IMPORTER_CMD" import --trigger hdd-reconcile >/dev/null 2>&1 || true
+        now_epoch="$(date +%s)"
+        record_reconcile_epoch "$now_epoch"
         log INFO "Triggered media import reconcile after external mount recovery"
     fi
 
@@ -934,6 +1037,10 @@ run_health_cycle() {
     local resume_required=0
 
     now_utc="$(timestamp_iso)"
+
+    if type ensure_primary_mounts_checked_cached >/dev/null 2>&1; then
+        ensure_primary_mounts_checked_cached "vault,scratch" >/dev/null 2>&1 || true
+    fi
 
     check_role_health \
         "vault" \

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev --webpack --hostname ${FRONTEND_BIND_HOST:-127.0.0.1}",
     "build": "next build --webpack",
-    "build:demo": "NEXT_PUBLIC_DEMO_MODE=true DEMO_EXPORT=true NEXT_PUBLIC_BASE_PATH=/Home-Server-Termux next build --webpack",
+    "build:demo": "NEXT_PUBLIC_DEMO_MODE=true DEMO_EXPORT=true NEXT_PUBLIC_BASE_PATH=/Home-Server-Termux NEXT_PUBLIC_LAST_COMMIT_DATE=\"$(git log -1 --format=%cI)\" next build --webpack",
     "start": "next start -H ${FRONTEND_BIND_HOST:-127.0.0.1}",
     "test": "vitest run",
     "test:watch": "vitest",

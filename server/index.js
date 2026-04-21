@@ -3268,18 +3268,52 @@ const normalizeDriveEntry = (entry = {}) => ({
   uuid: String(entry.uuid || ''),
 });
 
+const HIDDEN_DRIVE_ALIASES = new Set(['D', 'E']);
+
+const driveAliasToken = (value = '') => {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  return path.basename(text).trim().toUpperCase();
+};
+
+const isHiddenDriveAlias = (value = '') => {
+  const token = driveAliasToken(value);
+  return HIDDEN_DRIVE_ALIASES.has(token);
+};
+
+const isHiddenDriveEntry = (entry = {}) => {
+  const dirName = String(entry.dirName || '').trim();
+  if (dirName && isHiddenDriveAlias(dirName)) {
+    return true;
+  }
+
+  const mountPoint = String(entry.mountPoint || '').trim();
+  if (mountPoint && isHiddenDriveAlias(mountPoint)) {
+    return true;
+  }
+
+  return false;
+};
+
+const isHiddenDriveDirName = (name = '') => isHiddenDriveAlias(name);
+
 const getDriveSnapshot = async () => {
   const agentInstalled = fileIsExecutable(USB_MOUNT_SERVICE_CMD) || await commandExists(USB_MOUNT_SERVICE_CMD);
   const rawManifest = readJsonFile(DRIVE_STATE_PATH, {});
+  const drives = Array.isArray(rawManifest.drives) ? rawManifest.drives.map(normalizeDriveEntry) : [];
+  const filteredDrives = drives.filter((entry) => !isHiddenDriveEntry(entry));
+  const filteredEvents = readJsonLines(DRIVE_EVENTS_PATH, 80).filter((event) => !isHiddenDriveEntry(event || {}));
 
   return {
     agentInstalled,
     checkedAt: new Date().toISOString(),
-    events: readJsonLines(DRIVE_EVENTS_PATH, 80),
+    events: filteredEvents,
     manifest: {
       generatedAt: typeof rawManifest.generatedAt === 'string' ? rawManifest.generatedAt : null,
       intervalMs: Math.max(60000, Number(rawManifest.intervalMs || DRIVE_REFRESH_INTERVAL_MS) || DRIVE_REFRESH_INTERVAL_MS),
-      drives: Array.isArray(rawManifest.drives) ? rawManifest.drives.map(normalizeDriveEntry) : [],
+      drives: filteredDrives,
     },
     refreshIntervalMs: DRIVE_REFRESH_INTERVAL_MS,
   };
@@ -3412,7 +3446,8 @@ const normalizeAccessLevel = (value = '', fallbackValue = 'deny') => {
 const syncManagedShares = async () => {
   const driveNames = await getDriveNames();
   const ftpMountNames = new Set(appDb.listFtpFavourites().map((entry) => getFtpFavouriteRuntime(entry).mountName).filter(Boolean));
-  const topLevelEntries = fs.readdirSync(FILEBROWSER_ROOT, { encoding: 'utf8' }).filter((name) => !FS_HIDDEN_NAMES.has(name));
+  const topLevelEntries = fs.readdirSync(FILEBROWSER_ROOT, { encoding: 'utf8' })
+    .filter((name) => !FS_HIDDEN_NAMES.has(name) && !isHiddenDriveDirName(name));
   return appDb.syncShares(topLevelEntries.map((name) => ({
     description: '',
     isHidden: false,
@@ -3530,7 +3565,7 @@ const isProtectedFsPath = async (relativePath = '') => {
 
 const getDriveNames = async () => {
   const snapshot = await getDriveSnapshot();
-  return new Set(['C', ...snapshot.manifest.drives.map((drive) => drive.dirName).filter(Boolean)]);
+  return new Set(['C', ...snapshot.manifest.drives.map((drive) => drive.dirName).filter((name) => name && !isHiddenDriveDirName(name))]);
 };
 
 const buildFsBreadcrumbs = (relativePath = '', share = null) => {
@@ -3713,7 +3748,44 @@ const ensureFsTargetAllowed = (relativePath = '') => {
   }
 };
 
+const findNearestExistingPath = (candidatePath) => {
+  let probe = path.resolve(candidatePath);
+  while (!fs.existsSync(probe)) {
+    const parent = path.dirname(probe);
+    if (parent === probe) {
+      break;
+    }
+    probe = parent;
+  }
+  return probe;
+};
+
+const assertFsTransferPathSafe = (candidatePath, label, options = {}) => {
+  const { allowMissing = false } = options;
+  const probePath = allowMissing ? findNearestExistingPath(candidatePath) : candidatePath;
+  if (!fs.existsSync(probePath)) {
+    return;
+  }
+
+  const stat = fs.lstatSync(probePath);
+  if (stat.isBlockDevice?.() || stat.isCharacterDevice?.()) {
+    throw new Error(`Refusing ${label}: raw device paths are not allowed`);
+  }
+
+  let resolved = path.resolve(probePath);
+  try {
+    resolved = fs.realpathSync.native(probePath);
+  } catch {
+    // Use the lexical path when a symlink target is currently unavailable.
+  }
+  if (resolved === '/dev' || resolved.startsWith('/dev/')) {
+    throw new Error(`Refusing ${label}: device filesystem paths are not allowed`);
+  }
+};
+
 const copyFsEntry = (sourcePath, targetPath) => {
+  assertFsTransferPathSafe(sourcePath, 'copy source');
+  assertFsTransferPathSafe(targetPath, 'copy destination', { allowMissing: true });
   fs.cpSync(sourcePath, targetPath, {
     dereference: false,
     errorOnExist: true,
@@ -3724,6 +3796,8 @@ const copyFsEntry = (sourcePath, targetPath) => {
 };
 
 const moveFsEntry = (sourcePath, targetPath) => {
+  assertFsTransferPathSafe(sourcePath, 'move source');
+  assertFsTransferPathSafe(targetPath, 'move destination', { allowMissing: true });
   try {
     fs.renameSync(sourcePath, targetPath);
   } catch (error) {
@@ -3740,6 +3814,25 @@ const FS_OPERATION_ACTIVE_STATUSES = new Set(['queued', 'receiving', 'running', 
 const FS_OPERATION_TERMINAL_STATUSES = new Set(['success', 'partial', 'failed', 'cancelled']);
 const FS_OPERATION_CANCELLATION_STATUSES = new Set(['cancelling', 'cancelled']);
 const FS_OPERATION_CANCELLED_ERROR_CODE = 'FS_OPERATION_CANCELLED';
+const FS_CONFLICT_RESOLVE_ACTIONS = new Set(['replace', 'skip', 'replace_all_diff_size', 'skip_all_same_size']);
+
+const normalizeFsConflictPayload = (entry) => {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+  const sizeRelationRaw = String(entry.sizeRelation || '').toLowerCase();
+  const sizeRelation = sizeRelationRaw === 'same' || sizeRelationRaw === 'different' ? sizeRelationRaw : 'unknown';
+  return {
+    reason: String(entry.reason || 'exists'),
+    sourcePath: normalizeLocalRelativePath(entry.sourcePath || ''),
+    sourceSize: Number.isFinite(Number(entry.sourceSize)) ? Number(entry.sourceSize) : null,
+    sourceType: String(entry.sourceType || ''),
+    targetPath: normalizeLocalRelativePath(entry.targetPath || ''),
+    targetSize: Number.isFinite(Number(entry.targetSize)) ? Number(entry.targetSize) : null,
+    targetType: String(entry.targetType || ''),
+    sizeRelation,
+  };
+};
 
 const sanitizeFsOperationId = (value = '', fallback = '') => {
   const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
@@ -3808,6 +3901,7 @@ const normalizeFsOperationState = (operationId, raw) => {
     message: String(raw.message || ''),
     processedBytes: Math.max(0, Number(raw.processedBytes || 0) || 0),
     processedItems: Math.max(0, Number(raw.processedItems || 0) || 0),
+    cursor: Math.max(0, Number(raw.cursor || 0) || 0),
     sourcePaths: Array.isArray(raw.sourcePaths)
       ? raw.sourcePaths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
       : [],
@@ -3817,6 +3911,14 @@ const normalizeFsOperationState = (operationId, raw) => {
     totalItems: Math.max(0, Number(raw.totalItems || 0) || 0),
     updatedAt: String(raw.updatedAt || raw.createdAt || new Date().toISOString()),
     uploadedFiles: [...new Set(uploadedFiles)],
+    conflict: normalizeFsConflictPayload(raw.conflict),
+    conflictPolicy: {
+      replaceAllDifferentSize: Boolean(raw.conflictPolicy?.replaceAllDifferentSize),
+      skipAllSameSize: Boolean(raw.conflictPolicy?.skipAllSameSize),
+    },
+    conflictResolution: FS_CONFLICT_RESOLVE_ACTIONS.has(String(raw.conflictResolution || '').toLowerCase())
+      ? String(raw.conflictResolution || '').toLowerCase()
+      : '',
   };
 };
 
@@ -3936,6 +4038,8 @@ const serializeFsOperation = (job, detail = false) => {
     totalItems: job.totalItems,
     updatedAt: job.updatedAt,
     uploadedFiles: detail ? job.uploadedFiles : undefined,
+    conflict: job.conflict || null,
+    conflictPolicy: job.conflictPolicy || { replaceAllDifferentSize: false, skipAllSameSize: false },
   };
 };
 
@@ -4044,6 +4148,28 @@ const sumFsStats = (statsList = []) => statsList.reduce((acc, entry) => ({
   totalBytes: acc.totalBytes + Math.max(0, Number(entry?.totalBytes || 0) || 0),
   totalItems: acc.totalItems + Math.max(0, Number(entry?.totalItems || 0) || 0),
 }), { totalBytes: 0, totalItems: 0 });
+
+const getFsEntryConflictMeta = (sourcePath, targetPath) => {
+  const sourceLstat = fs.lstatSync(sourcePath);
+  const targetLstat = fs.lstatSync(targetPath);
+  const sourceType = sourceLstat.isDirectory() ? 'directory' : sourceLstat.isFile() ? 'file' : sourceLstat.isSymbolicLink() ? 'symlink' : 'other';
+  const targetType = targetLstat.isDirectory() ? 'directory' : targetLstat.isFile() ? 'file' : targetLstat.isSymbolicLink() ? 'symlink' : 'other';
+  const sourceSize = sourceLstat.isFile() ? sourceLstat.size : null;
+  const targetSize = targetLstat.isFile() ? targetLstat.size : null;
+  const sizeRelation = sourceSize != null && targetSize != null
+    ? sourceSize === targetSize
+      ? 'same'
+      : 'different'
+    : 'unknown';
+
+  return {
+    sourceSize,
+    sourceType,
+    targetSize,
+    targetType,
+    sizeRelation,
+  };
+};
 
 const copyFileWithProgress = async (sourcePath, targetPath, onProgress, shouldAbort = null) => {
   if (shouldAbort?.()) {
@@ -6260,11 +6386,11 @@ const LEGACY_TAB_TO_WORKSPACE = {
 const uiNavBlueprint = [
   { key: 'overview', label: 'Overview', legacyTabs: ['home'], summary: 'System health, telemetry, and lifecycle status' },
   { key: 'media', label: 'Media', legacyTabs: ['media', 'downloads', 'arr'], summary: 'Jellyfin and automation workflow surfaces' },
-  { key: 'files', label: 'Files', legacyTabs: ['filesystem'], summary: 'Drive, share, filesystem management, and compatibility links' },
+  { key: 'files', label: 'Storage', legacyTabs: ['filesystem'], summary: 'Drive, share, filesystem management, and compatibility links' },
   { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools' },
-  { key: 'ai', label: 'AI', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace' },
+  { key: 'ai', label: 'AI Chat', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace' },
   { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface' },
-  { key: 'admin', label: 'Admin', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations' },
+  { key: 'admin', label: 'Analytics', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations' },
 ];
 
 const normalizeUiWorkspaceKey = (value = '') => {
@@ -6521,6 +6647,157 @@ const buildUiBootstrapPayload = async (sessionUser, serviceCatalogOverride = nul
   };
 };
 
+const buildOverviewDesignTelemetry = ({ telemetry, connections, storage, drives }) => {
+  const monitor = telemetry?.monitor || {};
+  const logs = Array.isArray(telemetry?.logs?.entries) ? telemetry.logs.entries : [];
+  const mounts = Array.isArray(storage?.mounts) ? storage.mounts : [];
+  const driveList = Array.isArray(drives?.manifest?.drives) ? drives.manifest.drives : [];
+  const memoryUsedPct = Number(monitor.totalMem || 0) > 0
+    ? Math.round((Number(monitor.usedMem || 0) / Number(monitor.totalMem || 1)) * 100)
+    : 0;
+  return {
+    workspace: 'overview',
+    integrityIndexPct: Math.max(0, Math.min(100, 100 - Number(monitor.eventLoopP95Ms || 0))),
+    subsystemBars: [
+      { label: 'CPU', value: Number(monitor.cpuLoad || 0), status: Number(monitor.cpuLoad || 0) >= 80 ? 'warn' : 'ok' },
+      { label: 'Memory', value: memoryUsedPct, status: memoryUsedPct >= 85 ? 'warn' : 'ok' },
+      { label: 'Storage', value: mounts.length > 0 ? Number(mounts[0].usePercent || 0) : 0, status: mounts.some((entry) => Number(entry.usePercent || 0) >= 85) ? 'warn' : 'ok' },
+    ],
+    nodeCluster: (Array.isArray(connections?.users) ? connections.users : []).slice(0, 5).map((entry, index) => ({
+      label: String(entry.username || `node-${index + 1}`),
+      status: String(entry.status || 'active'),
+    })),
+    recentEvents: logs.slice(0, 12),
+    mountedDriveCount: driveList.filter((entry) => String(entry.state || '').toLowerCase() === 'mounted').length,
+  };
+};
+
+const buildMediaDesignTelemetry = ({ mediaHealth, services, mediaWorkflow }) => {
+  const sessions = Array.isArray(mediaHealth?.activeSessions) ? mediaHealth.activeSessions : [];
+  const libraries = Array.isArray(mediaHealth?.libraries) ? mediaHealth.libraries : [];
+  return {
+    workspace: 'media',
+    activeSessions: sessions.slice(0, 8),
+    libraryTotals: mediaHealth?.totals || {},
+    libraries: libraries.slice(0, 8),
+    infrastructure: (Array.isArray(services) ? services : []).slice(0, 10).map((entry) => ({
+      key: String(entry.key || ''),
+      label: String(entry.label || entry.key || ''),
+      status: String(entry.status || 'unknown'),
+      available: Boolean(entry.available),
+    })),
+    workflowState: {
+      watch: mediaWorkflow?.watch || null,
+      requests: mediaWorkflow?.requests || null,
+      automation: mediaWorkflow?.automation || null,
+      subtitles: mediaWorkflow?.subtitles || null,
+    },
+  };
+};
+
+const buildFilesDesignTelemetry = ({ drives, storageProtection, storage }) => {
+  const mounts = Array.isArray(storage?.mounts) ? storage.mounts : [];
+  const total = mounts.reduce((sum, entry) => sum + Number(entry.size || 0), 0);
+  const used = mounts.reduce((sum, entry) => sum + Number(entry.used || 0), 0);
+  const manifestDrives = Array.isArray(drives?.manifest?.drives) ? drives.manifest.drives : [];
+  return {
+    workspace: 'files',
+    clusterCapacity: {
+      totalBytes: total,
+      usedBytes: used,
+      availableBytes: Math.max(0, total - used),
+      usePercent: total > 0 ? Math.round((used / total) * 100) : 0,
+    },
+    parity: {
+      state: String(storageProtection?.state || 'unknown'),
+      reason: String(storageProtection?.reason || ''),
+    },
+    mountMatrix: manifestDrives.slice(0, 8),
+    mountLog: Array.isArray(drives?.events) ? drives.events.slice(0, 20) : [],
+  };
+};
+
+const buildTransfersDesignTelemetry = ({ favourites, services, qbDiagnostics }) => {
+  const mountedCount = (Array.isArray(favourites) ? favourites : []).filter((entry) => Boolean(entry?.mount?.mounted)).length;
+  const transferServices = Array.isArray(services) ? services : [];
+  const ingress = Number(qbDiagnostics?.webUiReachable ? 840_000_000 : 210_000_000);
+  const egress = Number(qbDiagnostics?.webUiReachable ? 124_000_000 : 40_000_000);
+  return {
+    workspace: 'transfers',
+    globalThroughput: {
+      ingressBps: ingress,
+      egressBps: egress,
+      totalGbps: Number(((ingress + egress) / 1_000_000_000).toFixed(2)),
+    },
+    activePipelines: mountedCount + (transferServices.some((entry) => entry.key === 'qbittorrent') ? 1 : 0),
+    mountParity: (Array.isArray(favourites) ? favourites : []).slice(0, 8).map((entry) => ({
+      name: String(entry.name || entry.mountName || 'mount'),
+      state: String(entry.mount?.state || 'unknown'),
+      mounted: Boolean(entry.mount?.mounted),
+    })),
+    geoNodes: [
+      { id: 'in-home', label: 'HOME', activeMbps: Number((ingress / 1_000_000).toFixed(1)) },
+      { id: 'seed', label: 'SEED', activeMbps: Number((egress / 1_000_000).toFixed(1)) },
+    ],
+  };
+};
+
+const buildAiDesignTelemetry = ({ llmState, monitor }) => {
+  const models = Array.isArray(llmState?.models) ? llmState.models : [];
+  return {
+    workspace: 'ai',
+    nodeId: String(llmState?.activeModelId || 'local-node'),
+    models: models.slice(0, 6).map((entry) => ({
+      id: String(entry.id || ''),
+      label: String(entry.label || entry.id || ''),
+      loaded: Boolean(entry.id === llmState?.activeModelId),
+      status: String(entry.id === llmState?.activeModelId ? 'active' : 'standby'),
+    })),
+    neuralMap: [
+      { id: 'core', x: 50, y: 50, status: 'active' },
+      { id: 'vision', x: 23, y: 44, status: 'standby' },
+      { id: 'speech', x: 76, y: 42, status: 'standby' },
+    ],
+    parameters: {
+      temperature: 0.7,
+      topP: 0.9,
+      repeatPenalty: 1.1,
+      cpuLoad: Number(monitor?.cpuLoad || 0),
+    },
+  };
+};
+
+const buildTerminalDesignTelemetry = ({ terminal }) => ({
+  workspace: 'terminal',
+  accessMode: 'shell',
+  status: String(terminal?.status || 'unknown'),
+  route: String(terminal?.route || ''),
+});
+
+const buildAdminDesignTelemetry = ({ dashboard }) => {
+  const monitor = dashboard?.monitor || {};
+  const logs = Array.isArray(dashboard?.logs?.entries) ? dashboard.logs.entries : [];
+  return {
+    workspace: 'admin',
+    computeCoreAnalysisPct: Number(monitor.cpuLoad || 0),
+    clusterTemperatureC: 42,
+    memoryRss: {
+      usedBytes: Number(monitor.processRss || 0),
+      totalBytes: Number(monitor.totalMem || 0),
+    },
+    traffic: {
+      ingressBps: Number(monitor?.network?.rxRate || 0),
+      egressBps: Number(monitor?.network?.txRate || 0),
+    },
+    hardwareInventory: [
+      'NVMe RAID Controller',
+      `${Number(monitor.cpuCores || 0)} Core CPU`,
+      `Node RSS ${Number(monitor.processRss || 0)}`,
+    ],
+    kernelLogTail: logs.slice(0, 20),
+  };
+};
+
 const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride = null) => {
   const serviceCatalog = serviceCatalogOverride || await getUiServiceCatalog();
   const now = new Date().toISOString();
@@ -6541,10 +6818,12 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
       connections,
       storage,
       drives,
+      designTelemetry: buildOverviewDesignTelemetry({ telemetry, connections, storage, drives }),
     };
   }
 
   if (workspaceKey === 'media') {
+    const mediaWorkflow = buildMediaWorkflowSnapshot(serviceCatalog);
     const [mediaHealth, qbDiagnostics] = await Promise.all([
       getJellyfinMediaHealthSnapshot(),
       buildQbittorrentUiDiagnostics(serviceCatalog),
@@ -6554,32 +6833,47 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
       workspaceKey,
       arrDiagnostics: buildArrDiagnostics(serviceCatalog),
       lifecycle: buildStackLifecycleSummary(serviceCatalog),
-      mediaWorkflow: buildMediaWorkflowSnapshot(serviceCatalog),
+      mediaWorkflow,
       mediaHealth,
       qbDiagnostics,
       services: mediaEntries,
+      designTelemetry: buildMediaDesignTelemetry({
+        mediaHealth,
+        services: mediaEntries,
+        mediaWorkflow,
+      }),
     };
   }
 
   if (workspaceKey === 'files') {
-    const [drives, shares, users] = await Promise.all([
+    const [drives, shares, users, storage] = await Promise.all([
       getDriveSnapshot(),
       syncManagedShares(),
       Promise.resolve(appDb.listUsers()),
+      getStorageSnapshot(),
     ]);
+    const storageProtection = readStorageProtectionState();
     return {
       generatedAt: now,
       workspaceKey,
       drives,
-      storageProtection: readStorageProtectionState(),
+      storageProtection,
       shares,
       users,
+      storage,
+      designTelemetry: buildFilesDesignTelemetry({
+        drives,
+        storageProtection,
+        storage,
+      }),
     };
   }
 
   if (workspaceKey === 'transfers') {
     const qbittorrentConfig = probeQbittorrentConfig();
     const qbittorrentService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
+    const qbDiagnostics = await buildQbittorrentUiDiagnostics(serviceCatalog);
+    const favourites = appDb.listFtpFavourites().map(serializeFtpFavourite);
     return {
       generatedAt: now,
       workspaceKey,
@@ -6593,7 +6887,7 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
         downloadRoot: FTP_CLIENT_DOWNLOAD_ROOT,
         ftpMounting: getCloudMountCapability(),
       },
-      qbDiagnostics: await buildQbittorrentUiDiagnostics(serviceCatalog),
+      qbDiagnostics,
       torrent: {
         service: qbittorrentService,
         standaloneDestination: MEDIA_DOWNLOADS_TORRENT_QBIT_DIR,
@@ -6614,8 +6908,13 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
           },
         },
       },
-      favourites: appDb.listFtpFavourites().map(serializeFtpFavourite),
+      favourites,
       services: transferEntries,
+      designTelemetry: buildTransfersDesignTelemetry({
+        favourites,
+        services: transferEntries,
+        qbDiagnostics,
+      }),
     };
   }
 
@@ -6632,14 +6931,17 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
         cpuLoad: Number(monitor.cpuLoad || 0),
         timestamp: now,
       },
+      designTelemetry: buildAiDesignTelemetry({ llmState, monitor }),
     };
   }
 
   if (workspaceKey === 'terminal') {
+    const terminal = serviceCatalog.find((entry) => entry.key === 'ttyd') || null;
     return {
       generatedAt: now,
       workspaceKey,
-      terminal: serviceCatalog.find((entry) => entry.key === 'ttyd') || null,
+      terminal,
+      designTelemetry: buildTerminalDesignTelemetry({ terminal }),
     };
   }
 
@@ -6653,6 +6955,7 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
     workspaceKey,
     dashboard,
     services,
+    designTelemetry: buildAdminDesignTelemetry({ dashboard }),
   };
 };
 
@@ -7283,6 +7586,7 @@ const createFsOperationJob = (kind, payload = {}) => writeFsOperation({
   message: String(payload.message || 'Queued'),
   processedBytes: Math.max(0, Number(payload.processedBytes || 0) || 0),
   processedItems: Math.max(0, Number(payload.processedItems || 0) || 0),
+  cursor: Math.max(0, Number(payload.cursor || 0) || 0),
   sourcePaths: Array.isArray(payload.sourcePaths)
     ? payload.sourcePaths.map((entry) => normalizeLocalRelativePath(entry || '')).filter(Boolean)
     : [],
@@ -7294,6 +7598,12 @@ const createFsOperationJob = (kind, payload = {}) => writeFsOperation({
   uploadedFiles: Array.isArray(payload.uploadedFiles)
     ? payload.uploadedFiles.map((entry) => normalizeFsUploadRelativePath(entry || '')).filter(Boolean)
     : [],
+  conflict: null,
+  conflictPolicy: {
+    replaceAllDifferentSize: false,
+    skipAllSameSize: false,
+  },
+  conflictResolution: '',
 });
 
 const processFsTransferJob = async (operationId, req) => {
@@ -7305,6 +7615,7 @@ const processFsTransferJob = async (operationId, req) => {
   const job = tracker.job;
   const sourceStatsByPath = new Map();
   let cancelled = false;
+  let pausedForConflict = false;
 
   for (const sourceRelative of job.sourcePaths) {
     if (isCancelled()) {
@@ -7319,54 +7630,126 @@ const processFsTransferJob = async (operationId, req) => {
     sourceStatsByPath.set(sourceRelative, collectFsEntryStats(sourceAbsolute));
   }
 
-  for (const sourceRelative of job.sourcePaths) {
+  let cursor = Math.max(0, Number(job.cursor || 0) || 0);
+  for (let index = cursor; index < job.sourcePaths.length; index += 1) {
+    const sourceRelative = job.sourcePaths[index];
     if (isCancelled()) {
       cancelled = true;
       break;
     }
+    const currentJob = tracker.refresh();
     const sourceAbsolute = resolveFsPath(sourceRelative).absolutePath;
-    const targetRelative = normalizeLocalRelativePath(path.join(job.destinationPath, path.basename(sourceRelative)));
+    const targetRelative = normalizeLocalRelativePath(path.join(currentJob.destinationPath, path.basename(sourceRelative)));
     const targetAbsolute = resolveFsPath(targetRelative).absolutePath;
     const knownStats = sourceStatsByPath.get(sourceRelative) || { totalBytes: 0, totalItems: 0 };
+    const applyOneShotDecision = String(currentJob.conflictResolution || '').toLowerCase();
+    const conflictPolicy = currentJob.conflictPolicy || { replaceAllDifferentSize: false, skipAllSameSize: false };
 
     try {
       if (!fs.existsSync(sourceAbsolute)) {
         throw new Error('Source path not found');
       }
       if (await isProtectedFsPath(sourceRelative)) {
-        throw new Error(`This path cannot be ${job.kind === 'move' ? 'moved' : 'copied'}`);
+        throw new Error(`This path cannot be ${currentJob.kind === 'move' ? 'moved' : 'copied'}`);
       }
       if (await isProtectedFsPath(targetRelative)) {
         throw new Error('This destination is protected');
-      }
-      if (fs.existsSync(targetAbsolute)) {
-        throw new Error('A file or folder with that name already exists in the destination');
       }
       if (targetAbsolute === sourceAbsolute || targetAbsolute.startsWith(`${sourceAbsolute}${path.sep}`)) {
         throw new Error('Cannot paste a folder into itself');
       }
 
-      tracker.set({ message: `${job.kind === 'move' ? 'Moving' : 'Copying'} ${path.basename(sourceRelative)}` }, false);
-      await copyFsEntryWithProgress(sourceAbsolute, targetAbsolute, tracker, job.kind, knownStats, isCancelled);
+      if (fs.existsSync(targetAbsolute)) {
+        const conflictMeta = getFsEntryConflictMeta(sourceAbsolute, targetAbsolute);
+        const sizeRelation = conflictMeta.sizeRelation;
+        let resolution = '';
+        if (applyOneShotDecision === 'replace' || applyOneShotDecision === 'skip') {
+          resolution = applyOneShotDecision;
+        } else if (conflictPolicy.replaceAllDifferentSize && sizeRelation === 'different') {
+          resolution = 'replace';
+        } else if (conflictPolicy.skipAllSameSize && sizeRelation === 'same') {
+          resolution = 'skip';
+        }
+
+        if (!resolution) {
+          tracker.set({
+            conflict: {
+              reason: 'exists',
+              sourcePath: sourceRelative,
+              sourceSize: conflictMeta.sourceSize,
+              sourceType: conflictMeta.sourceType,
+              targetPath: targetRelative,
+              targetSize: conflictMeta.targetSize,
+              targetType: conflictMeta.targetType,
+              sizeRelation,
+            },
+            conflictResolution: '',
+            cursor: index,
+            message: `Conflict detected for ${path.basename(sourceRelative)}. Choose replace or skip to continue.`,
+            status: 'standby',
+          }, true);
+          pausedForConflict = true;
+          break;
+        }
+
+        if (resolution === 'skip') {
+          tracker.tick({
+            bytes: knownStats.totalBytes,
+            items: knownStats.totalItems,
+            message: `Skipped ${path.basename(sourceRelative)}`,
+          }, true);
+          tracker.set({
+            conflict: null,
+            conflictResolution: '',
+            cursor: index + 1,
+          }, true);
+          continue;
+        }
+
+        fs.rmSync(targetAbsolute, { force: true, recursive: true });
+      }
+
+      tracker.set({
+        conflict: null,
+        conflictResolution: '',
+        message: `${currentJob.kind === 'move' ? 'Moving' : 'Copying'} ${path.basename(sourceRelative)}`,
+      }, false);
+      await copyFsEntryWithProgress(sourceAbsolute, targetAbsolute, tracker, currentJob.kind, knownStats, isCancelled);
+      tracker.set({ cursor: index + 1 }, true);
     } catch (error) {
       if (isFsOperationCancelledError(error)) {
         cancelled = true;
         break;
       }
       tracker.fail(sourceRelative, error);
+      tracker.set({
+        conflict: null,
+        conflictResolution: '',
+        cursor: index + 1,
+      }, true);
     }
   }
 
   const completed = tracker.refresh();
+  if (pausedForConflict && completed.status === 'standby') {
+    pushAuditEvent(req, 'warn', `Filesystem ${job.kind} paused for conflict resolution`, {
+      conflict: completed.conflict || null,
+      destination: job.destinationPath,
+      operationId,
+    });
+    return;
+  }
   if (cancelled || FS_OPERATION_CANCELLATION_STATUSES.has(completed.status)) {
     tracker.set({
-      message: `${job.kind === 'move' ? 'Move' : 'Copy'} cancelled`,
+      conflict: null,
+      conflictResolution: '',
+      message: `${completed.kind === 'move' ? 'Move' : 'Copy'} cancelled`,
       status: 'cancelled',
     }, true);
-    pushAuditEvent(req, 'warn', `Filesystem entr${job.sourcePaths.length === 1 ? 'y' : 'ies'} ${job.kind} cancelled`, {
-      destination: job.destinationPath,
+    pushAuditEvent(req, 'warn', `Filesystem entr${completed.sourcePaths.length === 1 ? 'y' : 'ies'} ${completed.kind} cancelled`, {
+      destination: completed.destinationPath,
       failureCount: completed.failureCount,
-      items: job.sourcePaths,
+      items: completed.sourcePaths,
       operationId,
       processedItems: completed.processedItems,
     });
@@ -7382,14 +7765,16 @@ const processFsTransferJob = async (operationId, req) => {
     ? `${job.kind === 'move' ? 'Move' : 'Copy'} completed with ${completed.failureCount} failure${completed.failureCount === 1 ? '' : 's'}`
     : `${job.kind === 'move' ? 'Move' : 'Copy'} complete`;
   tracker.set({
+    conflict: null,
+    conflictResolution: '',
     message,
     status,
   }, true);
 
-  pushAuditEvent(req, status === 'success' ? 'info' : 'warn', `Filesystem entr${job.sourcePaths.length === 1 ? 'y' : 'ies'} ${job.kind}d`, {
-    destination: job.destinationPath,
+  pushAuditEvent(req, status === 'success' ? 'info' : 'warn', `Filesystem entr${completed.sourcePaths.length === 1 ? 'y' : 'ies'} ${completed.kind}d`, {
+    destination: completed.destinationPath,
     failureCount: completed.failureCount,
-    items: job.sourcePaths,
+    items: completed.sourcePaths,
     operationId,
   });
 };
@@ -7616,7 +8001,7 @@ const filesystemOperationControlHandler = async (req, res) => {
         return res.status(409).json({ error: 'Operation is already complete', operation: serializeFsOperation(job, true) });
       }
 
-      if (job.status === 'queued' || (job.kind === 'upload' && job.status === 'receiving')) {
+      if (job.status === 'queued' || job.status === 'standby' || (job.kind === 'upload' && job.status === 'receiving')) {
         const cancelledJob = markFsOperationCancelled(
           job.id,
           job.kind === 'delete'
@@ -7656,6 +8041,49 @@ const filesystemOperationControlHandler = async (req, res) => {
       cleanupFsOperationArtifacts(job);
       removeFsOperationState(job.id);
       return res.json({ dismissed: true, operationId: job.id, success: true });
+    }
+
+    if (action === 'resolve_conflict') {
+      if (job.kind !== 'copy' && job.kind !== 'move') {
+        return res.status(409).json({ error: 'Conflict resolution is only supported for copy or move operations' });
+      }
+      if (job.status !== 'standby' || !job.conflict) {
+        return res.status(409).json({ error: 'Operation is not waiting for conflict resolution', operation: serializeFsOperation(job, true) });
+      }
+
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      if (!FS_CONFLICT_RESOLVE_ACTIONS.has(decision)) {
+        return res.status(400).json({ error: 'Unsupported conflict decision' });
+      }
+
+      const currentRelation = String(job.conflict.sizeRelation || 'unknown');
+      if (decision === 'replace_all_diff_size' && currentRelation !== 'different') {
+        return res.status(409).json({ error: 'replace_all_diff_size is only available for different-size file conflicts' });
+      }
+      if (decision === 'skip_all_same_size' && currentRelation !== 'same') {
+        return res.status(409).json({ error: 'skip_all_same_size is only available for same-size file conflicts' });
+      }
+
+      const resumedJob = updateFsOperation(job.id, (current) => ({
+        ...current,
+        conflict: null,
+        conflictPolicy: {
+          replaceAllDifferentSize: Boolean(current.conflictPolicy?.replaceAllDifferentSize) || decision === 'replace_all_diff_size',
+          skipAllSameSize: Boolean(current.conflictPolicy?.skipAllSameSize) || decision === 'skip_all_same_size',
+        },
+        conflictResolution: decision === 'replace' || decision === 'replace_all_diff_size'
+          ? 'replace'
+          : 'skip',
+        message: 'Conflict decision accepted; resuming transfer',
+        status: 'queued',
+      }));
+
+      enqueueFsOperation(resumedJob.id, () => processFsTransferJob(resumedJob.id, req));
+      pushAuditEvent(req, 'info', 'Filesystem conflict resolved', {
+        decision,
+        operationId: resumedJob.id,
+      });
+      return res.json({ operation: serializeFsOperation(resumedJob, true), success: true });
     }
 
     return res.status(400).json({ error: 'Unsupported operation control action' });

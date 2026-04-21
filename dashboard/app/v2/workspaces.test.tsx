@@ -199,4 +199,27 @@ describe('WorkspaceViewport', () => {
     expect(screen.queryByText('Notes')).not.toBeInTheDocument();
     expect(screen.getByText('Access')).toBeInTheDocument();
   });
+
+  it('renders stitch parity telemetry card when design telemetry exists', () => {
+    render(
+      <WorkspaceViewport
+        workspace="overview"
+        payload={{
+          telemetry: { monitor: {}, lifecycle: {}, logs: { entries: [] } },
+          storage: { mounts: [] },
+          connections: { users: [] },
+          drives: { manifest: { drives: [] } },
+          designTelemetry: {
+            workspace: 'overview',
+            integrityIndexPct: 98.2,
+            mountedDriveCount: 3,
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText('Stitch parity telemetry')).toBeInTheDocument();
+    expect(screen.getByText('98%')).toBeInTheDocument();
+    expect(screen.getByText('3 mounted')).toBeInTheDocument();
+  });
 });

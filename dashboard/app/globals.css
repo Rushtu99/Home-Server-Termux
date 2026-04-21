@@ -291,7 +291,7 @@ select {
 
 .ui-input {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #121519;
@@ -316,9 +316,9 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
-  min-width: 44px;
-  padding: 8px 12px;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-raised);
@@ -420,13 +420,13 @@ select {
 }
 
 .field__label {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
 }
 
 .field__hint {
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -586,6 +586,11 @@ select {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.tool-tab-button--active {
+  border-color: rgba(125, 147, 107, 0.42) !important;
+  color: var(--accent) !important;
 }
 
 .tool-card-grid {
@@ -1178,6 +1183,48 @@ select {
   margin: 0;
   color: var(--foreground);
   font-size: 13px;
+}
+
+.fs-operation-card__conflict-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(182, 112, 99, 0.36);
+  border-radius: 8px;
+  background: #151010;
+}
+
+.fs-operation-card__conflict-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+  flex: 1;
+}
+
+.fs-operation-card__conflict-copy strong {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.fs-operation-card__conflict-copy span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fs-operation-card__conflict-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fs-operation-card__conflict-actions .ui-button {
+  min-height: 30px;
+  padding: 0 10px;
 }
 
 .fs-operation-progress {

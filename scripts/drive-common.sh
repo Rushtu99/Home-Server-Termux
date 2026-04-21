@@ -28,6 +28,151 @@ MOUNT_RUNTIME_DIR="${MOUNT_RUNTIME_DIR:-$RUNTIME_DIR/mounts}"
 EXFAT_E_RAW_DIR="${EXFAT_E_RAW_DIR:-$MOUNT_RUNTIME_DIR/E-raw}"
 HMSTX_DRIVE_ROLE_FILE_NAME="${HMSTX_DRIVE_ROLE_FILE_NAME:-.hmstx-role.conf}"
 DRIVE_MIRROR_STATE_FILE="${DRIVE_MIRROR_STATE_FILE:-$RUNTIME_DIR/drive-mount-mirror-state.json}"
+USB_MOUNT_SERVICE_CMD="${USB_MOUNT_SERVICE_CMD:-$PROJECT/scripts/usb-mount-service.sh}"
+STORAGE_PRIMARY_CHECK_TIMEOUT_SEC="${STORAGE_PRIMARY_CHECK_TIMEOUT_SEC:-60}"
+STORAGE_PRIMARY_CHECK_STATE_FILE="${STORAGE_PRIMARY_CHECK_STATE_FILE:-$RUNTIME_DIR/storage-primary-check.state}"
+STORAGE_PRIMARY_CHECK_LOCK_FILE="${STORAGE_PRIMARY_CHECK_LOCK_FILE:-$RUNTIME_DIR/storage-primary-check.lock}"
+
+role_primary_mount_dir() {
+    case "$1" in
+        vault)
+            printf '%s\n' "$DRIVES_D_MAIN_DIR"
+            ;;
+        scratch)
+            printf '%s\n' "$DRIVES_E_MAIN_DIR"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+role_primary_mount_present() {
+    local role="$1"
+    local mount_dir=""
+
+    mount_dir="$(role_primary_mount_dir "$role" 2>/dev/null || true)"
+    [ -n "$mount_dir" ] || return 1
+    [ -d "$mount_dir" ] || return 1
+    path_is_direct_mount_in_proc "$mount_dir"
+}
+
+read_primary_check_state() {
+    local line=""
+    local key=""
+    local value=""
+
+    PRIMARY_CHECK_LAST_EPOCH=0
+    PRIMARY_CHECK_LAST_RESULT=0
+    [ -f "$STORAGE_PRIMARY_CHECK_STATE_FILE" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+            last_epoch)
+                if [ "$value" -eq "$value" ] 2>/dev/null; then
+                    PRIMARY_CHECK_LAST_EPOCH="$value"
+                fi
+                ;;
+            last_result)
+                if [ "$value" -eq "$value" ] 2>/dev/null; then
+                    PRIMARY_CHECK_LAST_RESULT="$value"
+                fi
+                ;;
+        esac
+    done < "$STORAGE_PRIMARY_CHECK_STATE_FILE"
+}
+
+write_primary_check_state() {
+    local now_epoch="$1"
+    local result_code="$2"
+    local tmp_file=""
+
+    mkdir -p "$RUNTIME_DIR"
+    tmp_file="${STORAGE_PRIMARY_CHECK_STATE_FILE}.tmp.$$"
+    cat > "$tmp_file" <<EOF
+last_epoch=$now_epoch
+last_result=$result_code
+EOF
+    mv -f "$tmp_file" "$STORAGE_PRIMARY_CHECK_STATE_FILE"
+}
+
+has_unavailable_primary_role() {
+    local roles_csv="$1"
+    local roles=()
+    local role=""
+
+    IFS=',' read -r -a roles <<< "$roles_csv"
+    for role in "${roles[@]}"; do
+        role="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$role" ] || continue
+        case "$role" in
+            vault|scratch)
+                if ! role_primary_mount_present "$role"; then
+                    return 0
+                fi
+                ;;
+        esac
+    done
+
+    return 1
+}
+
+ensure_primary_mounts_checked_cached() {
+    local roles_csv="${1:-vault,scratch}"
+    local now_epoch=0
+    local age_sec=0
+    local result_code=0
+    local exit_code=0
+
+    if ! has_unavailable_primary_role "$roles_csv"; then
+        return 0
+    fi
+
+    if ! command -v flock >/dev/null 2>&1; then
+        if [ -x "$USB_MOUNT_SERVICE_CMD" ]; then
+            "$USB_MOUNT_SERVICE_CMD" --scan-now >/dev/null 2>&1 || true
+        fi
+        has_unavailable_primary_role "$roles_csv" && return 1
+        return 0
+    fi
+
+    mkdir -p "$RUNTIME_DIR"
+    exec 9>"$STORAGE_PRIMARY_CHECK_LOCK_FILE"
+    if ! flock -w 1 9; then
+        exec 9>&-
+        has_unavailable_primary_role "$roles_csv" && return 1
+        return 0
+    fi
+
+    now_epoch="$(date +%s)"
+    read_primary_check_state
+    age_sec=$((now_epoch - PRIMARY_CHECK_LAST_EPOCH))
+    if [ "$age_sec" -lt 0 ]; then
+        age_sec="$STORAGE_PRIMARY_CHECK_TIMEOUT_SEC"
+    fi
+
+    if [ "$age_sec" -ge "$STORAGE_PRIMARY_CHECK_TIMEOUT_SEC" ] && [ -x "$USB_MOUNT_SERVICE_CMD" ]; then
+        if "$USB_MOUNT_SERVICE_CMD" --scan-now >/dev/null 2>&1; then
+            result_code=0
+        else
+            result_code=1
+        fi
+        write_primary_check_state "$now_epoch" "$result_code"
+    fi
+
+    if has_unavailable_primary_role "$roles_csv"; then
+        exit_code=1
+    fi
+    flock -u 9
+    exec 9>&-
+    return "$exit_code"
+}
 
 proc_mounts_escape_path() {
     local target="$1"
@@ -42,10 +187,24 @@ proc_mounts_escape_path() {
 path_is_direct_mount_in_proc() {
     local target="$1"
     local escaped_target=""
+    local resolved_target=""
+    local escaped_resolved_target=""
 
     [ -n "$target" ] || return 1
     escaped_target="$(proc_mounts_escape_path "$target")"
-    grep -Fq " $escaped_target " /proc/mounts 2>/dev/null
+    if grep -Fq " $escaped_target " /proc/mounts 2>/dev/null; then
+        return 0
+    fi
+
+    resolved_target="$(realpath -m "$target" 2>/dev/null || true)"
+    if [ -n "$resolved_target" ] && [ "$resolved_target" != "$target" ]; then
+        escaped_resolved_target="$(proc_mounts_escape_path "$resolved_target")"
+        if grep -Fq " $escaped_resolved_target " /proc/mounts 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 path_mount_source() {
@@ -84,6 +243,25 @@ path_mount_source_matches() {
     fi
 
     return 1
+}
+
+path_mount_fstype() {
+    local path="$1"
+    findmnt -nr -T "$path" -o FSTYPE 2>/dev/null | head -n 1
+}
+
+path_is_external_candidate_mount() {
+    local path="$1"
+    local fs_type=""
+
+    path_is_direct_mount_in_proc "$path" || return 1
+    fs_type="$(path_mount_fstype "$path" || true)"
+    case "$fs_type" in
+        ''|f2fs|tmpfs|overlay)
+            return 1
+            ;;
+    esac
+    return 0
 }
 
 block_device_exists() {

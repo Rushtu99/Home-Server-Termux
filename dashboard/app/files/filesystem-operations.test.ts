@@ -13,7 +13,7 @@ describe('filesystem-operations helpers', () => {
     const normalized = normalizeFsOperation({
       id: 123 as unknown as string,
       kind: 'unknown' as unknown as 'copy',
-      status: 'queued',
+      status: 'standby',
       manifest: [
         {
           relativePath: '../unsafe/path',
@@ -22,11 +22,21 @@ describe('filesystem-operations helpers', () => {
         },
       ],
       failures: [{ error: '', path: 1 as unknown as string }],
+      conflict: {
+        reason: 'exists',
+        sourcePath: '../share/file.mkv',
+        sourceType: 'file',
+        targetPath: '/share/file.mkv',
+        targetType: 'file',
+        sizeRelation: 'different',
+        sourceSize: 10,
+        targetSize: 9,
+      },
     });
 
     expect(normalized.id).toBe('123');
     expect(normalized.kind).toBe('copy');
-    expect(normalized.status).toBe('queued');
+    expect(normalized.status).toBe('standby');
     expect(normalized.manifest?.[0]).toEqual({
       relativePath: 'unsafe/path',
       size: 0,
@@ -36,6 +46,8 @@ describe('filesystem-operations helpers', () => {
       error: 'Operation failed',
       path: '1',
     });
+    expect(normalized.conflict?.sourcePath).toBe('share/file.mkv');
+    expect(normalized.conflict?.sizeRelation).toBe('different');
     expect(isFsOperationActive(normalized)).toBe(true);
   });
 

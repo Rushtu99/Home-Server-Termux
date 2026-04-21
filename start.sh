@@ -201,6 +201,9 @@ if [ "${START_LOG_PIPE_ATTACHED:-0}" != "1" ]; then
     export START_LOG_PIPE_ATTACHED=1
     exec > >(tee -a "$START_LOG") 2>&1
 fi
+START_DEBUG_ECHO="${START_DEBUG_ECHO:-true}"
+START_DEBUG_MAX_LINES_PER_STEP="${START_DEBUG_MAX_LINES_PER_STEP:-80}"
+START_COMPACT_LOG="${START_COMPACT_LOG:-true}"
 
 timestamp() {
     date '+%Y-%m-%d %H:%M:%S'
@@ -216,6 +219,131 @@ log_warn() {
 
 log_error() {
     printf '[%s] ERROR %s\n' "$(timestamp)" "$1"
+}
+
+log_debug() {
+    printf '[%s] DEBUG %s\n' "$(timestamp)" "$1"
+}
+
+log_info_detail() {
+    [ "$START_COMPACT_LOG" = "true" ] && return 0
+    log_info "$1"
+}
+
+slugify_log_name() {
+    printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//'
+}
+
+service_log_path() {
+    local service_name="$1"
+    local slug=""
+
+    slug="$(slugify_log_name "$service_name")"
+    if [ -z "$slug" ]; then
+        slug="service"
+    fi
+    printf '%s/%s.log\n' "$LOG_DIR" "$slug"
+}
+
+log_file_line_count() {
+    local log_path="$1"
+
+    if [ -f "$log_path" ]; then
+        wc -l < "$log_path" | tr -d '[:space:]'
+        return 0
+    fi
+
+    printf '0\n'
+}
+
+log_recent_issues() {
+    local name="$1"
+    local log_path="$2"
+    local from_line="${3:-0}"
+    local issue_lines=""
+    local line=""
+
+    issue_lines="$(
+        awk -v start="$from_line" '
+            NR > start {
+                lowered = tolower($0)
+                if (
+                    lowered ~ /(^|[^a-z])(warn|warning)([^a-z]|$)/ ||
+                    lowered ~ /(^|[^a-z])(error|fatal|exception|traceback)([^a-z]|$)/ ||
+                    lowered ~ /(^|[^a-z])(fail|failed|failure)([^a-z]|$)/
+                ) {
+                    print
+                }
+            }
+        ' "$log_path" 2>/dev/null | tail -n 10
+    )"
+
+    [ -n "$issue_lines" ] || return 0
+
+    log_warn "$name emitted warning/error lines (debug log: $log_path)"
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '[%s] WARN  %s log: %s\n' "$(timestamp)" "$name" "$line"
+    done <<EOF
+$issue_lines
+EOF
+}
+
+log_recent_tail() {
+    local name="$1"
+    local log_path="$2"
+    local line=""
+
+    if [ ! -f "$log_path" ]; then
+        log_warn "$name debug log is missing: $log_path"
+        return 0
+    fi
+
+    log_warn "$name recent debug log tail ($log_path):"
+    while IFS= read -r line; do
+        printf '[%s] WARN  %s log: %s\n' "$(timestamp)" "$name" "$line"
+    done <<EOF
+$(tail -n 20 "$log_path" 2>/dev/null || true)
+EOF
+}
+
+emit_new_debug_lines() {
+    local name="$1"
+    local log_path="$2"
+    local from_line="${3:-0}"
+    local max_lines="$START_DEBUG_MAX_LINES_PER_STEP"
+    local line=""
+
+    [ "$START_DEBUG_ECHO" = "true" ] || return 0
+    [ -f "$log_path" ] || return 0
+    [[ "$max_lines" =~ ^[0-9]+$ ]] || max_lines=80
+    if [ "$max_lines" -le 0 ]; then
+        return 0
+    fi
+
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '[%s] DEBUG %s log: %s\n' "$(timestamp)" "$name" "$line"
+    done <<EOF
+$(awk -v start="$from_line" 'NR > start { print }' "$log_path" 2>/dev/null | tail -n "$max_lines")
+EOF
+}
+
+run_logged_command() {
+    local name="$1"
+    local log_path="$2"
+    shift 2
+    local start_line=0
+    local status=0
+
+    mkdir -p "$LOG_DIR"
+    start_line="$(log_file_line_count "$log_path")"
+    if ! "$@" >>"$log_path" 2>&1; then
+        status=$?
+    fi
+    emit_new_debug_lines "$name" "$log_path" "$start_line"
+    log_recent_issues "$name" "$log_path" "$start_line"
+    return "$status"
 }
 
 HOTKEY_PID=""
@@ -567,10 +695,10 @@ role_main_mount_present() {
     primary_path="$DRIVES_DIR/$dir_name"
     mirror_path="$TERMUX_DRIVES_MIRROR_ROOT/$dir_name"
 
-    if path_is_direct_mount_in_proc "$primary_path"; then
+    if path_is_external_candidate_mount "$primary_path"; then
         return 0
     fi
-    if path_is_direct_mount_in_proc "$mirror_path"; then
+    if path_is_external_candidate_mount "$mirror_path"; then
         return 0
     fi
     return 1
@@ -1062,19 +1190,19 @@ ensure_compat_link() {
         fi
         if [ "$MEDIA_LAYOUT_REPAIR_COMPAT_LINKS" = "true" ]; then
             if ln -sfn "$target" "$compat_path" 2>/dev/null; then
-                log_info "Repaired compatibility link $compat_path -> $target"
+                log_info_detail "Repaired compatibility link $compat_path -> $target"
                 return 0
             fi
             rm -rf "$compat_path" 2>/dev/null || true
             if ln -s "$target" "$compat_path" 2>/dev/null; then
-                log_info "Repaired compatibility link $compat_path -> $target (forced relink)"
+                log_info_detail "Repaired compatibility link $compat_path -> $target (forced relink)"
                 return 0
             fi
             if rebuild_media_compat_root; then
                 current_raw_target="$(readlink "$compat_path" 2>/dev/null || true)"
                 current_target="$(resolve_link_target_absolute "$link_parent" "$current_raw_target")"
                 if [ "$current_target" = "$expected_target" ]; then
-                    log_info "Repaired compatibility link $compat_path -> $target (compat root rebuild)"
+                    log_info_detail "Repaired compatibility link $compat_path -> $target (compat root rebuild)"
                     return 0
                 fi
             fi
@@ -1212,7 +1340,7 @@ run_pool_preflight() {
         fs_type="$(path_fs_type "$root")"
         mount_opts="$(path_mount_options "$root")"
 
-        log_info "Preflight $role root: $root (fs=$fs_type total=${total_gb}GiB free=${free_gb}GiB opts=${mount_opts:-unknown})"
+        log_info_detail "Preflight $role root: $root (fs=$fs_type total=${total_gb}GiB free=${free_gb}GiB opts=${mount_opts:-unknown})"
 
         if ! is_writable_dir "$root"; then
             log_error "$role root is not writable: $root"
@@ -1222,7 +1350,7 @@ run_pool_preflight() {
 
         if [ "$expected_min_gb" -gt 0 ]; then
             if fs_type_is_non_external "$fs_type"; then
-                log_info "Skipping $role capacity floor check on non-external fs ($fs_type): $root"
+                log_info_detail "Skipping $role capacity floor check on non-external fs ($fs_type): $root"
             elif [ "$total_gb" -lt "$expected_min_gb" ]; then
                 log_warn "$role root capacity ${total_gb}GiB is below expected floor ${expected_min_gb}GiB: $root"
                 failures=$((failures + 1))
@@ -1413,7 +1541,7 @@ apply_storage_layout_exports() {
     local vault_fs_type=""
     vault_fs_type="$(path_fs_type "$MEDIA_VAULT_ROOT")"
     if fs_type_is_non_external "$vault_fs_type"; then
-        log_info "Skipping vault import-floor check on non-external fs ($vault_fs_type): $MEDIA_VAULT_ROOT"
+        log_info_detail "Skipping vault import-floor check on non-external fs ($vault_fs_type): $MEDIA_VAULT_ROOT"
     elif [ "$vault_free_gb" -lt "$MEDIA_IMPORT_ABORT_FREE_GB" ]; then
         log_warn "Vault free space ${vault_free_gb}GiB is below import abort floor ${MEDIA_IMPORT_ABORT_FREE_GB}GiB"
         if [ "$MEDIA_LAYOUT_STRICT" = "true" ]; then
@@ -1421,14 +1549,18 @@ apply_storage_layout_exports() {
         fi
     fi
 
-    log_info "Tiered media layout ready"
-    log_info "  Compatibility root: $MEDIA_ROOT"
-    log_info "  Vault roots: $MEDIA_VAULT_ROOTS"
-    log_info "  Scratch roots: $MEDIA_SCRATCH_ROOTS"
-    log_info "  Primary vault root: $MEDIA_VAULT_ROOT"
-    log_info "  Primary scratch root: $MEDIA_SCRATCH_ROOT"
-    log_info "  Scratch library root: $MEDIA_SCRATCH_LIBRARY_ROOT"
-    log_info "  Small downloads dir: $MEDIA_SMALL_DOWNLOADS_DIR"
+    if [ "$START_COMPACT_LOG" = "true" ]; then
+        log_info "Tiered media layout ready (compat=$MEDIA_ROOT vault=$MEDIA_VAULT_ROOT scratch=$MEDIA_SCRATCH_ROOT)"
+    else
+        log_info "Tiered media layout ready"
+        log_info "  Compatibility root: $MEDIA_ROOT"
+        log_info "  Vault roots: $MEDIA_VAULT_ROOTS"
+        log_info "  Scratch roots: $MEDIA_SCRATCH_ROOTS"
+        log_info "  Primary vault root: $MEDIA_VAULT_ROOT"
+        log_info "  Primary scratch root: $MEDIA_SCRATCH_ROOT"
+        log_info "  Scratch library root: $MEDIA_SCRATCH_LIBRARY_ROOT"
+        log_info "  Small downloads dir: $MEDIA_SMALL_DOWNLOADS_DIR"
+    fi
 
     return 0
 }
@@ -1678,6 +1810,8 @@ stop_repo_sshd() {
 }
 
 start_tailscale_service() {
+    local tailscale_log=""
+
     if [ "$TAILSCALE_MODE" = "disabled" ] || [ "$TAILSCALE_MODE" = "android_app" ]; then
         return 0
     fi
@@ -1687,9 +1821,11 @@ start_tailscale_service() {
         return 0
     fi
 
-    log_info "Ensuring Tailscale"
-    if ! "$TAILSCALE_SERVICE_CMD" start >/dev/null 2>&1; then
+    tailscale_log="$(service_log_path "tailscale")"
+    log_info "Ensuring Tailscale (debug log: $tailscale_log)"
+    if ! run_logged_command "Tailscale" "$tailscale_log" "$TAILSCALE_SERVICE_CMD" start; then
         log_warn "Tailscale start failed (check root daemon and Tailscale auth state)"
+        log_recent_tail "Tailscale" "$tailscale_log"
         return 0
     fi
 }
@@ -1867,8 +2003,10 @@ start_background_command() {
     local command_string="$4"
     local host="${5:-127.0.0.1}"
     local pid=""
+    local debug_log=""
 
-    log_info "Starting $name"
+    debug_log="$(service_log_path "$name")"
+    log_info "Starting $name (debug log: $debug_log)"
     bash -lc "$command_string" &
     pid=$!
     printf '%s\n' "$pid" > "$pid_file"
@@ -1876,6 +2014,8 @@ start_background_command() {
 }
 
 start_llm_service() {
+    local llm_log=""
+
     if [ "$LLM_AUTO_START" != "true" ]; then
         log_info "Local LLM autostart disabled"
         return 0
@@ -1886,9 +2026,11 @@ start_llm_service() {
         return 0
     fi
 
-    log_info "Starting Local LLM"
-    if ! "$LLM_SERVICE_CMD" start >/dev/null 2>&1; then
+    llm_log="$(service_log_path "llm")"
+    log_info "Starting Local LLM (debug log: $llm_log)"
+    if ! run_logged_command "Local LLM" "$llm_log" "$LLM_SERVICE_CMD" start; then
         log_warn "Local LLM start failed (install llama-cpp and configure a GGUF model)"
+        log_recent_tail "Local LLM" "$llm_log"
         return 0
     fi
 
@@ -1903,15 +2045,18 @@ start_service_helper() {
     local port="$3"
     local pid_file="$4"
     local host="$5"
+    local helper_log=""
 
     if [ ! -x "$script_path" ]; then
         log_warn "Skipping $name (helper not found: $script_path)"
         return 0
     fi
 
-    log_info "Starting $name"
-    if ! "$script_path" start >/dev/null 2>&1; then
-        log_warn "$name start failed (see logs for details)"
+    helper_log="$(service_log_path "$name")"
+    log_info "Starting $name (debug log: $helper_log)"
+    if ! run_logged_command "$name" "$helper_log" "$script_path" start; then
+        log_warn "$name start failed (see $helper_log)"
+        log_recent_tail "$name" "$helper_log"
         return 0
     fi
 
@@ -1925,15 +2070,18 @@ start_worker_helper() {
     local name="$1"
     local script_path="$2"
     local pid_file="$3"
+    local helper_log=""
 
     if [ ! -x "$script_path" ]; then
         log_warn "Skipping $name (helper not found: $script_path)"
         return 0
     fi
 
-    log_info "Starting $name"
-    if ! "$script_path" start >/dev/null 2>&1; then
-        log_warn "$name start failed (see logs for details)"
+    helper_log="$(service_log_path "$name")"
+    log_info "Starting $name (debug log: $helper_log)"
+    if ! run_logged_command "$name" "$helper_log" "$script_path" start; then
+        log_warn "$name start failed (see $helper_log)"
+        log_recent_tail "$name" "$helper_log"
         return 0
     fi
 
@@ -1977,9 +2125,12 @@ start_media_stack_services() {
     fi
 
     if [ -x "$CONFIGURE_ARR_STACK_CMD" ]; then
+        local arr_log=""
+        arr_log="$(service_log_path "arr-stack-reconcile")"
         log_info "Reconciling ARR, subtitles, and request-stack integrations"
-        if ! "$CONFIGURE_ARR_STACK_CMD" >/dev/null 2>&1; then
-            log_warn "ARR stack reconciliation failed (see logs for details)"
+        if ! run_logged_command "ARR stack reconcile" "$arr_log" "$CONFIGURE_ARR_STACK_CMD"; then
+            log_warn "ARR stack reconciliation failed (see $arr_log)"
+            log_recent_tail "ARR stack reconcile" "$arr_log"
         fi
     fi
 

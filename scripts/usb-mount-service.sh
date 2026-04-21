@@ -86,7 +86,7 @@ is_truthy() {
 }
 
 get_usb_device_rows() {
-    local -a usb_disks=()
+    local -a usb_parts=()
     local disk=""
     local part=""
     local line=""
@@ -95,10 +95,14 @@ get_usb_device_rows() {
     local fstype=""
     local blkid_cache=""
 
-    mapfile -t usb_disks < <(su -c "lsblk -nr -o NAME,TRAN" 2>/dev/null | awk '$2=="usb"{print $1}')
-    for disk in "${usb_disks[@]}"; do
-        [ -n "$disk" ] || continue
-        part="${disk}1"
+    mapfile -t usb_parts < <(su -c "lsblk -nr -o NAME,TYPE,PKNAME,TRAN" 2>/dev/null | awk '
+        $2=="disk" && $4=="usb" { usb[$1]=1; next }
+        $2=="part" && ($4=="usb" || usb[$3]) { print $1 }
+    ')
+    for part in "${usb_parts[@]}"; do
+        [ -n "$part" ] || continue
+        disk="$(printf '%s\n' "$part" | sed 's/p\{0,1\}[0-9]\+$//')"
+        [ -z "$disk" ] && disk="$part"
         line="$(su -c "blkid /dev/block/$part 2>/dev/null" 2>/dev/null || true)"
         uuid="$(printf '%s\n' "$line" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')"
         label="$(printf '%s\n' "$line" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')"
@@ -109,7 +113,7 @@ get_usb_device_rows() {
         printf '%s\t%s\t%s\t%s\t%s\n' "$disk" "$part" "$uuid" "$label" "$fstype"
     done
 
-    if [ "${#usb_disks[@]}" -gt 0 ]; then
+    if [ "${#usb_parts[@]}" -gt 0 ]; then
         return 0
     fi
 
@@ -124,7 +128,7 @@ get_usb_device_rows() {
         local device=""
         device="$(printf '%s\n' "$line" | sed 's/:.*//')"
         part="${device##*/}"
-        disk="$(printf '%s\n' "$part" | sed 's/[0-9]\+$//')"
+        disk="$(printf '%s\n' "$part" | sed 's/p\{0,1\}[0-9]\+$//')"
         [ -z "$disk" ] && disk="$part"
 
         uuid="$(printf '%s\n' "$line" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')"
@@ -447,7 +451,7 @@ scan_once() {
         local role_fallback_label=""
         local role_fallback_dir=""
         local role_fallback_source=""
-        local role_fallback_state="mounted"
+        local role_fallback_state="standby"
         local role_fallback_error=""
         local role_fallback_base=""
         local role_fallback_target=""
@@ -471,6 +475,7 @@ scan_once() {
         fi
 
         if [ "$role_seen" -eq 0 ]; then
+            role_fallback_state="mounted"
             clear_role_mount_targets "$role_letter_value" "$role_main_dir" "$compat_aliases_enabled" "${mount_paths[@]}"
         fi
 

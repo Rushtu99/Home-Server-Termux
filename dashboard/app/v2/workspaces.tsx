@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   addMediaTorrent,
   checkDrives,
@@ -221,6 +222,18 @@ const normalizeDriveState = (entry: Record<string, unknown>) => {
   return 'unmounted';
 };
 
+const isFallbackDrive = (entry: Record<string, unknown>) => {
+  const token = [
+    String(entry.mountRole || ''),
+    String(entry.role || ''),
+    String(entry.name || ''),
+    String(entry.dirName || ''),
+  ].join(' ').toLowerCase();
+  return token.includes('fallback');
+};
+const driveStatusLabel = (entry: Record<string, unknown>) =>
+  `${String(entry.state || 'unmounted')} (${isFallbackDrive(entry) ? 'fallback' : 'real'})`;
+
 const dedupeDrives = (entries: Array<Record<string, unknown>>) => {
   const map = new Map<string, Record<string, unknown>>();
   for (const entry of entries) {
@@ -393,6 +406,70 @@ const createTransferDraft = (defaults: Record<string, unknown> = {}) => ({
   secure: Boolean(defaults.secure),
   username: String(defaults.username || defaults.user || 'anonymous'),
 });
+
+function WorkspaceDesignTelemetry({
+  workspace,
+  payload,
+}: {
+  workspace: WorkspaceKey;
+  payload: Record<string, unknown>;
+}) {
+  const telemetry = asRecord(payload.designTelemetry);
+  if (Object.keys(telemetry).length === 0) {
+    return null;
+  }
+
+  const rows: Array<{ label: string; value: string }> = [];
+  if (workspace === 'overview') {
+    rows.push(
+      { label: 'Integrity index', value: `${Math.round(Number(telemetry.integrityIndexPct || 0))}%` },
+      { label: 'Drive cluster', value: `${Number(telemetry.mountedDriveCount || 0)} mounted` }
+    );
+  } else if (workspace === 'media') {
+    const sessions = asArray<Record<string, unknown>>(telemetry.activeSessions);
+    const totals = asRecord(telemetry.libraryTotals);
+    rows.push(
+      { label: 'Live sessions', value: `${sessions.length}` },
+      { label: 'Library totals', value: `${Number(totals.movieCount || 0)} movies · ${Number(totals.seriesCount || 0)} series` }
+    );
+  } else if (workspace === 'files') {
+    const capacity = asRecord(telemetry.clusterCapacity);
+    rows.push(
+      { label: 'Cluster usage', value: `${Number(capacity.usePercent || 0)}%` },
+      { label: 'Parity', value: String(asRecord(telemetry.parity).state || 'unknown') }
+    );
+  } else if (workspace === 'transfers') {
+    const throughput = asRecord(telemetry.globalThroughput);
+    rows.push(
+      { label: 'Total throughput', value: `${Number(throughput.totalGbps || 0)} Gbps` },
+      { label: 'Pipelines', value: `${Number(telemetry.activePipelines || 0)}` }
+    );
+  } else if (workspace === 'ai') {
+    rows.push(
+      { label: 'Node ID', value: String(telemetry.nodeId || 'n/a') },
+      { label: 'Model cards', value: `${asArray(telemetry.models).length}` }
+    );
+  } else if (workspace === 'terminal') {
+    rows.push(
+      { label: 'Access mode', value: String(telemetry.accessMode || 'shell') },
+      { label: 'Route', value: String(telemetry.route || 'n/a') }
+    );
+  } else {
+    rows.push(
+      { label: 'Compute core analysis', value: `${Number(telemetry.computeCoreAnalysisPct || 0)}%` },
+      { label: 'Kernel log lines', value: `${asArray(telemetry.kernelLogTail).length}` }
+    );
+  }
+
+  return (
+    <SectionCard
+      title="Stitch parity telemetry"
+      subtitle="Additive telemetry projection for Obsidian screen parity."
+    >
+      <KeyValueList rows={rows} />
+    </SectionCard>
+  );
+}
 
 function OverviewWorkspace({
   payload,
@@ -876,7 +953,11 @@ function FilesWorkspace({
     ...entry,
     state: normalizeDriveState(entry),
   } as NormalizedDrive));
-  const mountedDriveCount = drives.filter((entry) => String(entry.state || '') === 'mounted').length;
+  const realDrives = drives.filter((entry) => !isFallbackDrive(entry));
+  const fallbackDrives = drives.filter((entry) => isFallbackDrive(entry));
+  const [driveTab, setDriveTab] = useState<'drives' | 'fallback'>('drives');
+  const visibleDrives = driveTab === 'fallback' ? fallbackDrives : realDrives;
+  const mountedDriveCount = realDrives.filter((entry) => String(entry.state || '') === 'mounted').length;
   const shares = asArray<Record<string, unknown>>(payload.shares);
   const users = asArray<Record<string, unknown>>(payload.users);
   const protection = asRecord(payload.storageProtection);
@@ -931,8 +1012,9 @@ function FilesWorkspace({
   return (
     <>
       <MetricGrid>
-        <MetricTile label="Drives detected" value={drives.length} helper="Includes removable and internal roots" />
-        <MetricTile label="Mounted drives" value={mountedDriveCount} helper="Derived from manifest drive states" />
+        <MetricTile label="Drives detected" value={realDrives.length} helper="Real drives only (fallback excluded)" />
+        <MetricTile label="Mounted drives" value={mountedDriveCount} helper="Mounted real drives from manifest state" />
+        <MetricTile label="Fallback drives" value={fallbackDrives.length} helper="Compatibility roots shown in separate tab" />
         <MetricTile label="Shares" value={shares.length} helper="Managed shares available to dashboard users" />
         <MetricTile label="Users" value={users.length} helper="Account inventory for permission policy" />
         <MetricTile
@@ -961,18 +1043,36 @@ function FilesWorkspace({
         )}
       >
         {actionStatus ? <p className="dash2-admin-note">{actionStatus}</p> : null}
+        <LocalTabBar
+          label="Filesystem drive tabs"
+          items={[
+            { key: 'drives', label: `Drives (${realDrives.length})` },
+            { key: 'fallback', label: `Fallback Drives (${fallbackDrives.length})` },
+          ]}
+          activeKey={driveTab}
+          onChange={(key) => setDriveTab(key === 'fallback' ? 'fallback' : 'drives')}
+        />
         <ul className="dash2-list">
-          {drives.map((drive, index) => (
+          {visibleDrives.map((drive, index) => (
             <li key={`${String(drive.device || drive.mountPoint || 'drive')}-${index}`}>
               <div>
                 <strong>{String(drive.dirName || drive.name || drive.letter || 'Drive')}</strong>
                 <p>{compactPathSummary(drive.mountPoint || 'mount unavailable')}</p>
               </div>
               <StatusBadge tone={toneFromStatus(drive.state)}>
-                {String(drive.state || 'unmounted')}
+                {driveStatusLabel(drive)}
               </StatusBadge>
             </li>
           ))}
+          {visibleDrives.length === 0 ? (
+            <li>
+              <div>
+                <strong>{driveTab === 'fallback' ? 'No fallback drives' : 'No drives'}</strong>
+                <p>{driveTab === 'fallback' ? 'Fallback compatibility roots are not available.' : 'No real drives detected.'}</p>
+              </div>
+              <StatusBadge tone="muted">empty</StatusBadge>
+            </li>
+          ) : null}
         </ul>
       </SectionCard>
     </>
@@ -1926,14 +2026,11 @@ function AdminWorkspace({
   const [activeTab, setActiveTab] = useState<'controls' | 'network' | 'logs' | 'help'>('controls');
   const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all');
   const [logSearch, setLogSearch] = useState('');
-  const [verboseLogging, setVerboseLogging] = useState(Boolean(logs.verboseLoggingEnabled));
-  const [logState, setLogState] = useState(logEntries);
+  const [verboseOverride, setVerboseOverride] = useState<boolean | null>(null);
+  const [logStateOverride, setLogStateOverride] = useState<Array<Record<string, unknown>> | null>(null);
   const [logStatus, setLogStatus] = useState('');
-
-  useEffect(() => {
-    setVerboseLogging(Boolean(logs.verboseLoggingEnabled));
-    setLogState(logEntries);
-  }, [logs.verboseLoggingEnabled, logEntries]);
+  const verboseLogging = verboseOverride ?? Boolean(logs.verboseLoggingEnabled);
+  const logState = logStateOverride ?? logEntries;
 
   const filteredLogs = logState.filter((entry) => {
     const level = String(entry.level || '').toLowerCase();
@@ -1950,9 +2047,9 @@ function AdminWorkspace({
   const toggleVerbose = async () => {
     try {
       const response = await updateVerboseLogging(!verboseLogging);
-      setVerboseLogging(Boolean(response.verboseLoggingEnabled));
+      setVerboseOverride(Boolean(response.verboseLoggingEnabled));
       const snapshot = await fetchLogsSnapshot();
-      setLogState(asArray<Record<string, unknown>>(snapshot.entries));
+      setLogStateOverride(asArray<Record<string, unknown>>(snapshot.entries));
       setLogStatus(Boolean(response.verboseLoggingEnabled) ? 'Verbose logging enabled.' : 'Verbose logging disabled.');
     } catch (error) {
       setLogStatus(toErrorMessage(error, 'Unable to update logging mode'));
@@ -2166,23 +2263,30 @@ export function WorkspaceViewport({
   adminActions?: AdminActions;
   workspaceActions?: WorkspaceActions;
 }) {
+  const withDesignTelemetry = (node: ReactNode) => (
+    <>
+      {node}
+      <WorkspaceDesignTelemetry workspace={workspace} payload={payload} />
+    </>
+  );
+
   if (workspace === 'overview') {
-    return <OverviewWorkspace payload={payload} workspaceActions={workspaceActions} />;
+    return withDesignTelemetry(<OverviewWorkspace payload={payload} workspaceActions={workspaceActions} />);
   }
   if (workspace === 'media') {
-    return <MediaWorkspace payload={payload} />;
+    return withDesignTelemetry(<MediaWorkspace payload={payload} />);
   }
   if (workspace === 'files') {
-    return <FilesWorkspace payload={payload} workspaceActions={workspaceActions} />;
+    return withDesignTelemetry(<FilesWorkspace payload={payload} workspaceActions={workspaceActions} />);
   }
   if (workspace === 'transfers') {
-    return <TransfersWorkspace payload={payload} workspaceActions={workspaceActions} />;
+    return withDesignTelemetry(<TransfersWorkspace payload={payload} workspaceActions={workspaceActions} />);
   }
   if (workspace === 'ai') {
-    return <AiWorkspace payload={payload} workspaceActions={workspaceActions} />;
+    return withDesignTelemetry(<AiWorkspace payload={payload} workspaceActions={workspaceActions} />);
   }
   if (workspace === 'terminal') {
-    return <TerminalWorkspace payload={payload} />;
+    return withDesignTelemetry(<TerminalWorkspace payload={payload} />);
   }
-  return <AdminWorkspace payload={payload} adminActions={adminActions} />;
+  return withDesignTelemetry(<AdminWorkspace payload={payload} adminActions={adminActions} />);
 }

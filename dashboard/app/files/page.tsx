@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
 import { appFetch, createDemoDownloadUrl } from '../demo-api';
 import { isDemoMode } from '../demo-mode';
-import type { DrivePayload } from '../dashboard-utils';
+import type { DriveEntry, DrivePayload } from '../dashboard-utils';
 import { EMPTY_DRIVE_PAYLOAD as EMPTY_PAYLOAD, formatBytes, normalizeDrivePayload } from '../dashboard-utils';
 import {
   collectDirectoryPickerUploadFiles,
@@ -19,6 +19,7 @@ import { DialogSurface, MenuButton, ToolPage } from '../ui-primitives';
 import { usePolling } from '../usePolling';
 
 const API = '/api';
+const HIDDEN_FILESYSTEM_DRIVE_LETTERS = new Set(['D', 'E']);
 
 type FsEntry = {
   accessLevel?: 'deny' | 'read' | 'write' | string;
@@ -127,6 +128,18 @@ const formatTimestamp = (value: string | null) => {
   return Number.isNaN(parsed.getTime()) ? 'Waiting for first scan' : parsed.toLocaleString();
 };
 
+const resolveDriveLetter = (entry: { letter?: string; dirName?: string }) => {
+  const direct = String(entry.letter || '').trim().toUpperCase();
+  if (direct) {
+    return direct;
+  }
+  const match = String(entry.dirName || '').match(/^([A-Za-z])\s+\(/);
+  return match ? match[1].toUpperCase() : '';
+};
+
+const shouldHideDriveEntry = (entry: { letter?: string; dirName?: string }) =>
+  HIDDEN_FILESYSTEM_DRIVE_LETTERS.has(resolveDriveLetter(entry));
+
 const formatEntryTime = (value: string) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleString();
@@ -152,6 +165,8 @@ const formatOperationStatus = (operation: FsOperation) => {
       return 'Receiving';
     case 'running':
       return 'Running';
+    case 'standby':
+      return 'Awaiting decision';
     case 'cancelling':
       return 'Cancelling…';
     case 'success':
@@ -212,6 +227,16 @@ const normalizeFsPayload = (payload: Partial<FsPayload> | null | undefined): FsP
 });
 
 const topLevelName = (value: string) => value.split('/').filter(Boolean)[0] || value;
+const isFallbackDriveEntry = (entry: DriveEntry) => {
+  const tokens = [
+    String((entry as Record<string, unknown>).mountRole || ''),
+    String((entry as Record<string, unknown>).role || ''),
+    String(entry.name || ''),
+    String(entry.dirName || ''),
+  ].join(' ').toLowerCase();
+  return tokens.includes('fallback');
+};
+const driveStatusLabel = (entry: DriveEntry) => `${entry.state} (${isFallbackDriveEntry(entry) ? 'fallback' : 'real'})`;
 const normalizeDefaultRoleAccess = (value: string | null | undefined) => (value === 'read' || value === 'write' ? value : 'deny');
 const normalizeUserOverrideAccess = (value: string | null | undefined): 'inherit' | 'deny' | 'read' | 'write' =>
   value === 'deny' || value === 'read' || value === 'write' ? value : 'inherit';
@@ -309,6 +334,7 @@ export default function FilesPage() {
   const [locationsOpen, setLocationsOpen] = useState(false);
   const [isNarrowLayout, setIsNarrowLayout] = useState(false);
   const [isPhoneLayout, setIsPhoneLayout] = useState(false);
+  const [driveTab, setDriveTab] = useState<'drives' | 'fallback'>('drives');
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
   const loadDriveState = async () => {
@@ -593,11 +619,17 @@ export default function FilesPage() {
     });
   };
 
-  const controlFsOperation = async (operation: FsOperation, action: 'cancel' | 'dismiss') => {
+  const controlFsOperation = async (
+    operation: FsOperation,
+    action: 'cancel' | 'dismiss' | 'resolve_conflict',
+    decision = ''
+  ) => {
     setBrowserError('');
     setOperationBusy(operation.id, true);
     try {
-      const payload = await runFsCommand(`/fs/operations/${encodeURIComponent(operation.id)}/control`, { action });
+      const payload = await runFsCommand(`/fs/operations/${encodeURIComponent(operation.id)}/control`, decision
+        ? { action, decision }
+        : { action });
       if (payload?.dismissed) {
         setOperations((current) => current.filter((entry) => entry.id !== operation.id));
       } else if (payload?.operation) {
@@ -605,7 +637,8 @@ export default function FilesPage() {
       }
       await loadFsOperations();
     } catch (error) {
-      setBrowserError(String(error instanceof Error ? error.message : error || `Unable to ${action} operation`));
+      const verb = action === 'resolve_conflict' ? 'resolve conflict' : action;
+      setBrowserError(String(error instanceof Error ? error.message : error || `Unable to ${verb} operation`));
     } finally {
       setOperationBusy(operation.id, false);
     }
@@ -1109,13 +1142,18 @@ export default function FilesPage() {
     }
   };
 
-  const drives = driveState.manifest.drives;
+  const drives = driveState.manifest.drives.filter((drive) => !shouldHideDriveEntry(drive));
+  const visibleDriveEvents = driveState.events.filter((event) => !shouldHideDriveEntry(event));
+  const fallbackDrives = drives.filter((drive) => isFallbackDriveEntry(drive));
+  const removableDrives = drives.filter((drive) => !isFallbackDriveEntry(drive));
+  const visibleDriveCards = driveTab === 'fallback' ? fallbackDrives : removableDrives;
+  const activeDriveCount = visibleDriveCards.length + (driveTab === 'drives' ? 1 : 0);
   const statusText = driveAccessDenied
     ? 'Drive management is admin-only. Share browsing remains available for accounts with share access.'
     : !driveState.agentInstalled
     ? 'USB mount service is not installed yet. Only internal storage and fallback compatibility links will appear.'
-    : drives.length > 0
-      ? `${drives.length} removable drive${drives.length === 1 ? '' : 's'} detected.`
+    : removableDrives.length > 0
+      ? `${removableDrives.length} removable drive${removableDrives.length === 1 ? '' : 's'} detected.${fallbackDrives.length > 0 ? ` ${fallbackDrives.length} fallback drive${fallbackDrives.length === 1 ? '' : 's'} available in Fallback Drives tab.` : ''}`
       : 'Only internal storage is currently present. Connect a removable drive or run Check drives (manual) to validate external mounts + compatibility links.';
 
   const selectedEntry = browser.entries.find((entry) => entry.path === selectedPath) || null;
@@ -1197,17 +1235,35 @@ export default function FilesPage() {
 
         {!driveAccessDenied ? (
         <div className="tool-card-grid">
-          <article className="tool-card">
-            <p className="tool-card__eyebrow">Internal</p>
-            <h2 className="tool-card__title">C</h2>
-            <p className="tool-card__meta">Always present through the shared Android storage bind.</p>
-          </article>
-          {drives.map((drive) => (
+          <div className="tool-inline-actions">
+            <button
+              className={`ui-button ${driveTab === 'drives' ? 'tool-tab-button--active' : ''}`}
+              type="button"
+              onClick={() => setDriveTab('drives')}
+            >
+              Drives ({removableDrives.length + 1})
+            </button>
+            <button
+              className={`ui-button ${driveTab === 'fallback' ? 'tool-tab-button--active' : ''}`}
+              type="button"
+              onClick={() => setDriveTab('fallback')}
+            >
+              Fallback Drives ({fallbackDrives.length})
+            </button>
+          </div>
+          {driveTab === 'drives' ? (
+            <article className="tool-card">
+              <p className="tool-card__eyebrow">Internal</p>
+              <h2 className="tool-card__title">C</h2>
+              <p className="tool-card__meta">Always present through the shared Android storage bind.</p>
+            </article>
+          ) : null}
+          {visibleDriveCards.map((drive) => (
             <article key={`${drive.device}-${drive.mountPoint}`} className="tool-card">
               <div className="tool-inline-actions">
                 <p className="tool-card__eyebrow">{drive.filesystem || 'drive'}</p>
                 <span className={`tool-status-pill ${drive.state === 'mounted' ? 'tool-status-pill--ok' : 'tool-status-pill--error'}`}>
-                  {drive.state}
+                  {driveStatusLabel(drive)}
                 </span>
               </div>
               <h2 className="tool-card__title">{drive.dirName || `${drive.letter} (${drive.name})`}</h2>
@@ -1217,16 +1273,26 @@ export default function FilesPage() {
               {drive.error ? <p className="status-message status-message--error">{drive.error}</p> : null}
             </article>
           ))}
+          {activeDriveCount === 0 ? (
+            <article className="tool-card">
+              <h2 className="tool-card__title">{driveTab === 'fallback' ? 'No fallback drives' : 'No drives'}</h2>
+              <p className="tool-card__meta">
+                {driveTab === 'fallback'
+                  ? 'Fallback compatibility roots are not currently available.'
+                  : 'No removable drives detected.'}
+              </p>
+            </article>
+          ) : null}
         </div>
         ) : null}
 
         {showDriveLog && !driveAccessDenied ? (
           <div className="tool-log-shell">
-            {driveState.events.length === 0 ? (
+            {visibleDriveEvents.length === 0 ? (
               <p className="tool-banner__meta">No drive agent events yet.</p>
             ) : (
               <div className="tool-log-list">
-                {driveState.events.map((event, index) => (
+                {visibleDriveEvents.map((event, index) => (
                   <article key={`${event.timestamp}-${event.event}-${index}`} className="tool-log-item">
                     <strong>{event.event}</strong>
                     <p className="tool-log-meta">
@@ -1510,8 +1576,12 @@ export default function FilesPage() {
                     const progressLabel = formatOperationProgress(operation);
                     const progressValue = Number.parseInt(progressLabel, 10) || 0;
                     const isBusy = operationBusyIds.includes(operation.id);
-                    const canCancel = operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'cancelling';
+                    const canCancel = operation.status === 'queued' || operation.status === 'receiving' || operation.status === 'running' || operation.status === 'standby' || operation.status === 'cancelling';
                     const canDismiss = !isFsOperationActive(operation);
+                    const conflict = operation.conflict || null;
+                    const showConflictActions = operation.status === 'standby' && Boolean(conflict);
+                    const canReplaceAllDiff = conflict?.sizeRelation === 'different';
+                    const canSkipAllSame = conflict?.sizeRelation === 'same';
                     return (
                       <article key={operation.id} className={`fs-operation-card fs-operation-card--${operation.status}`}>
                         <div className="fs-operation-card__head">
@@ -1549,7 +1619,30 @@ export default function FilesPage() {
                           </div>
                           <strong>{progressLabel}</strong>
                         </div>
-                        <p className="fs-operation-card__message">{operation.message || describeOperation(operation)}</p>
+                        {showConflictActions ? (
+                          <div className="fs-operation-card__conflict-inline">
+                            <div className="fs-operation-card__conflict-copy">
+                              <strong>{operation.message || describeOperation(operation)}</strong>
+                              <span>
+                                {conflict?.sourcePath?.split('/').pop() || 'item'}
+                                {' · '}
+                                src {conflict?.sourceSize != null ? formatBytes(conflict.sourceSize) : conflict?.sourceType || 'n/a'}
+                                {' · '}
+                                dst {conflict?.targetSize != null ? formatBytes(conflict.targetSize) : conflict?.targetType || 'n/a'}
+                                {' · '}
+                                {conflict?.sizeRelation || 'unknown'} size
+                              </span>
+                            </div>
+                            <div className="fs-operation-card__conflict-actions">
+                              <button className="ui-button ui-button--primary" type="button" onClick={() => void controlFsOperation(operation, 'resolve_conflict', 'replace')} disabled={isBusy}>Replace</button>
+                              <button className="ui-button" type="button" onClick={() => void controlFsOperation(operation, 'resolve_conflict', 'skip')} disabled={isBusy}>Skip</button>
+                              <button className="ui-button" type="button" onClick={() => void controlFsOperation(operation, 'resolve_conflict', 'replace_all_diff_size')} disabled={isBusy || !canReplaceAllDiff}>Replace all (diff size)</button>
+                              <button className="ui-button" type="button" onClick={() => void controlFsOperation(operation, 'resolve_conflict', 'skip_all_same_size')} disabled={isBusy || !canSkipAllSame}>Skip all (same size)</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="fs-operation-card__message">{operation.message || describeOperation(operation)}</p>
+                        )}
                         {operation.failureCount > 0 ? (
                           <p className="status-message status-message--error">
                             {operation.failureCount} failure{operation.failureCount === 1 ? '' : 's'}
