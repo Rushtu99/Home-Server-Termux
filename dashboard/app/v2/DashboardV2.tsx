@@ -474,9 +474,9 @@ export default function DashboardV2() {
                 <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
                 <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleTimeString() : 'Waiting for snapshot'}</span>
                 {lastCommitDateLabel ? (
-                  <StatusBadge tone="muted" title={lastCommitDateRaw || undefined}>
-                    Demo commit {lastCommitDateLabel}
-                  </StatusBadge>
+                  <span title={lastCommitDateRaw || undefined}>
+                    <StatusBadge tone="muted">Demo commit {lastCommitDateLabel}</StatusBadge>
+                  </span>
                 ) : null}
                 <button
                   className="ui-button"
