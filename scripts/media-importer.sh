@@ -58,6 +58,8 @@ fi
 if [ -z "$MEDIA_SCRATCH_ROOT" ]; then
     MEDIA_SCRATCH_ROOT="$DRIVES_E_DIR/SCRATCH/HmSTxScratch"
 fi
+MEDIA_VAULT_ROOTS="${MEDIA_VAULT_ROOTS:-}"
+MEDIA_SCRATCH_ROOTS="${MEDIA_SCRATCH_ROOTS:-}"
 MEDIA_MOVIES_DIR="${MEDIA_MOVIES_DIR:-$MEDIA_VAULT_ROOT/movies}"
 MEDIA_SERIES_DIR="${MEDIA_SERIES_DIR:-$MEDIA_VAULT_ROOT/series}"
 MEDIA_MUSIC_DIR="${MEDIA_MUSIC_DIR:-$MEDIA_VAULT_ROOT/music}"
@@ -83,6 +85,9 @@ MEDIA_SCRATCH_MIN_FREE_GB="${MEDIA_SCRATCH_MIN_FREE_GB:-200}"
 MEDIA_SCRATCH_WARN_USED_PERCENT="${MEDIA_SCRATCH_WARN_USED_PERCENT:-85}"
 MEDIA_SCRATCH_CLEANUP_ENABLED="${MEDIA_SCRATCH_CLEANUP_ENABLED:-true}"
 MEDIA_IMPORT_REQUIRE_EXTERNAL_VAULT="${MEDIA_IMPORT_REQUIRE_EXTERNAL_VAULT:-true}"
+MEDIA_IMPORT_CHECKSUM_MAX_MB="${MEDIA_IMPORT_CHECKSUM_MAX_MB:-1024}"
+MEDIA_IMPORT_FORCE_COPY_MOVE="${MEDIA_IMPORT_FORCE_COPY_MOVE:-false}"
+MEDIA_IMPORT_FAULT_INJECT="${MEDIA_IMPORT_FAULT_INJECT:-}"
 MEDIA_IMPORT_STATUS_FILE="${MEDIA_IMPORT_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR/import-status.json}"
 MEDIA_CLEANUP_STATUS_FILE="${MEDIA_CLEANUP_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR/cleanup-status.json}"
 MEDIA_IMPORTED_INDEX_FILE="${MEDIA_IMPORTED_INDEX_FILE:-$MEDIA_IMPORT_LOG_DIR/imported-items.tsv}"
@@ -99,6 +104,7 @@ SMALL_DOWNLOAD_MAX_BYTES=$((MEDIA_SMALL_DOWNLOADS_MAX_MB * 1024 * 1024))
 SCRATCH_MIN_FREE_BYTES=$((MEDIA_SCRATCH_MIN_FREE_GB * 1024 * 1024 * 1024))
 RETENTION_SECONDS=$((MEDIA_SCRATCH_RETENTION_DAYS * 24 * 60 * 60))
 PRESSURE_GRACE_SECONDS=$((24 * 60 * 60))
+CHECKSUM_MAX_BYTES=$((MEDIA_IMPORT_CHECKSUM_MAX_MB * 1024 * 1024))
 
 mkdir -p \
     "$RUNTIME_DIR" \
@@ -119,6 +125,16 @@ mkdir -p \
 HAS_RSYNC=0
 if command -v rsync >/dev/null 2>&1; then
     HAS_RSYNC=1
+fi
+
+HAS_SHA256=0
+SHA256_CMD=""
+if command -v sha256sum >/dev/null 2>&1; then
+    HAS_SHA256=1
+    SHA256_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    HAS_SHA256=1
+    SHA256_CMD="shasum -a 256"
 fi
 
 COMMAND="run"
@@ -737,6 +753,150 @@ mtime_seconds() {
     stat -c '%Y' "$path" 2>/dev/null || echo 0
 }
 
+paths_share_filesystem() {
+    local left="$1"
+    local right="$2"
+    local left_dev=""
+    local right_dev=""
+
+    left_dev="$(stat -c '%d' "$left" 2>/dev/null || true)"
+    right_dev="$(stat -c '%d' "$right" 2>/dev/null || true)"
+    [ -n "$left_dev" ] || return 1
+    [ -n "$right_dev" ] || return 1
+    [ "$left_dev" = "$right_dev" ]
+}
+
+inject_move_fault() {
+    local step="$1"
+    if [ "$MEDIA_IMPORT_FAULT_INJECT" = "$step" ]; then
+        log WARN "Injected fault at step '$step'"
+        return 0
+    fi
+    return 1
+}
+
+file_checksum_if_applicable() {
+    local path="$1"
+    local size_bytes="$2"
+
+    if [ "$HAS_SHA256" -ne 1 ] || [ ! -f "$path" ]; then
+        return 0
+    fi
+    if [ "$size_bytes" -gt "$CHECKSUM_MAX_BYTES" ]; then
+        return 0
+    fi
+
+    if [ "$SHA256_CMD" = "sha256sum" ]; then
+        sha256sum -- "$path" 2>/dev/null | awk 'NR==1 {print $1}'
+    else
+        shasum -a 256 -- "$path" 2>/dev/null | awk 'NR==1 {print $1}'
+    fi
+}
+
+entry_fingerprint() {
+    local path="$1"
+    local kind="missing"
+    local file_count=0
+    local dir_count=0
+    local size_bytes=0
+    local checksum=""
+
+    if [ -d "$path" ]; then
+        kind="dir"
+        file_count="$(find "$path" -type f -print 2>/dev/null | wc -l | tr -d '[:space:]')"
+        dir_count="$(find "$path" -type d -print 2>/dev/null | wc -l | tr -d '[:space:]')"
+        size_bytes="$(du -sb "$path" 2>/dev/null | awk 'NR==1 {print $1}')"
+    elif [ -e "$path" ]; then
+        kind="file"
+        file_count=1
+        dir_count=0
+        size_bytes="$(file_size_bytes "$path")"
+        checksum="$(file_checksum_if_applicable "$path" "$size_bytes" || true)"
+    fi
+
+    printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "${file_count:-0}" "${dir_count:-0}" "${size_bytes:-0}" "$checksum"
+}
+
+verify_entry_fingerprint() {
+    local path="$1"
+    local expected="$2"
+    local current=""
+
+    current="$(entry_fingerprint "$path")"
+    [ "$current" = "$expected" ]
+}
+
+safe_remove_move_target() {
+    local target="$1"
+    local parent="$2"
+    local resolved_target=""
+    local resolved_parent=""
+
+    resolved_target="$(canonical_path "$target")"
+    resolved_parent="$(canonical_path "$parent")"
+
+    if [ -z "$resolved_target" ] || [ "$resolved_target" = "/" ]; then
+        log WARN "Refusing rollback delete for unsafe target: ${target:-<empty>}"
+        return 1
+    fi
+    if path_is_device_endpoint "$resolved_target"; then
+        log WARN "Refusing rollback delete for device target: $resolved_target"
+        return 1
+    fi
+    if ! path_within "$resolved_target" "$resolved_parent"; then
+        log WARN "Refusing rollback delete outside destination root: $resolved_target"
+        return 1
+    fi
+    rm -rf -- "$resolved_target"
+}
+
+rollback_promoted_move() {
+    local src="$1"
+    local dest="$2"
+    local dest_base="$3"
+
+    [ -e "$dest" ] || [ -L "$dest" ] || return 0
+
+    if [ -e "$src" ] || [ -L "$src" ]; then
+        log WARN "Rollback removing destination because source still exists: $dest"
+        safe_remove_move_target "$dest" "$dest_base" || true
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$src")"
+    if mv -- "$dest" "$src" 2>/dev/null; then
+        log WARN "Rollback restored source from destination: $src"
+        return 0
+    fi
+
+    log WARN "Rollback could not restore source from destination: $dest -> $src"
+    return 1
+}
+
+move_without_overwrite() {
+    local src="$1"
+    local dest="$2"
+
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+        return 2
+    fi
+
+    if mv -n -- "$src" "$dest" 2>/dev/null; then
+        if [ -e "$src" ] || [ -L "$src" ]; then
+            if [ -e "$dest" ] || [ -L "$dest" ]; then
+                return 2
+            fi
+            return 1
+        fi
+        return 0
+    fi
+
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+        return 2
+    fi
+    return 1
+}
+
 safe_remove_path() {
     local path="$1"
     local resolved=""
@@ -949,7 +1109,15 @@ copy_entry() {
     local source_type="$3"
     local label="$4"
     local dest=""
+    local stage_path=""
+    local src_fingerprint=""
+    local src_kind=""
+    local src_file_count=0
+    local src_dir_count=0
     local entry_size=""
+    local src_checksum=""
+    local use_atomic_rename=0
+    local move_rc=0
     dest="$dest_base/$(basename "$src")"
 
     [ -e "$src" ] || return 0
@@ -970,7 +1138,23 @@ copy_entry() {
         return 0
     fi
 
-    entry_size="$(file_size_bytes "$src")"
+    src_fingerprint="$(entry_fingerprint "$src")"
+    IFS=$'\t' read -r src_kind src_file_count src_dir_count entry_size src_checksum <<EOF
+$src_fingerprint
+EOF
+    if [ "$src_kind" = "missing" ] || [ -z "$entry_size" ]; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log WARN "$label failed pre-move validation (source fingerprint unavailable): $src"
+        record_event "import" "failed" "$src" "$dest" "source fingerprint unavailable"
+        return 0
+    fi
+    if [ "$src_kind" = "file" ] && [ ! -r "$src" ]; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log WARN "$label failed pre-move validation (source not readable): $src"
+        record_event "import" "failed" "$src" "$dest" "source not readable"
+        return 0
+    fi
+
     if path_within "$dest_base" "$MEDIA_VAULT_ROOT"; then
         if ! space_ok "$entry_size"; then
             FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -987,47 +1171,158 @@ copy_entry() {
     mkdir -p "$dest_base"
     if [ "$DRY_RUN" -eq 1 ]; then
         IMPORTED_COUNT=$((IMPORTED_COUNT + 1))
-        log INFO "$label would import to $dest"
-        record_event "import" "dry-run" "$src" "$dest" "planned"
+        log INFO "$label would move to $dest"
+        record_event "import" "dry-run" "$src" "$dest" "planned move"
         return 0
     fi
 
-    if [ -d "$src" ]; then
-        mkdir -p "$dest"
-        if find "$dest" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
-            SKIPPED_EXISTING_COUNT=$((SKIPPED_EXISTING_COUNT + 1))
-            COLLISION_COUNT=$((COLLISION_COUNT + 1))
-            log INFO "$label skipped (destination directory became non-empty): $dest"
-            record_event "import" "skipped-existing" "$src" "$dest" "destination directory not empty"
+    if [ "$MEDIA_IMPORT_FORCE_COPY_MOVE" != "true" ] && paths_share_filesystem "$src" "$dest_base"; then
+        use_atomic_rename=1
+    fi
+
+    if [ "$use_atomic_rename" -eq 1 ]; then
+        log INFO "$label moving via atomic rename"
+        if move_without_overwrite "$src" "$dest"; then
+            move_rc=0
+        else
+            move_rc=$?
+        fi
+        if [ "$move_rc" -ne 0 ]; then
+            if [ "$move_rc" -eq 2 ]; then
+                SKIPPED_EXISTING_COUNT=$((SKIPPED_EXISTING_COUNT + 1))
+                COLLISION_COUNT=$((COLLISION_COUNT + 1))
+                log INFO "$label skipped (destination exists during rename): $dest"
+                record_event "import" "skipped-existing" "$src" "$dest" "destination exists during rename"
+                return 0
+            fi
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            log WARN "$label failed atomic rename: $src -> $dest"
+            record_event "import" "failed" "$src" "$dest" "atomic rename failed"
             return 0
         fi
-        if [ "$HAS_RSYNC" -eq 1 ]; then
-            rsync -a --ignore-existing --safe-links --no-specials --no-devices "$src/" "$dest/" >/dev/null
-        else
-            cp -a -n "$src/." "$dest/"
+
+        if inject_move_fault "after-rename"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            rollback_promoted_move "$src" "$dest" "$dest_base" || true
+            record_event "import" "failed" "$src" "$dest" "injected fault after rename"
+            return 0
         fi
     else
-        if [ "$HAS_RSYNC" -eq 1 ]; then
-            rsync -a --ignore-existing --safe-links --no-specials --no-devices "$src" "$dest_base/" >/dev/null
+        if [ -d "$src" ]; then
+            stage_path="$(mktemp -d "$dest_base/.import-stage-$(basename "$src").XXXXXX")"
+            if [ "$HAS_RSYNC" -eq 1 ]; then
+                if ! rsync -a --safe-links --no-specials --no-devices "$src/" "$stage_path/" >/dev/null; then
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                    log WARN "$label failed while staging directory copy: $src"
+                    safe_remove_move_target "$stage_path" "$dest_base" || true
+                    record_event "import" "failed" "$src" "$dest" "staging directory copy failed"
+                    return 0
+                fi
+            else
+                if ! cp -a "$src/." "$stage_path/"; then
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                    log WARN "$label failed while staging directory copy: $src"
+                    safe_remove_move_target "$stage_path" "$dest_base" || true
+                    record_event "import" "failed" "$src" "$dest" "staging directory copy failed"
+                    return 0
+                fi
+            fi
         else
-            cp -a -n "$src" "$dest_base/"
+            stage_path="$(mktemp "$dest_base/.import-stage-$(basename "$src").XXXXXX")"
+            if [ "$HAS_RSYNC" -eq 1 ]; then
+                if ! rsync -a --safe-links --no-specials --no-devices "$src" "$stage_path" >/dev/null; then
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                    log WARN "$label failed while staging file copy: $src"
+                    safe_remove_move_target "$stage_path" "$dest_base" || true
+                    record_event "import" "failed" "$src" "$dest" "staging file copy failed"
+                    return 0
+                fi
+            else
+                if ! cp -a "$src" "$stage_path"; then
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                    log WARN "$label failed while staging file copy: $src"
+                    safe_remove_move_target "$stage_path" "$dest_base" || true
+                    record_event "import" "failed" "$src" "$dest" "staging file copy failed"
+                    return 0
+                fi
+            fi
+        fi
+
+        if inject_move_fault "after-stage-copy"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            safe_remove_move_target "$stage_path" "$dest_base" || true
+            record_event "import" "failed" "$src" "$dest" "injected fault after stage copy"
+            return 0
+        fi
+
+        if ! verify_entry_fingerprint "$stage_path" "$src_fingerprint"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            log WARN "$label failed staged verification before promote: $stage_path"
+            safe_remove_move_target "$stage_path" "$dest_base" || true
+            record_event "import" "failed" "$src" "$dest" "staged fingerprint mismatch"
+            return 0
+        fi
+
+        if move_without_overwrite "$stage_path" "$dest"; then
+            move_rc=0
+        else
+            move_rc=$?
+        fi
+        if [ "$move_rc" -ne 0 ]; then
+            if [ "$move_rc" -eq 2 ]; then
+                SKIPPED_EXISTING_COUNT=$((SKIPPED_EXISTING_COUNT + 1))
+                COLLISION_COUNT=$((COLLISION_COUNT + 1))
+                log INFO "$label skipped (destination exists during promote): $dest"
+                record_event "import" "skipped-existing" "$src" "$dest" "destination exists during promote"
+                safe_remove_move_target "$stage_path" "$dest_base" || true
+                return 0
+            fi
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            log WARN "$label failed to promote staged move target: $stage_path -> $dest"
+            safe_remove_move_target "$stage_path" "$dest_base" || true
+            record_event "import" "failed" "$src" "$dest" "stage promote failed"
+            return 0
+        fi
+
+        if inject_move_fault "after-promote"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            rollback_promoted_move "$src" "$dest" "$dest_base" || true
+            record_event "import" "failed" "$src" "$dest" "injected fault after promote"
+            return 0
         fi
     fi
 
-    if [ ! -e "$dest" ]; then
+    if [ ! -e "$dest" ] || ! verify_entry_fingerprint "$dest" "$src_fingerprint"; then
         FAILED_COUNT=$((FAILED_COUNT + 1))
-        log WARN "$label failed verification after copy: $dest"
-        record_event "import" "failed" "$src" "$dest" "destination missing after copy"
+        log WARN "$label failed post-move verification: $dest"
+        rollback_promoted_move "$src" "$dest" "$dest_base" || true
+        record_event "import" "failed" "$src" "$dest" "post-move fingerprint mismatch"
+        return 0
+    fi
+
+    if [ "$use_atomic_rename" -eq 0 ]; then
+        if ! safe_remove_path "$src"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            log WARN "$label failed to remove source after move: $src"
+            rollback_promoted_move "$src" "$dest" "$dest_base" || true
+            record_event "import" "failed" "$src" "$dest" "source removal failed"
+            return 0
+        fi
+    fi
+    if [ -e "$src" ] || [ -L "$src" ]; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log WARN "$label failed post-move verification (source still present): $src"
+        rollback_promoted_move "$src" "$dest" "$dest_base" || true
+        record_event "import" "failed" "$src" "$dest" "source still present after move"
         return 0
     fi
 
     IMPORTED_COUNT=$((IMPORTED_COUNT + 1))
-    log INFO "$label imported to $dest"
-    record_event "import" "copied" "$src" "$dest" ""
+    log INFO "$label moved to $dest"
+    record_event "import" "moved" "$src" "$dest" ""
     if [ "$dest_base" = "$MEDIA_SMALL_DOWNLOADS_DIR" ]; then
-        log INFO "$label moved into small downloads storage: $dest"
+        log INFO "$label moved into small downloads storage lane: $dest"
         record_event "import" "stored-small" "$src" "$dest" ""
-        safe_remove_path "$src"
         return 0
     fi
     if [ "$dest_base" != "$MEDIA_IMPORT_REVIEW_DIR" ]; then
