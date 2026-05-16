@@ -527,7 +527,10 @@ probe_service() {
         esac
         case "$status_output" in
             *'"status":"running"'*|*'"status":"working"'*) status="working" ;;
+            *'"status":"degraded"'*) status="degraded" ;;
+            *'"status":"stalled"'*) status="stalled" ;;
             *'"status":"stopped"'*) status="stopped" ;;
+            *'"status":"unavailable"'*) status="unavailable" ;;
             *'"status":"external"'*) status="external" ;;
             *) status="unknown" ;;
         esac
@@ -547,6 +550,16 @@ probe_service() {
         notes="${notes:+$notes|}Port is reachable; helper state may be stale."
         if [ "$status" = "stopped" ] || [ "$status" = "stalled" ] || [ "$status" = "unknown" ]; then
             status="working"
+        fi
+    fi
+
+    if [ "$key" != "tailscale" ] && [ "$running" = "true" ] && [ "$tcp_reachable" != "true" ] && [ "${SERVICE_PROTOCOL[$key]:-tcp}" = "tcp" ]; then
+        running="false"
+        notes="${notes:+$notes|}Helper reported running but TCP listener is unreachable."
+        if [ "$startup_mode" = "required" ]; then
+            status="stalled"
+        else
+            status="degraded"
         fi
     fi
 

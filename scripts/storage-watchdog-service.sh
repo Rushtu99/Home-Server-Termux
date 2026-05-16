@@ -10,7 +10,7 @@ if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
 fi
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
 LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
-STORAGE_WATCHDOG_INTERVAL_SEC="${STORAGE_WATCHDOG_INTERVAL_SEC:-8}"
+STORAGE_WATCHDOG_INTERVAL_SEC="${STORAGE_WATCHDOG_INTERVAL_SEC:-30}"
 STORAGE_WATCHDOG_STABLE_HEALTH_CHECKS="${STORAGE_WATCHDOG_STABLE_HEALTH_CHECKS:-2}"
 STORAGE_WATCHDOG_PID_PATH="${STORAGE_WATCHDOG_PID_PATH:-$RUNTIME_DIR/storage-watchdog.pid}"
 STORAGE_WATCHDOG_LOG_PATH="${STORAGE_WATCHDOG_LOG_PATH:-$LOG_DIR/storage-watchdog.log}"
@@ -788,13 +788,10 @@ compute_blocked_services() {
         array_push_unique BLOCKED_SERVICES "qbittorrent"
         array_push_unique BLOCKED_SERVICES "media-workflow"
     fi
-    if [ "$VAULT_HEALTHY" -ne 1 ]; then
+    if [ "$VAULT_HEALTHY" -ne 1 ] && [ "$vault_fallback_ready" -ne 1 ]; then
         array_push_unique BLOCKED_SERVICES "jellyfin"
         array_push_unique BLOCKED_SERVICES "bazarr"
         array_push_unique BLOCKED_SERVICES "media-workflow"
-    elif [ "$vault_fallback_ready" -ne 1 ]; then
-        array_push_unique BLOCKED_SERVICES "jellyfin"
-        array_push_unique BLOCKED_SERVICES "bazarr"
     fi
 }
 
@@ -1172,6 +1169,34 @@ is_running() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+status_service() {
+    local mode="${1:-text}"
+    local running=0
+    local pid=""
+    if is_running; then
+        running=1
+        pid="$(cat "$STORAGE_WATCHDOG_PID_PATH" 2>/dev/null || true)"
+    fi
+
+    if [ "$mode" = "json" ]; then
+        printf '{\n'
+        printf '  "service": "storage-watchdog",\n'
+        printf '  "running": %s,\n' "$([ "$running" -eq 1 ] && printf 'true' || printf 'false')"
+        printf '  "pid": %s,\n' "$([ -n "$pid" ] && printf '%s' "$pid" || printf 'null')"
+        printf '  "stateFile": "%s",\n' "$(json_escape "$STORAGE_WATCHDOG_STATE_FILE")"
+        printf '  "eventsFile": "%s",\n' "$(json_escape "$STORAGE_WATCHDOG_EVENTS_FILE")"
+        printf '  "intervalSec": %s\n' "$STORAGE_WATCHDOG_INTERVAL_SEC"
+        printf '}\n'
+        return 0
+    fi
+
+    if [ "$running" -eq 1 ]; then
+        printf 'running (pid %s)\n' "$pid"
+    else
+        printf 'stopped\n'
+    fi
+}
+
 run_loop() {
     load_existing_state
     while true; do
@@ -1229,7 +1254,11 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_service json
+        else
+            status_service text
+        fi
         ;;
     run-loop)
         run_loop

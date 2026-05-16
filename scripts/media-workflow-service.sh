@@ -69,6 +69,33 @@ stop_service() {
     rm -f "$MEDIA_WORKFLOW_PID_PATH"
 }
 
+status_service() {
+    local mode="${1:-text}"
+    local running=0
+    local pid=""
+    if is_running; then
+        running=1
+        pid="$(cat "$MEDIA_WORKFLOW_PID_PATH" 2>/dev/null || true)"
+    fi
+
+    if [ "$mode" = "json" ]; then
+        printf '{\n'
+        printf '  "service": "media-workflow",\n'
+        printf '  "running": %s,\n' "$([ "$running" -eq 1 ] && printf 'true' || printf 'false')"
+        printf '  "pid": %s,\n' "$([ -n "$pid" ] && printf '%s' "$pid" || printf 'null')"
+        printf '  "intervalSec": %s,\n' "$MEDIA_WORKFLOW_INTERVAL_SEC"
+        printf '  "trigger": "%s"\n' "$MEDIA_WORKFLOW_TRIGGER"
+        printf '}\n'
+        return 0
+    fi
+
+    if [ "$running" -eq 1 ]; then
+        printf 'running (pid %s)\n' "$pid"
+    else
+        printf 'stopped\n'
+    fi
+}
+
 case "${1:-status}" in
     start)
         start_service
@@ -81,7 +108,11 @@ case "${1:-status}" in
         start_service
         ;;
     status)
-        is_running
+        if [ "${2:-}" = "--json" ]; then
+            status_service json
+        else
+            status_service text
+        fi
         ;;
     run-loop)
         run_loop

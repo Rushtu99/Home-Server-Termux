@@ -5,6 +5,11 @@ set -euo pipefail
 USER_HOME="${HOME:-/data/data/com.termux/files/home}"
 PROJECT="${PROJECT:-$USER_HOME/home-server}"
 SERVER_ENV_FILE="${SERVER_ENV_FILE:-$PROJECT/server/.env}"
+RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT/runtime}"
+LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
+JELLYFIN_LIBRARY_SYNC_PID_PATH="${JELLYFIN_LIBRARY_SYNC_PID_PATH:-$RUNTIME_DIR/jellyfin-library-sync.pid}"
+JELLYFIN_LIBRARY_SYNC_STATUS_PATH="${JELLYFIN_LIBRARY_SYNC_STATUS_PATH:-$RUNTIME_DIR/jellyfin-library-sync-status.json}"
+JELLYFIN_LIBRARY_SYNC_LOG_PATH="${JELLYFIN_LIBRARY_SYNC_LOG_PATH:-$LOG_DIR/jellyfin-library-sync.log}"
 
 load_shell_env_file() {
     local env_file="$1"
@@ -36,6 +41,8 @@ load_shell_env_file() {
 }
 
 load_shell_env_file "$SERVER_ENV_FILE"
+
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
 if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
     . "$PROJECT/scripts/drive-common.sh"
@@ -230,12 +237,140 @@ sync_all() {
     sync_library "Audiobooks" "books" "$MEDIA_AUDIOBOOKS_DIR" "$MEDIA_SCRATCH_AUDIOBOOKS_DIR"
 }
 
-case "${1:-sync}" in
+write_run_status() {
+    local state="$1"
+    local message="$2"
+    local started_at="${3:-}"
+    local finished_at="${4:-}"
+    cat > "$JELLYFIN_LIBRARY_SYNC_STATUS_PATH" <<JSON
+{
+  "service": "jellyfin-library-sync",
+  "state": "$(json_escape "$state")",
+  "message": "$(json_escape "$message")",
+  "startedAt": "$(json_escape "$started_at")",
+  "finishedAt": "$(json_escape "$finished_at")"
+}
+JSON
+}
+
+is_running() {
+    local pid=""
+    [ -f "$JELLYFIN_LIBRARY_SYNC_PID_PATH" ] || return 1
+    pid="$(cat "$JELLYFIN_LIBRARY_SYNC_PID_PATH" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+run_once() {
+    local started_at=""
+    local finished_at=""
+    started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    write_run_status "running" "Library sync in progress" "$started_at" ""
+    if sync_all >> "$JELLYFIN_LIBRARY_SYNC_LOG_PATH" 2>&1; then
+        finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        write_run_status "completed" "Library sync completed" "$started_at" "$finished_at"
+        return 0
+    fi
+    finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    write_run_status "failed" "Library sync failed" "$started_at" "$finished_at"
+    return 1
+}
+
+run_once_with_pid() {
+    printf '%s\n' "$$" > "$JELLYFIN_LIBRARY_SYNC_PID_PATH"
+    trap 'rm -f "$JELLYFIN_LIBRARY_SYNC_PID_PATH"' EXIT INT TERM
+    run_once
+}
+
+start_service() {
+    if is_running; then
+        return 0
+    fi
+    if command -v setsid >/dev/null 2>&1; then
+        setsid bash -lc "exec '$0' run-once" >/dev/null 2>&1 < /dev/null &
+    else
+        nohup bash -lc "exec '$0' run-once" >/dev/null 2>&1 &
+    fi
+    printf '%s\n' "$!" > "$JELLYFIN_LIBRARY_SYNC_PID_PATH"
+}
+
+stop_service() {
+    local pid=""
+    if ! is_running; then
+        rm -f "$JELLYFIN_LIBRARY_SYNC_PID_PATH"
+        return 0
+    fi
+
+    pid="$(cat "$JELLYFIN_LIBRARY_SYNC_PID_PATH" 2>/dev/null || true)"
+    if [ -n "$pid" ]; then
+        kill "$pid" >/dev/null 2>&1 || true
+        sleep 1
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" >/dev/null 2>&1 || true
+        fi
+    fi
+    rm -f "$JELLYFIN_LIBRARY_SYNC_PID_PATH"
+}
+
+status_service() {
+    local mode="${1:-text}"
+    local running=0
+    local pid=""
+    if is_running; then
+        running=1
+        pid="$(cat "$JELLYFIN_LIBRARY_SYNC_PID_PATH" 2>/dev/null || true)"
+    fi
+
+    if [ "$mode" = "json" ]; then
+        if [ -f "$JELLYFIN_LIBRARY_SYNC_STATUS_PATH" ]; then
+            printf '{\n'
+            printf '  "running": %s,\n' "$([ "$running" -eq 1 ] && printf 'true' || printf 'false')"
+            printf '  "pid": %s,\n' "$([ -n "$pid" ] && printf '%s' "$pid" || printf 'null')"
+            printf '  "lastRun": '
+            cat "$JELLYFIN_LIBRARY_SYNC_STATUS_PATH"
+            printf '\n}\n'
+        else
+            printf '{\n'
+            printf '  "running": %s,\n' "$([ "$running" -eq 1 ] && printf 'true' || printf 'false')"
+            printf '  "pid": %s,\n' "$([ -n "$pid" ] && printf '%s' "$pid" || printf 'null')"
+            printf '  "lastRun": null\n'
+            printf '}\n'
+        fi
+        return 0
+    fi
+
+    if [ "$running" -eq 1 ]; then
+        printf 'running (pid %s)\n' "$pid"
+    else
+        printf 'stopped\n'
+    fi
+}
+
+case "${1:-status}" in
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        stop_service
+        start_service
+        ;;
+    status)
+        if [ "${2:-}" = "--json" ]; then
+            status_service json
+        else
+            status_service text
+        fi
+        ;;
+    run-once)
+        run_once_with_pid
+        ;;
     sync)
-        sync_all
+        run_once
         ;;
     *)
-        echo "usage: $0 {sync}" >&2
+        echo "usage: $0 {start|stop|restart|status [--json]|sync}" >&2
         exit 1
         ;;
 esac

@@ -21,7 +21,7 @@ fi
 . "$DRIVE_COMMON_SCRIPT"
 
 USB_MOUNT_PATHS_CSV="${USB_MOUNT_PATHS:-$USER_HOME/Drives,/mnt/termux-drives}"
-USB_MOUNT_VAULT_UUID="${USB_MOUNT_VAULT_UUID:-16BA8F9DBA8F784F}"
+USB_MOUNT_VAULT_UUID="${USB_MOUNT_VAULT_UUID:-8A82A10082A0F1BD}"
 USB_MOUNT_VAULT_LABEL="${USB_MOUNT_VAULT_LABEL:-Rushtu 4TB}"
 USB_MOUNT_SCRATCH_UUID="${USB_MOUNT_SCRATCH_UUID:-8097-A8C4}"
 USB_MOUNT_SCRATCH_LABEL="${USB_MOUNT_SCRATCH_LABEL:-T exFAT 2TB}"
@@ -30,7 +30,7 @@ USB_MOUNT_SCRATCH_MAIN_LABEL="${USB_MOUNT_SCRATCH_MAIN_LABEL:-$USB_MOUNT_SCRATCH
 USB_MOUNT_VAULT_FALLBACK_LABEL="${USB_MOUNT_VAULT_FALLBACK_LABEL:-${VAULT_FALLBACK_LABEL:-VAULT_fallback}}"
 USB_MOUNT_SCRATCH_FALLBACK_LABEL="${USB_MOUNT_SCRATCH_FALLBACK_LABEL:-${SCRATCH_FALLBACK_LABEL:-SCRATCH_fallback}}"
 USB_MOUNT_COMPAT_ALIASES="${USB_MOUNT_COMPAT_ALIASES:-false}"
-USB_MOUNT_INTERVAL_SEC="${USB_MOUNT_INTERVAL_SEC:-15}"
+USB_MOUNT_INTERVAL_SEC="${USB_MOUNT_INTERVAL_SEC:-30}"
 USB_MOUNT_STATE_PATH="${USB_MOUNT_STATE_PATH:-$DRIVES_STATE_DIR/drives.json}"
 USB_MOUNT_EVENTS_PATH="${USB_MOUNT_EVENTS_PATH:-$DRIVES_STATE_DIR/drive-events.jsonl}"
 USB_MOUNT_LOG_PATH="${USB_MOUNT_LOG_PATH:-$PROJECT/logs/usb-mount-service.log}"
@@ -87,6 +87,7 @@ is_truthy() {
 
 get_usb_device_rows() {
     local -a usb_parts=()
+    local -a seen_parts=()
     local disk=""
     local part=""
     local line=""
@@ -94,6 +95,42 @@ get_usb_device_rows() {
     local label=""
     local fstype=""
     local blkid_cache=""
+    local managed_source=""
+    local managed_target=""
+    local escaped_drives_dir=""
+    local escaped_mirror_root=""
+    local fstype_value=""
+    local mapped_role=""
+
+    append_row_from_blkid_line() {
+        local part_name="$1"
+        local blkid_line="${2:-}"
+        local seen=""
+
+        [ -n "$part_name" ] || return 0
+        for seen in "${seen_parts[@]}"; do
+            if [ "$seen" = "$part_name" ]; then
+                return 0
+            fi
+        done
+        seen_parts+=("$part_name")
+
+        disk="$(printf '%s\n' "$part_name" | sed 's/p\{0,1\}[0-9]\+$//')"
+        [ -z "$disk" ] && disk="$part_name"
+
+        uuid=""
+        label=""
+        fstype=""
+        if [ -n "$blkid_line" ]; then
+            uuid="$(printf '%s\n' "$blkid_line" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')"
+            label="$(printf '%s\n' "$blkid_line" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')"
+            fstype="$(printf '%s\n' "$blkid_line" | sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')"
+        fi
+        [ -z "$uuid" ] && uuid="-"
+        [ -z "$label" ] && label="-"
+        [ -z "$fstype" ] && fstype="unknown"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$disk" "$part_name" "$uuid" "$label" "$fstype"
+    }
 
     mapfile -t usb_parts < <(su -c "lsblk -nr -o NAME,TYPE,PKNAME,TRAN" 2>/dev/null | awk '
         $2=="disk" && $4=="usb" { usb[$1]=1; next }
@@ -101,23 +138,9 @@ get_usb_device_rows() {
     ')
     for part in "${usb_parts[@]}"; do
         [ -n "$part" ] || continue
-        disk="$(printf '%s\n' "$part" | sed 's/p\{0,1\}[0-9]\+$//')"
-        [ -z "$disk" ] && disk="$part"
         line="$(su -c "blkid /dev/block/$part 2>/dev/null" 2>/dev/null || true)"
-        uuid="$(printf '%s\n' "$line" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')"
-        label="$(printf '%s\n' "$line" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')"
-        fstype="$(printf '%s\n' "$line" | sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')"
-        [ -z "$uuid" ] && uuid="-"
-        [ -z "$label" ] && label="-"
-        [ -z "$fstype" ] && fstype="unknown"
-        printf '%s\t%s\t%s\t%s\t%s\n' "$disk" "$part" "$uuid" "$label" "$fstype"
+        append_row_from_blkid_line "$part" "$line"
     done
-
-    if [ "${#usb_parts[@]}" -gt 0 ]; then
-        return 0
-    fi
-
-    # Fallback path for hosts where lsblk transport metadata is unavailable.
     blkid_cache="$(su -c "blkid 2>/dev/null" 2>/dev/null || true)"
     local role_uuid=""
     for role_uuid in "$USB_MOUNT_VAULT_UUID" "$USB_MOUNT_SCRATCH_UUID"; do
@@ -128,17 +151,59 @@ get_usb_device_rows() {
         local device=""
         device="$(printf '%s\n' "$line" | sed 's/:.*//')"
         part="${device##*/}"
-        disk="$(printf '%s\n' "$part" | sed 's/p\{0,1\}[0-9]\+$//')"
-        [ -z "$disk" ] && disk="$part"
-
-        uuid="$(printf '%s\n' "$line" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')"
-        label="$(printf '%s\n' "$line" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')"
-        fstype="$(printf '%s\n' "$line" | sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')"
-        [ -z "$uuid" ] && uuid="-"
-        [ -z "$label" ] && label="-"
-        [ -z "$fstype" ] && fstype="unknown"
-        printf '%s\t%s\t%s\t%s\t%s\n' "$disk" "$part" "$uuid" "$label" "$fstype"
+        append_row_from_blkid_line "$part" "$line"
     done
+
+    # If UUID expectations drift, fall back to configured labels so known drives still map.
+    local role_label=""
+    for role_label in \
+        "$USB_MOUNT_VAULT_LABEL" \
+        "$USB_MOUNT_SCRATCH_LABEL" \
+        "$USB_MOUNT_VAULT_MAIN_LABEL" \
+        "$USB_MOUNT_SCRATCH_MAIN_LABEL"; do
+        [ -n "$role_label" ] || continue
+        line="$(printf '%s\n' "$blkid_cache" | awk -v label="$role_label" 'index($0, "LABEL=\"" label "\"") { print; exit }')"
+        [ -n "$line" ] || continue
+        local device=""
+        device="$(printf '%s\n' "$line" | sed 's/:.*//')"
+        part="${device##*/}"
+        append_row_from_blkid_line "$part" "$line"
+    done
+
+    # Final fallback: include already-mounted block devices under managed roots.
+    escaped_drives_dir="$(proc_mounts_escape_path "$DRIVES_DIR")"
+    escaped_mirror_root="$(proc_mounts_escape_path "$TERMUX_DRIVES_MIRROR_ROOT")"
+    while IFS=' ' read -r managed_source managed_target _; do
+        case "$managed_source" in
+            /dev/block/*) ;;
+            *) continue ;;
+        esac
+        part="${managed_source##*/}"
+        case "$part" in
+            dm-*|loop*|zram*|ram*)
+                continue
+                ;;
+        esac
+        case "$managed_target" in
+            "$escaped_drives_dir"/*|"$escaped_mirror_root"/*) ;;
+            *) continue ;;
+        esac
+        line="$(printf '%s\n' "$blkid_cache" | awk -v device="$managed_source" '$1 ~ "^" device ":" { print; exit }')"
+        if [ -z "$line" ]; then
+            line="$(su -c "blkid '$managed_source' 2>/dev/null" 2>/dev/null || true)"
+        fi
+        fstype_value="$(printf '%s\n' "$line" | sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')"
+        if [ "$fstype_value" = "f2fs" ] || [ "$fstype_value" = "ext4" ] || [ "$fstype_value" = "tmpfs" ] || [ "$fstype_value" = "overlay" ]; then
+            uuid="$(printf '%s\n' "$line" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')"
+            label="$(printf '%s\n' "$line" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')"
+            mapped_role="$(role_for_uuid "${uuid:--}")"
+            if [ "$mapped_role" = "USB" ]; then
+                mapped_role="$(role_for_label "${label:--}")"
+            fi
+            [ "$mapped_role" != "USB" ] || continue
+        fi
+        append_row_from_blkid_line "$part" "$line"
+    done < /proc/mounts
 }
 
 role_for_uuid() {
@@ -149,6 +214,47 @@ role_for_uuid() {
         return 0
     fi
     if [ "$uuid" = "$USB_MOUNT_SCRATCH_UUID" ]; then
+        printf 'SCRATCH\n'
+        return 0
+    fi
+
+    printf 'USB\n'
+}
+
+normalize_device_label() {
+    printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+role_for_label() {
+    local label="$1"
+    local normalized_label=""
+    local vault_label=""
+    local scratch_label=""
+
+    normalized_label="$(normalize_device_label "$label")"
+    [ -n "$normalized_label" ] || {
+        printf 'USB\n'
+        return 0
+    }
+
+    vault_label="$(normalize_device_label "$USB_MOUNT_VAULT_LABEL")"
+    scratch_label="$(normalize_device_label "$USB_MOUNT_SCRATCH_LABEL")"
+    if [ "$normalized_label" = "$vault_label" ]; then
+        printf 'VAULT\n'
+        return 0
+    fi
+    if [ "$normalized_label" = "$scratch_label" ]; then
+        printf 'SCRATCH\n'
+        return 0
+    fi
+
+    vault_label="$(normalize_device_label "$USB_MOUNT_VAULT_MAIN_LABEL")"
+    scratch_label="$(normalize_device_label "$USB_MOUNT_SCRATCH_MAIN_LABEL")"
+    if [ "$normalized_label" = "$vault_label" ]; then
+        printf 'VAULT\n'
+        return 0
+    fi
+    if [ "$normalized_label" = "$scratch_label" ]; then
         printf 'SCRATCH\n'
         return 0
     fi
@@ -339,6 +445,9 @@ scan_once() {
 
         local role=""
         role="$(role_for_uuid "$uuid")"
+        if [ "$role" = "USB" ]; then
+            role="$(role_for_label "$label")"
+        fi
 
         local mount_role="usb"
         local letter=""
@@ -358,7 +467,11 @@ scan_once() {
             letter="$(role_letter "$role")"
             dir_name="$(named_mount_dir "$letter" "$main_label")"
             mount_point="$primary_root/$dir_name"
-            raw_mount_point="$DRIVES_STATE_DIR/raw/${letter}-raw"
+            if [ "$fstype" = "exfat" ]; then
+                raw_mount_point="$MOUNT_RUNTIME_DIR/${letter}-raw"
+            else
+                raw_mount_point=""
+            fi
             local service_mount_point="$mount_point"
 
             local -a bind_targets=("$service_mount_point")
@@ -578,6 +691,26 @@ stop_daemon() {
 }
 
 status_daemon() {
+    local mode="${1:-text}"
+    local running=0
+    local pid=""
+    if is_daemon_running; then
+        running=1
+        pid="$(cat "$USB_MOUNT_PID_PATH" 2>/dev/null || true)"
+    fi
+
+    if [ "$mode" = "json" ]; then
+        printf '{\n'
+        printf '  "service": "usb-mount-service",\n'
+        printf '  "running": %s,\n' "$([ "$running" -eq 1 ] && printf 'true' || printf 'false')"
+        printf '  "pid": %s,\n' "$([ -n "$pid" ] && printf '%s' "$pid" || printf 'null')"
+        printf '  "stateFile": "%s",\n' "$(json_escape "$USB_MOUNT_STATE_PATH")"
+        printf '  "eventsFile": "%s",\n' "$(json_escape "$USB_MOUNT_EVENTS_PATH")"
+        printf '  "intervalSec": %s\n' "$USB_MOUNT_INTERVAL_SEC"
+        printf '}\n'
+        return 0
+    fi
+
     if is_daemon_running; then
         printf 'running (pid %s)\n' "$(cat "$USB_MOUNT_PID_PATH")"
     else
@@ -594,7 +727,8 @@ Commands:
   --daemon       Run continuous detect+mount loop
   start          Start daemon in background
   stop           Stop daemon
-  status         Print daemon status
+  restart        Restart daemon
+  status         Print daemon status (status --json for machine output)
 USAGE
 }
 
@@ -611,8 +745,16 @@ case "${1:-}" in
     stop)
         stop_daemon
         ;;
+    restart)
+        stop_daemon
+        start_daemon
+        ;;
     status)
-        status_daemon
+        if [ "${2:-}" = "--json" ]; then
+            status_daemon json
+        else
+            status_daemon text
+        fi
         ;;
     *)
         usage

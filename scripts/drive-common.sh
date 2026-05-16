@@ -29,7 +29,7 @@ EXFAT_E_RAW_DIR="${EXFAT_E_RAW_DIR:-$MOUNT_RUNTIME_DIR/E-raw}"
 HMSTX_DRIVE_ROLE_FILE_NAME="${HMSTX_DRIVE_ROLE_FILE_NAME:-.hmstx-role.conf}"
 DRIVE_MIRROR_STATE_FILE="${DRIVE_MIRROR_STATE_FILE:-$RUNTIME_DIR/drive-mount-mirror-state.json}"
 USB_MOUNT_SERVICE_CMD="${USB_MOUNT_SERVICE_CMD:-$PROJECT/scripts/usb-mount-service.sh}"
-STORAGE_PRIMARY_CHECK_TIMEOUT_SEC="${STORAGE_PRIMARY_CHECK_TIMEOUT_SEC:-60}"
+STORAGE_PRIMARY_CHECK_TIMEOUT_SEC="${STORAGE_PRIMARY_CHECK_TIMEOUT_SEC:-120}"
 STORAGE_PRIMARY_CHECK_STATE_FILE="${STORAGE_PRIMARY_CHECK_STATE_FILE:-$RUNTIME_DIR/storage-primary-check.state}"
 STORAGE_PRIMARY_CHECK_LOCK_FILE="${STORAGE_PRIMARY_CHECK_LOCK_FILE:-$RUNTIME_DIR/storage-primary-check.lock}"
 
@@ -207,6 +207,62 @@ path_is_direct_mount_in_proc() {
     return 1
 }
 
+drive_common_warn() {
+    printf '[%s] WARN  [drive-common] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >&2
+}
+
+path_is_unreachable_mountpoint() {
+    local target="$1"
+    local err=""
+
+    [ -n "$target" ] || return 1
+    if LC_ALL=C ls -ld "$target" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    err="$(LC_ALL=C ls -ld "$target" 2>&1 || true)"
+    case "$err" in
+        *"Transport endpoint is not connected"*|*"Stale file handle"*|*"No such device"*|*"Input/output error"*|*"I/O error"*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+recover_mountpoint_path() {
+    local target="$1"
+    local target_label="${2:-mountpoint}"
+
+    [ -n "$target" ] || return 1
+    if ! path_is_unreachable_mountpoint "$target"; then
+        return 0
+    fi
+
+    drive_common_warn "Detected stale $target_label at $target; attempting lazy unmount recovery"
+    if command -v su >/dev/null 2>&1; then
+        su -c "umount -l '$target'" >/dev/null 2>&1 || true
+    fi
+
+    if path_is_unreachable_mountpoint "$target"; then
+        rmdir "$target" >/dev/null 2>&1 || true
+        if command -v su >/dev/null 2>&1; then
+            su -c "rmdir '$target'" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if ! mkdir -p "$target" >/dev/null 2>&1; then
+        if command -v su >/dev/null 2>&1; then
+            su -c "mkdir -p '$target'" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if path_is_unreachable_mountpoint "$target"; then
+        drive_common_warn "Failed to recover stale $target_label at $target"
+        return 1
+    fi
+    return 0
+}
+
 path_mount_source() {
     local target="$1"
 
@@ -281,8 +337,25 @@ block_device_exists() {
 
 prepare_drives_root() {
     mkdir -p "$DRIVES_DIR" "$DRIVES_STATE_DIR" "$MOUNT_RUNTIME_DIR" "$LEGACY_ALIAS_BACKUP_DIR"
-    mkdir -p "$DRIVES_D_MAIN_DIR" "$DRIVES_E_MAIN_DIR"
-    mkdir -p "$DRIVES_D_FALLBACK_DIR" "$DRIVES_E_FALLBACK_DIR"
+    recover_mountpoint_path "$DRIVES_D_MAIN_DIR" "vault primary mountpoint"
+    recover_mountpoint_path "$DRIVES_E_MAIN_DIR" "scratch primary mountpoint"
+    recover_mountpoint_path "$DRIVES_D_FALLBACK_DIR" "vault fallback mountpoint"
+    recover_mountpoint_path "$DRIVES_E_FALLBACK_DIR" "scratch fallback mountpoint"
+    if ! mkdir -p "$DRIVES_D_MAIN_DIR" "$DRIVES_E_MAIN_DIR" "$DRIVES_D_FALLBACK_DIR" "$DRIVES_E_FALLBACK_DIR" 2>/dev/null; then
+        drive_common_warn "Drive mountpoint mkdir failed; retrying one-by-one with recovery"
+
+        recover_mountpoint_path "$DRIVES_D_MAIN_DIR" "vault primary mountpoint" || true
+        mkdir -p "$DRIVES_D_MAIN_DIR" 2>/dev/null || drive_common_warn "Leaving vault primary mountpoint unavailable: $DRIVES_D_MAIN_DIR"
+
+        recover_mountpoint_path "$DRIVES_E_MAIN_DIR" "scratch primary mountpoint" || true
+        mkdir -p "$DRIVES_E_MAIN_DIR" 2>/dev/null || drive_common_warn "Leaving scratch primary mountpoint unavailable: $DRIVES_E_MAIN_DIR"
+
+        recover_mountpoint_path "$DRIVES_D_FALLBACK_DIR" "vault fallback mountpoint" || true
+        mkdir -p "$DRIVES_D_FALLBACK_DIR" 2>/dev/null || drive_common_warn "Unable to prepare vault fallback mountpoint: $DRIVES_D_FALLBACK_DIR"
+
+        recover_mountpoint_path "$DRIVES_E_FALLBACK_DIR" "scratch fallback mountpoint" || true
+        mkdir -p "$DRIVES_E_FALLBACK_DIR" 2>/dev/null || drive_common_warn "Unable to prepare scratch fallback mountpoint: $DRIVES_E_FALLBACK_DIR"
+    fi
 
     if [ ! -e "$DRIVES_C_DIR" ]; then
         mkdir -p "$DRIVES_C_DIR"

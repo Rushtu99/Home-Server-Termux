@@ -36,8 +36,10 @@ JELLYSEERR_DB_USER="${JELLYSEERR_DB_USER:-$POSTGRES_USER}"
 JELLYSEERR_DB_PASS="${JELLYSEERR_DB_PASS:-$POSTGRES_PASSWORD}"
 JELLYSEERR_BCRYPT_SHIM="${JELLYSEERR_BCRYPT_SHIM:-$PROJECT/scripts/jellyseerr-bcrypt-shim.cjs}"
 SERVICE_NAME="jellyseerr"
+SFQ_HELPER="${SFQ_HELPER:-$PROJECT/scripts/service-fail-quiet.sh}"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$JELLYSEERR_HOME" "$JELLYSEERR_DATA_DIR"
+[ -f "$SFQ_HELPER" ] && . "$SFQ_HELPER"
 
 if [ -z "$JELLYSEERR_NODE_BIN" ]; then
     if [ -x "$JELLYSEERR_NODE_ROOT/bin/node" ]; then
@@ -260,14 +262,49 @@ ensure_install() {
     ensure_build_output
 }
 
+postgres_dependency_ready() {
+    [ "$JELLYSEERR_DB_TYPE" = "postgres" ] || return 0
+
+    python3 - "$JELLYSEERR_DB_HOST" "$JELLYSEERR_DB_PORT" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+host = sys.argv[1]
+port = int(sys.argv[2])
+with socket.create_connection((host, port), timeout=2):
+    pass
+PY
+}
+
 start_service() {
     local node_options=""
+    local cooldown_left=0
 
     if is_running; then
+        if type sfq_mark_success >/dev/null 2>&1; then
+            sfq_mark_success "$RUNTIME_DIR" "$SERVICE_NAME"
+        fi
         return 0
     fi
 
-    ensure_install
+    if type sfq_is_cooldown_active >/dev/null 2>&1 && sfq_is_cooldown_active "$RUNTIME_DIR" "$SERVICE_NAME"; then
+        cooldown_left="$(sfq_remaining_cooldown "$RUNTIME_DIR" "$SERVICE_NAME" 2>/dev/null || echo 0)"
+        printf '[%s] %s is in fail-quiet cooldown (%ss remaining)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$SERVICE_NAME" "$cooldown_left" >> "$JELLYSEERR_LOG_PATH"
+        return 1
+    fi
+
+    if ! postgres_dependency_ready; then
+        if type sfq_record_failure >/dev/null 2>&1; then
+            sfq_record_failure "$RUNTIME_DIR" "$SERVICE_NAME" "$JELLYSEERR_LOG_PATH" "postgres dependency unavailable"
+        fi
+        return 1
+    fi
+
+    if ! ensure_install; then
+        if type sfq_record_failure >/dev/null 2>&1; then
+            sfq_record_failure "$RUNTIME_DIR" "$SERVICE_NAME" "$JELLYSEERR_LOG_PATH" "install/build prerequisite check failed"
+        fi
+        return 1
+    fi
     node_options="$(build_node_options)"
     local runtime_path="$PATH"
     if [ -d "$JELLYSEERR_NODE_ROOT/bin" ]; then
@@ -297,10 +334,16 @@ start_service() {
     for _ in $(seq 1 30); do
         sleep 1
         if is_running; then
+            if type sfq_mark_success >/dev/null 2>&1; then
+                sfq_mark_success "$RUNTIME_DIR" "$SERVICE_NAME"
+            fi
             return 0
         fi
     done
     rm -f "$JELLYSEERR_PID_PATH"
+    if type sfq_record_failure >/dev/null 2>&1; then
+        sfq_record_failure "$RUNTIME_DIR" "$SERVICE_NAME" "$JELLYSEERR_LOG_PATH" "listener not ready after launch"
+    fi
     return 1
 }
 

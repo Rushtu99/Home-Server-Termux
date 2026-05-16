@@ -25,6 +25,24 @@ SERVICE_NAME="postgres"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$POSTGRES_HOME" "$POSTGRES_SOCKET_DIR"
 
+is_listening() {
+    if command -v nc >/dev/null 2>&1; then
+        nc -z "$POSTGRES_BIND_HOST" "$POSTGRES_PORT" >/dev/null 2>&1
+        return $?
+    fi
+
+    python3 - "$POSTGRES_BIND_HOST" "$POSTGRES_PORT" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.create_connection((host, port), timeout=2):
+    pass
+PY
+}
+
 ensure_cluster() {
     [ -n "$POSTGRES_BIN" ] || {
         echo "postgresql is not installed" >&2
@@ -72,16 +90,37 @@ is_running() {
     "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" status >/dev/null 2>&1
 }
 
+is_healthy() {
+    is_running && is_listening
+}
+
 start_service() {
     ensure_cluster
-    if is_running; then
+    if is_healthy; then
         return 0
     fi
 
+    if is_running && ! is_listening; then
+        "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" stop -m fast >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
     "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" -l "$POSTGRES_LOG_PATH" -o "-h $POSTGRES_BIND_HOST -p $POSTGRES_PORT -k $POSTGRES_SOCKET_DIR" start >/dev/null
-    "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" status >/dev/null 2>&1
+
+    local attempts=0
+    local max_attempts=60
+    while [ "$attempts" -lt "$max_attempts" ]; do
+        if is_healthy; then
+            "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" status | awk '/PID:/ { print $2 }' | tr -d ',' > "$POSTGRES_PID_PATH" || true
+            ensure_database
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        sleep 1
+    done
+
     "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" status | awk '/PID:/ { print $2 }' | tr -d ',' > "$POSTGRES_PID_PATH" || true
-    ensure_database
+    return 1
 }
 
 stop_service() {
@@ -101,10 +140,14 @@ status_json() {
     local running=false
     local status="stopped"
     local checked_at=""
+    local status_code=1
 
-    if is_running; then
+    if is_healthy; then
         running=true
         status="running"
+        status_code=0
+    elif is_running; then
+        status="degraded"
     fi
 
     checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -113,6 +156,8 @@ status_json() {
         "$running" \
         "$status" \
         "$checked_at"
+
+    return "$status_code"
 }
 
 case "${1:-status}" in
@@ -130,7 +175,7 @@ case "${1:-status}" in
         if [ "${2:-}" = "--json" ]; then
             status_json
         else
-            is_running
+            is_healthy
         fi
         ;;
     *)

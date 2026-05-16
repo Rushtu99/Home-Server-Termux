@@ -542,12 +542,35 @@ def configure_jellyseerr(sonarr_key: str, radarr_key: str, series_root: str, mov
     JELLYSEERR_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     JELLYSEERR_SETTINGS_PATH.write_text(json.dumps(merged, indent=2))
     return {
+        "configured": True,
         "libraries": len(libraries),
         "radarr": len(merged.get("radarr") or []),
         "serverName": str(public_info.get("ServerName") or ""),
         "settingsPath": str(JELLYSEERR_SETTINGS_PATH),
         "sonarr": len(merged.get("sonarr") or []),
     }
+
+def configure_jellyseerr_safe(sonarr_key: str, radarr_key: str, series_root: str, movies_root: str):
+    try:
+        return configure_jellyseerr(sonarr_key, radarr_key, series_root, movies_root)
+    except urllib.error.URLError as exc:
+        return {
+            "configured": False,
+            "reason": f"Jellyfin is unreachable: {exc}",
+            "skipped": True,
+        }
+    except SystemExit as exc:
+        return {
+            "configured": False,
+            "reason": str(exc),
+            "skipped": True,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "configured": False,
+            "reason": f"Jellyseerr configuration failed: {exc}",
+            "skipped": True,
+        }
 
 sonarr_key = read_api_key(SONARR_CONFIG)
 radarr_key = read_api_key(RADARR_CONFIG)
@@ -581,7 +604,7 @@ ensure_prowlarr_app(prowlarr_base, prowlarr_key, "Sonarr", f"http://127.0.0.1:{S
 ensure_prowlarr_app(prowlarr_base, prowlarr_key, "Radarr", f"http://127.0.0.1:{RADARR_PORT}{RADARR_BASE_PATH}", radarr_key)
 
 bazarr_summary = configure_bazarr(sonarr_key, radarr_key)
-jellyseerr_summary = configure_jellyseerr(sonarr_key, radarr_key, series_root, movies_root)
+jellyseerr_summary = configure_jellyseerr_safe(sonarr_key, radarr_key, series_root, movies_root)
 
 summary = {
     "sonarr": {
