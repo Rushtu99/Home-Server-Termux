@@ -3,9 +3,16 @@
 import type { CSSProperties, FormEvent, InputHTMLAttributes, ReactNode } from 'react';
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react';
 import { appFetch, getDemoTerminalLines } from './demo-api';
+import {
+  DashboardActionButton,
+  DashboardCard,
+  DashboardSectionHeader,
+  DashboardSidebar,
+} from './dashboard-primitives';
 import type { DrivePayload } from './dashboard-utils';
 import { EMPTY_DRIVE_PAYLOAD, formatBytes as fmtBytes, formatDuration as fmtDuration, formatRate as fmtRate, normalizeDrivePayload } from './dashboard-utils';
 import { isDemoMode } from './demo-mode';
+import { TabNavbar } from './tab-navbar';
 import { DialogSurface, MenuButton } from './ui-primitives';
 import { usePolling } from './usePolling';
 import { useGatewayBase } from './useGatewayBase';
@@ -2565,7 +2572,6 @@ export default function Dashboard() {
   const mountedFtpFavouriteCount = mountedFtpEntries.length;
   const terminalService = serviceCatalogByKey.get('ttyd') || null;
   const llmService = serviceCatalogByKey.get('llm') || null;
-  const codexRevampedService = serviceCatalogByKey.get('codex_revamped') || null;
   const llmApiBaseUrl = `${gatewayBase.replace(/\/$/, '')}/api/openai/v1`;
   const llmLastUserMessage = [...llmMessages].reverse().find((entry) => entry.role === 'user') || null;
   const llmCanSend = llmMode === 'online'
@@ -3549,34 +3555,36 @@ export default function Dashboard() {
   return (
     <div style={{ ...styles.app, ...(isPhone ? styles.appPhone : {}), ...(isTablet ? styles.appTablet : {}) }}>
       {!isPhone && (
-        <aside style={{ ...styles.sidebar, ...(isTablet ? styles.sidebarTablet : {}) }}>
-          <div style={styles.brand}>{isTablet ? 'Hx' : 'HmSTx'}</div>
-          <nav aria-label="Dashboard Sections" style={{ ...styles.navGroup, ...(isTablet ? styles.navGroupTablet : {}) }}>
-            {TABS.map((tab) => (
-              <button
-                key={tab.key}
-                className="ui-button nav-ribbon-btn"
-                aria-pressed={activeTab === tab.key}
-                style={{ ...styles.navBtn, ...(activeTab === tab.key ? styles.navBtnActive : {}), ...(isTablet ? styles.navBtnTablet : {}) }}
-                type="button"
-                onClick={() => setActiveTab(tab.key)}
-              >
-                <span style={{ ...styles.navButtonContent, ...(isTablet ? styles.navButtonContentTablet : {}) }}>
-                  {navButtonIcon(tab.key)}
-                  <span style={styles.navButtonText}>{navButtonLabel(tab.key)}</span>
-                </span>
-              </button>
-            ))}
-          </nav>
-          <button
-            className="ui-button"
-            style={{ ...styles.navBtn, ...styles.logoutBtn, ...(isTablet ? styles.navBtnTablet : {}) }}
-            type="button"
-            onClick={() => clearSession()}
-          >
-            {isTablet ? 'Exit' : 'Log Out'}
-          </button>
-        </aside>
+        <DashboardSidebar
+          style={{ ...styles.sidebar, ...(isTablet ? styles.sidebarTablet : {}) }}
+          brand={<>{isTablet ? 'Hx' : 'HmSTx'}</>}
+          brandStyle={styles.brand}
+          footer={(
+            <button
+              className="ui-button"
+              style={{ ...styles.navBtn, ...styles.logoutBtn, ...(isTablet ? styles.navBtnTablet : {}) }}
+              type="button"
+              onClick={() => clearSession()}
+            >
+              {isTablet ? 'Exit' : 'Log Out'}
+            </button>
+          )}
+        >
+          <TabNavbar
+            ariaLabel="Dashboard Sections"
+            items={TABS}
+            activeKey={activeTab}
+            onSelect={setActiveTab}
+            renderIcon={navButtonIcon}
+            resolveLabel={(tab) => navButtonLabel(tab)}
+            navStyle={{ ...styles.navGroup, ...(isTablet ? styles.navGroupTablet : {}) }}
+            buttonClassName="ui-button nav-ribbon-btn"
+            buttonStyle={{ ...styles.navBtn, ...(isTablet ? styles.navBtnTablet : {}) }}
+            activeButtonStyle={styles.navBtnActive}
+            contentStyle={{ ...styles.navButtonContent, ...(isTablet ? styles.navButtonContentTablet : {}) }}
+            textStyle={styles.navButtonText}
+          />
+        </DashboardSidebar>
       )}
 
       <main id="app-main" style={{ ...styles.main, ...(isTablet ? styles.mainTablet : {}), ...(isPhone ? styles.mainPhone : {}) }}>
@@ -3640,18 +3648,18 @@ export default function Dashboard() {
             <div>
               <strong>Demo mode active.</strong> Service controls, telemetry, and file actions are simulated for the Pages preview.
             </div>
-            <button className="ui-button" type="button" style={styles.actionBtn} onClick={dismissDemoBanner}>
+            <DashboardActionButton style={styles.actionBtn} onClick={dismissDemoBanner}>
               Dismiss
-            </button>
+            </DashboardActionButton>
           </div>
         ) : null}
 
         {alertMessage ? (
           <div style={styles.bannerAlert} role="alert" aria-live="assertive">
             <div>{alertMessage}</div>
-            <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setAlertMessage('')}>
+            <DashboardActionButton style={styles.actionBtn} onClick={() => setAlertMessage('')}>
               Dismiss
-            </button>
+            </DashboardActionButton>
           </div>
         ) : null}
 
@@ -3868,9 +3876,9 @@ export default function Dashboard() {
                 <article className="hmstx-reveal hmstx-reveal-5 hmstx-hover-lift" style={{ ...styles.card, ...styles.homeCard }}>
                   <div style={{ ...styles.logControlRow, ...styles.homeLogControlRow }}>
                     <h3 style={{ ...styles.cardTitle, ...styles.homeCardTitle, marginBottom: 0 }}>Connected Users</h3>
-                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setConnectionsExpanded((current) => !current)}>
+                    <DashboardActionButton style={styles.actionBtn} onClick={() => setConnectionsExpanded((current) => !current)}>
                       {connectionsExpanded ? 'Compact columns' : 'Expand columns'}
-                    </button>
+                    </DashboardActionButton>
                   </div>
                   <div style={styles.tableWrapTight}>
                     <table style={{ ...styles.table, ...styles.homeTable }}>
@@ -3994,23 +4002,23 @@ export default function Dashboard() {
           >
             <div style={{ ...styles.homeLayout, ...(isCompact ? styles.homeLayoutCompact : {}) }}>
               <div style={styles.homePrimary}>
-                <article style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard as="article" style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Drive Summary</h3>
                       <p style={styles.smallLabel}>{filesystemStatus}</p>
                     </div>
                     <div style={styles.actionWrap}>
-                      <button className="ui-button" style={styles.actionBtn} type="button" disabled={driveBusy} onClick={() => void runDriveCheck()}>
+                      <DashboardActionButton style={styles.actionBtn} disabled={driveBusy} onClick={() => void runDriveCheck()}>
                         {driveBusy ? 'Checking…' : 'Check drives (manual)'}
-                      </button>
+                      </DashboardActionButton>
                       {gatewayBase ? (
                         <a href={`${gatewayBase}/files`} className="ui-button ui-button--primary" style={styles.linkBtn}>
                           Open Full Filesystem
                         </a>
                       ) : null}
                     </div>
-                  </div>
+                  </DashboardSectionHeader>
                   <div style={styles.mountList}>
                     <div style={styles.mountRow}>
                       <div style={styles.mountLeft}>
@@ -4036,15 +4044,15 @@ export default function Dashboard() {
                     ))}
                   </div>
                   {driveError ? <p style={{ ...styles.smallLabel, color: THEME.crimsonRed, marginTop: 12 }}>{driveError}</p> : null}
-                </article>
+                </DashboardCard>
 
-                <article style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard as="article" style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Quick Links</h3>
                       <p style={styles.smallLabel}>Jump straight into the full workspace at the share root you want.</p>
                     </div>
-                  </div>
+                  </DashboardSectionHeader>
                   <div style={styles.mountList}>
                     {dashboardShares.length === 0 ? (
                       <p style={styles.smallLabel}>No share shortcuts available yet.</p>
@@ -4057,16 +4065,16 @@ export default function Dashboard() {
                       ))
                     )}
                   </div>
-                </article>
+                </DashboardCard>
               </div>
 
               <div style={styles.homeSecondary}>
-                <article style={styles.card}>
+                <DashboardCard as="article" style={styles.card}>
                   <div style={styles.logControlRow}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Drive Log</h3>
-                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setShowDriveLog((value) => !value)}>
+                    <DashboardActionButton style={styles.actionBtn} onClick={() => setShowDriveLog((value) => !value)}>
                       {showDriveLog ? 'Hide' : 'Show'}
-                    </button>
+                    </DashboardActionButton>
                   </div>
                   {!showDriveLog ? (
                     <p style={styles.smallLabel}>{latestDriveEvent ? `${latestDriveEvent.event} · ${fmtDateTime(latestDriveEvent.timestamp)}` : 'No drive events yet.'}</p>
@@ -4084,7 +4092,7 @@ export default function Dashboard() {
                       ))}
                     </div>
                   )}
-                </article>
+                </DashboardCard>
               </div>
             </div>
           </Panel>
@@ -4098,46 +4106,46 @@ export default function Dashboard() {
           >
             <div style={styles.surfaceStack}>
               {storageProtection ? (
-                <article style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard as="article" style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Storage Guard</h3>
                       <p style={{ ...styles.smallLabel, color: storageProtectionTone }}>{storageProtectionSummary}</p>
                     </div>
                     <span style={{ ...styles.headerPill, color: storageProtectionTone }}>{storageProtection.state || 'unknown'}</span>
-                  </div>
+                  </DashboardSectionHeader>
                   <p style={styles.smallLabel}>
                     Blocked services: {storageBlockedServices.length > 0 ? storageBlockedServices.join(', ') : 'none'} · Stopped by watchdog: {storageStoppedByWatchdog.length}
                   </p>
                   <div style={styles.actionWrap}>
-                    <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void runStorageRecheck()} disabled={storageProtectionBusy}>
+                    <DashboardActionButton style={styles.serviceActionBtn} onClick={() => void runStorageRecheck()} disabled={storageProtectionBusy}>
                       {storageProtectionBusy ? 'Checking…' : 'Recheck Storage'}
-                    </button>
-                    <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => void resumeStorageServices()} disabled={storageProtectionBusy || !storageProtectionRecoverable}>
+                    </DashboardActionButton>
+                    <DashboardActionButton style={styles.serviceActionBtn} onClick={() => void resumeStorageServices()} disabled={storageProtectionBusy || !storageProtectionRecoverable}>
                       {storageProtectionBusy ? 'Working…' : 'Resume stopped'}
-                    </button>
+                    </DashboardActionButton>
                   </div>
                   <p style={{ ...styles.smallLabel, color: storageProtectionStatus ? storageProtectionStatusColor : THEME.muted }}>
                     {storageProtectionStatus || (storageProtectionRecoverable ? `${storageStoppedByWatchdog.length} service(s) await manual resume` : 'No pending resume actions')}
                   </p>
-                </article>
+                </DashboardCard>
               ) : null}
 
-              <article style={styles.card}>
-                <div style={styles.sectionHeader}>
+              <DashboardCard as="article" style={styles.card}>
+                <DashboardSectionHeader style={styles.sectionHeader}>
                   <div>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Download Services</h3>
                     <p style={styles.smallLabel}>Media automation hands off to this workspace. Keep queue health, peers, categories, and retry work here, then jump back to Jellyfin once imports land.</p>
                   </div>
                   <div style={styles.actionWrap}>
-                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => openTab('media')}>
+                    <DashboardActionButton style={styles.actionBtn} onClick={() => openTab('media')}>
                       Back To Media
-                    </button>
-                    <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => openTab('filesystem')}>
+                    </DashboardActionButton>
+                    <DashboardActionButton style={styles.actionBtn} onClick={() => openTab('filesystem')}>
                       Open Filesystem
-                    </button>
+                    </DashboardActionButton>
                   </div>
-                </div>
+                </DashboardSectionHeader>
                 {primaryDownloadService ? (
                   <div style={{ ...styles.mediaFeatureShell, marginBottom: 14, ...(isCompact ? styles.mediaFeatureShellCompact : {}) }}>
                     <div style={styles.mediaFeatureCopy}>
@@ -4184,7 +4192,7 @@ export default function Dashboard() {
                 <div style={styles.serviceCardGrid}>
                   {downloadServices.length > 0 ? downloadServices.map((entry) => renderServiceCard(entry)) : <p style={styles.smallLabel}>No dedicated download services are defined yet.</p>}
                 </div>
-              </article>
+              </DashboardCard>
             </div>
           </Panel>
         )}
@@ -4196,14 +4204,14 @@ export default function Dashboard() {
             meta={[`${mediaReadyCount}/${mediaWorkflowSteps.length} working`, mediaLibraryMounts.length > 0 ? `${mediaLibraryMounts.length} library mount${mediaLibraryMounts.length === 1 ? '' : 's'}` : 'Library storage unknown', 'Downloads in separate tab']}
           >
             <div style={styles.surfaceStack}>
-              <article style={styles.card}>
-                <div style={styles.sectionHeader}>
+              <DashboardCard as="article" style={styles.card}>
+                <DashboardSectionHeader style={styles.sectionHeader}>
                   <div>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Workflow</h3>
                     <p style={styles.smallLabel}>Jellyfin stays front-and-center. Requests, automation, subtitles, and Live TV support the same viewing surface, while download clients stay in their own tabs.</p>
                   </div>
                   <span style={styles.headerPill}>ARR merged here</span>
-                </div>
+                </DashboardSectionHeader>
                 <div style={{ ...styles.mediaWorkflowGrid, ...(isCompact ? styles.mediaWorkflowGridCompact : {}) }}>
                   {mediaWorkflowSteps.map((step, index) => (
                     <button
@@ -4235,22 +4243,23 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
-              </article>
+              </DashboardCard>
 
               <div style={{ ...styles.mediaWorkspaceGrid, ...(isCompact ? styles.mediaWorkspaceGridCompact : {}) }}>
-                <article
-                  ref={(node) => {
+                <DashboardCard
+                  as="article"
+                  cardRef={(node) => {
                     mediaSectionRefs.current.watch = node;
                   }}
                   style={styles.card}
                 >
-                  <div style={styles.sectionHeader}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Watch</h3>
                       <p style={styles.smallLabel}>Jellyfin is the primary user-facing surface for movies, series, and Live TV playback.</p>
                     </div>
                     <span style={styles.headerPill}>{jellyfinService ? serviceStatusLabel(jellyfinService.status) : 'Missing'}</span>
-                  </div>
+                  </DashboardSectionHeader>
                   {jellyfinService ? (
                     <div style={{ ...styles.mediaFeatureShell, ...(isCompact ? styles.mediaFeatureShellCompact : {}) }}>
                       <div style={styles.mediaFeatureCopy}>
@@ -4292,22 +4301,23 @@ export default function Dashboard() {
                   ) : (
                     <p style={styles.smallLabel}>Jellyfin is not available in the current service catalog.</p>
                   )}
-                </article>
+                </DashboardCard>
 
                 <div style={styles.mediaSideStack}>
-                  <article
-                    ref={(node) => {
+                  <DashboardCard
+                    as="article"
+                    cardRef={(node) => {
                       mediaSectionRefs.current.requests = node;
                     }}
                     style={styles.card}
                   >
-                    <div style={styles.sectionHeader}>
+                    <DashboardSectionHeader style={styles.sectionHeader}>
                       <div>
                         <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Requests</h3>
                         <p style={styles.smallLabel}>Request intake sits upstream of automation so family members do not need to touch Sonarr or Radarr directly.</p>
                       </div>
                       <span style={styles.headerPill}>{serviceStatusLabel(requestStatus, { readyLabel: 'Ready' })}</span>
-                    </div>
+                    </DashboardSectionHeader>
                     {requestPrimary ? (
                       <div style={styles.mediaMiniSection}>
                         <div style={{ ...styles.serviceBadgeRow, marginBottom: 8 }}>
@@ -4330,21 +4340,22 @@ export default function Dashboard() {
                     ) : (
                       <p style={styles.smallLabel}>No request service is defined yet. Media requests should stay optional and sit in front of automation when added.</p>
                     )}
-                  </article>
+                  </DashboardCard>
 
-                  <article
-                    ref={(node) => {
+                  <DashboardCard
+                    as="article"
+                    cardRef={(node) => {
                       mediaSectionRefs.current.downloads = node;
                     }}
                     style={styles.card}
                   >
-                    <div style={styles.sectionHeader}>
+                    <DashboardSectionHeader style={styles.sectionHeader}>
                       <div>
                         <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Downloads</h3>
                         <p style={styles.smallLabel}>Queue inspection, peers, and transfer troubleshooting stay outside Media so download workspaces can grow independently.</p>
                       </div>
                       <span style={styles.headerPill}>{downloadsStatus === 'working' ? 'Ready' : serviceStatusLabel(downloadsStatus)}</span>
-                    </div>
+                    </DashboardSectionHeader>
                     <div style={styles.mediaMiniSection}>
                       <div style={{ ...styles.serviceBadgeRow, marginBottom: 8 }}>
                         {renderServiceBadge('Downloads tab', styles.serviceMiniBadgeMuted, 'downloads:location')}
@@ -4366,21 +4377,22 @@ export default function Dashboard() {
                         </button>
                       </div>
                     </div>
-                  </article>
+                  </DashboardCard>
 
-                  <article
-                    ref={(node) => {
+                  <DashboardCard
+                    as="article"
+                    cardRef={(node) => {
                       mediaSectionRefs.current.subtitles = node;
                     }}
                     style={styles.card}
                   >
-                    <div style={styles.sectionHeader}>
+                    <DashboardSectionHeader style={styles.sectionHeader}>
                       <div>
                         <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Subtitles</h3>
                         <p style={styles.smallLabel}>Subtitle work happens after import, so it stays adjacent to Media instead of buried inside raw service controls.</p>
                       </div>
                       <span style={styles.headerPill}>{subtitlePrimary ? serviceStatusLabel(subtitleStatus, { readyLabel: 'Ready' }) : 'Blocked'}</span>
-                    </div>
+                    </DashboardSectionHeader>
                     {subtitlePrimary ? (
                       <div style={styles.mediaMiniSection}>
                         <div style={{ ...styles.serviceBadgeRow, marginBottom: 8 }}>
@@ -4398,23 +4410,24 @@ export default function Dashboard() {
                     ) : (
                       <p style={styles.smallLabel}>No subtitle service is defined yet.</p>
                     )}
-                  </article>
+                  </DashboardCard>
                 </div>
               </div>
 
-              <article
-                ref={(node) => {
+              <DashboardCard
+                as="article"
+                cardRef={(node) => {
                   mediaSectionRefs.current['live-tv'] = node;
                 }}
                 style={styles.card}
               >
-                <div style={styles.sectionHeader}>
+                <DashboardSectionHeader style={styles.sectionHeader}>
                   <div>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Live TV</h3>
                     <p style={styles.smallLabel}>Center Live TV around Jellyfin’s official flow: add an M3U tuner, connect XMLTV guide data, map channels, then watch in Jellyfin.</p>
                   </div>
                   <span style={styles.headerPill}>{serviceStatusLabel(liveTvStatus, { unknownLabel: 'Setup' })}</span>
-                </div>
+                </DashboardSectionHeader>
                 <div style={styles.mediaChecklist}>
                   {liveTvChecklist.map((item) => (
                     <div key={item.id} style={styles.mediaChecklistRow}>
@@ -4440,25 +4453,26 @@ export default function Dashboard() {
                       Open Jellyfin
                     </a>
                   ) : null}
-                  <button className="ui-button" style={styles.serviceActionBtn} type="button" onClick={() => toggleSection('media:support')}>
+                  <DashboardActionButton style={styles.serviceActionBtn} onClick={() => toggleSection('media:support')}>
                     {collapsedSections['media:support'] ? 'Show support stack' : 'Hide support stack'}
-                  </button>
+                  </DashboardActionButton>
                 </div>
-              </article>
+              </DashboardCard>
 
-              <article
-                ref={(node) => {
+              <DashboardCard
+                as="article"
+                cardRef={(node) => {
                   mediaSectionRefs.current.automation = node;
                 }}
                 style={styles.card}
               >
-                <div style={styles.sectionHeader}>
+                <DashboardSectionHeader style={styles.sectionHeader}>
                   <div>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Automation</h3>
                     <p style={styles.smallLabel}>Prowlarr manages indexers, Sonarr and Radarr drive grab and import policy, and download execution stays in the Downloads tab.</p>
                   </div>
                   <span style={styles.headerPill}>{arrHealthyCount}/{automationServices.length} working</span>
-                </div>
+                </DashboardSectionHeader>
                 <div style={styles.mediaSectionIntro}>
                   <span style={styles.mediaInfoItem}>Prowlarr syncs indexers into Sonarr and Radarr.</span>
                   <span style={styles.mediaInfoItem}>Sonarr and Radarr monitor downloads, import results, and move them into the Jellyfin library.</span>
@@ -4467,27 +4481,28 @@ export default function Dashboard() {
                 <div style={styles.serviceCardGrid}>
                   {automationServices.map((entry) => renderServiceCard(entry))}
                 </div>
-              </article>
+              </DashboardCard>
 
-              <article
-                ref={(node) => {
+              <DashboardCard
+                as="article"
+                cardRef={(node) => {
                   mediaSectionRefs.current.support = node;
                 }}
                 style={styles.card}
               >
-                <div style={styles.sectionHeader}>
+                <DashboardSectionHeader style={styles.sectionHeader}>
                   <div>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Advanced Support</h3>
                     <p style={styles.smallLabel}>Redis and PostgreSQL support Live TV metadata and future operator tooling, but they should not dominate the main Media workflow.</p>
                   </div>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleSection('media:support')}>
+                  <DashboardActionButton style={styles.actionBtn} onClick={() => toggleSection('media:support')}>
                     {collapsedSections['media:support'] ? 'Show' : 'Hide'}
-                  </button>
-                </div>
+                  </DashboardActionButton>
+                </DashboardSectionHeader>
                 <div style={{ ...styles.serviceCardGrid, ...(collapsedSections['media:support'] ? styles.collapsedSection : {}) }}>
                   {mediaSupportServices.length > 0 ? mediaSupportServices.map((entry) => renderServiceCard(entry)) : <p style={styles.smallLabel}>No support services are defined for Media.</p>}
                 </div>
-              </article>
+              </DashboardCard>
             </div>
           </Panel>
         )}
@@ -4500,14 +4515,14 @@ export default function Dashboard() {
           >
             <div style={{ ...styles.ftpWorkspace, ...(isCompact ? styles.ftpWorkspaceCompact : {}) }}>
               <div style={styles.ftpSidebar}>
-                <div style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Saved Favourites</h3>
                     <div style={styles.actionWrap}>
-                      <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => resetFtpFavouriteEditor()}>New</button>
-                      <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpFavourites()}>Reload</button>
+                      <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => resetFtpFavouriteEditor()}>New</DashboardActionButton>
+                      <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => void loadFtpFavourites()}>Reload</DashboardActionButton>
                     </div>
-                  </div>
+                  </DashboardSectionHeader>
                   <p style={styles.smallLabel}>Saved remotes can be browsed live or mounted into a drive folder. Mount errors stay attached to the favourite so they are visible without opening logs.</p>
                   <div style={styles.ftpFavouriteList}>
                     {ftpFavourites.length === 0 && (
@@ -4547,26 +4562,26 @@ export default function Dashboard() {
                             <p style={styles.mountMeta}>{describeFtpMount(favourite.mount)}</p>
                           </div>
                           <div style={styles.actionWrap}>
-                            <button className="ui-button" disabled={ftpBusy || ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void browseFtpFavourite(favourite)}>Browse</button>
-                            <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void toggleFtpFavouriteMount(favourite)}>
+                            <DashboardActionButton disabled={ftpBusy || ftpFavouritesBusy} style={styles.actionBtn} onClick={() => void browseFtpFavourite(favourite)}>Browse</DashboardActionButton>
+                            <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => void toggleFtpFavouriteMount(favourite)}>
                               {favourite.mount?.mounted ? 'Unmount' : 'Mount'}
-                            </button>
-                            <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => editFtpFavourite(favourite)}>Edit</button>
-                            <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void deleteFtpFavourite(favourite)}>Delete</button>
+                            </DashboardActionButton>
+                            <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => editFtpFavourite(favourite)}>Edit</DashboardActionButton>
+                            <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => void deleteFtpFavourite(favourite)}>Delete</DashboardActionButton>
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                </div>
+                </DashboardCard>
 
-                <div style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>{ftpEditingFavouriteId === null ? 'New Favourite' : 'Edit Favourite'}</h3>
-                    <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => resetFtpFavouriteEditor()}>
+                    <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => resetFtpFavouriteEditor()}>
                       {ftpEditingFavouriteId === null ? 'Reset' : 'Clear'}
-                    </button>
-                  </div>
+                    </DashboardActionButton>
+                  </DashboardSectionHeader>
                   <div style={styles.ftpActionGroup}>
                     <TextField id="ftp-favourite-name" label="Display Name" name="ftpFavouriteName" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.name} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, name: value }))} />
                     <TextField id="ftp-favourite-host" label="Host" name="ftpFavouriteHost" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpFavouriteDraft.host} onChange={(value) => setFtpFavouriteDraft((prev) => ({ ...prev, host: value }))} />
@@ -4582,22 +4597,22 @@ export default function Dashboard() {
                   </label>
                   <p style={styles.smallLabel}>Leave the password blank while editing if you want to keep the stored secret unchanged.</p>
                   <div style={styles.actionWrap}>
-                    <button className="ui-button" disabled={ftpFavouritesBusy} style={styles.actionBtn} type="button" onClick={() => void saveFtpFavourite()}>
+                    <DashboardActionButton disabled={ftpFavouritesBusy} style={styles.actionBtn} onClick={() => void saveFtpFavourite()}>
                       {ftpEditingFavouriteId === null ? 'Save Favourite' : 'Update Favourite'}
-                    </button>
+                    </DashboardActionButton>
                   </div>
-                </div>
+                </DashboardCard>
               </div>
 
               <div style={styles.ftpMain}>
-                <div style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Connection</h3>
                       <p style={styles.smallLabel}>Browse a saved favourite or detach and use the manual fields for one-off sessions.</p>
                     </div>
                     {activeFtpFavourite && <span style={styles.headerPill}>Using {activeFtpFavourite.name}</span>}
-                  </div>
+                  </DashboardSectionHeader>
                   <div style={styles.ftpFormGrid}>
                     <TextField id="ftp-host" label="Host" name="ftpHost" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} value={ftpHost} onChange={(value) => { setFtpActiveFavouriteId(null); setFtpHost(value); }} />
                     <TextField id="ftp-port" label="Port" name="ftpPort" autoComplete="off" inputMode="numeric" spellCheck={false} value={ftpPort} onChange={(value) => { setFtpActiveFavouriteId(null); setFtpPort(value); }} />
@@ -4609,13 +4624,13 @@ export default function Dashboard() {
                     <span>Use FTPS/TLS</span>
                   </label>
                   <div style={styles.actionWrap}>
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(activeFtpFavourite?.remotePath || '/')}>Connect</button>
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(ftpPath)}>Refresh</button>
-                    <button className="ui-button" disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</button>
+                    <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void loadFtpDirectory(activeFtpFavourite?.remotePath || '/')}>Connect</DashboardActionButton>
+                    <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void loadFtpDirectory(ftpPath)}>Refresh</DashboardActionButton>
+                    <DashboardActionButton disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} onClick={() => void loadFtpDirectory(parentRemotePath(ftpPath))}>Up One Level</DashboardActionButton>
                     {ftpActiveFavouriteId !== null && (
-                      <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => { setFtpActiveFavouriteId(null); setFtpStatus('Detached from saved favourite. Manual connection fields are active now.'); }}>
+                      <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => { setFtpActiveFavouriteId(null); setFtpStatus('Detached from saved favourite. Manual connection fields are active now.'); }}>
                         Manual Mode
-                      </button>
+                      </DashboardActionButton>
                     )}
                   </div>
                   <p style={styles.codeLine}>Current remote path: <code>{ftpPath}</code></p>
@@ -4633,9 +4648,9 @@ export default function Dashboard() {
                   >
                     {ftpStatus || 'Ready'}
                   </p>
-                </div>
+                </DashboardCard>
 
-                <div style={styles.card}>
+                <DashboardCard style={styles.card}>
                   <h3 style={styles.cardTitle}>Transfer Actions</h3>
                   <div style={styles.ftpActionGroup}>
                     <TextField
@@ -4662,7 +4677,7 @@ export default function Dashboard() {
                       value={ftpUploadRemotePath}
                       onChange={setFtpUploadRemotePath}
                     />
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void uploadToFtp()}>Upload Local File</button>
+                    <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void uploadToFtp()}>Upload Local File</DashboardActionButton>
                   </div>
                   <div style={styles.ftpActionGroup}>
                     <TextField
@@ -4677,12 +4692,12 @@ export default function Dashboard() {
                       value={ftpFolderName}
                       onChange={setFtpFolderName}
                     />
-                    <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void createFtpFolder()}>Create Folder</button>
+                    <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void createFtpFolder()}>Create Folder</DashboardActionButton>
                   </div>
                   <p style={styles.smallLabel}>The row menu in the listing can prefill the upload target for the folder or file you choose.</p>
-                </div>
+                </DashboardCard>
 
-                <div style={styles.card}>
+                <DashboardCard style={styles.card}>
                   <div className="fs-topbar fs-topbar--path">
                     <div className="fs-pathbar-shell">
                       <div className="fs-pathbar" aria-label="Remote path">
@@ -4702,8 +4717,8 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="fs-topbar__actions">
-                      <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(ftpPath)}>Refresh</button>
-                      <button className="ui-button" disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(parentRemotePath(ftpPath))}>Up</button>
+                      <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void loadFtpDirectory(ftpPath)}>Refresh</DashboardActionButton>
+                      <DashboardActionButton disabled={ftpBusy || ftpPath === '/'} style={styles.actionBtn} onClick={() => void loadFtpDirectory(parentRemotePath(ftpPath))}>Up</DashboardActionButton>
                     </div>
                   </div>
                   <div className="fs-topbar fs-topbar--details">
@@ -4757,9 +4772,9 @@ export default function Dashboard() {
 
                             <div className="fs-browser-actions">
                               {isDirectory ? (
-                                <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</button>
+                                <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void loadFtpDirectory(joinRemotePath(ftpPath, entry.name))}>Open</DashboardActionButton>
                               ) : (
-                                <button className="ui-button" disabled={ftpBusy} style={styles.actionBtn} type="button" onClick={() => void downloadFtpEntry(entry)}>Pull</button>
+                                <DashboardActionButton disabled={ftpBusy} style={styles.actionBtn} onClick={() => void downloadFtpEntry(entry)}>Pull</DashboardActionButton>
                               )}
                               <div className="fs-row-menu">
                                 <MenuButton
@@ -4792,7 +4807,7 @@ export default function Dashboard() {
                       })
                     )}
                   </div>
-                </div>
+                </DashboardCard>
               </div>
             </div>
           </Panel>
@@ -4828,29 +4843,25 @@ export default function Dashboard() {
               </div>
 
               {llmSubview === 'chat' ? (
-                <div style={styles.card}>
+                <DashboardCard style={styles.card}>
                   <div style={styles.llmChatHead}>
                     <div>
                       <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Chat</h3>
                       <p style={styles.smallLabel}>History is persisted per admin user session.</p>
                     </div>
                     <div style={styles.actionWrap}>
-                      <button
-                        className="ui-button"
+                      <DashboardActionButton
                         style={{ ...styles.actionBtn, ...(llmMode === 'local' ? styles.llmModeBtnActive : {}) }}
-                        type="button"
                         onClick={() => setLlmMode('local')}
                       >
                         Local
-                      </button>
-                      <button
-                        className="ui-button"
+                      </DashboardActionButton>
+                      <DashboardActionButton
                         style={{ ...styles.actionBtn, ...(llmMode === 'online' ? styles.llmModeBtnActive : {}) }}
-                        type="button"
                         onClick={() => setLlmMode('online')}
                       >
                         Online
-                      </button>
+                      </DashboardActionButton>
                       {llmMode === 'online' ? (
                         <select
                           className="ui-input"
@@ -4866,16 +4877,16 @@ export default function Dashboard() {
                         </select>
                       ) : null}
                       {isPhone ? (
-                        <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setLlmHistoryOpen(true)}>
+                        <DashboardActionButton style={styles.actionBtn} onClick={() => setLlmHistoryOpen(true)}>
                           History
-                        </button>
+                        </DashboardActionButton>
                       ) : null}
-                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => { setLlmConversationId(null); setLlmMessages([]); }}>
+                      <DashboardActionButton style={styles.actionBtn} onClick={() => { setLlmConversationId(null); setLlmMessages([]); }}>
                         New Chat
-                      </button>
-                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => void loadLlmConversations()}>
+                      </DashboardActionButton>
+                      <DashboardActionButton style={styles.actionBtn} onClick={() => void loadLlmConversations()}>
                         Refresh
-                      </button>
+                      </DashboardActionButton>
                     </div>
                   </div>
 
@@ -4970,24 +4981,21 @@ export default function Dashboard() {
                           }}
                         />
                         <div style={styles.llmComposerActions}>
-                          <button
-                            className="ui-button"
+                          <DashboardActionButton
                             style={styles.actionBtn}
-                            type="button"
                             disabled={llmBusy || !llmLastUserMessage}
                             onClick={() => void retryLastLlmPrompt()}
                           >
                             Retry Last
-                          </button>
-                          <button
+                          </DashboardActionButton>
+                          <DashboardActionButton
                             className="ui-button ui-button--primary"
                             style={styles.actionBtn}
-                            type="button"
                             disabled={llmBusy || !llmPrompt.trim() || !llmCanSend}
                             onClick={() => void sendLlmPrompt()}
                           >
                             {llmBusy ? 'Sending…' : 'Send'}
-                          </button>
+                          </DashboardActionButton>
                         </div>
                       </div>
                     </div>
@@ -4998,27 +5006,21 @@ export default function Dashboard() {
                       {llmStatus}
                     </p>
                   ) : null}
-                </div>
+                </DashboardCard>
               ) : (
                 <>
                   {llmService ? renderServiceCard(llmService) : (
-                    <div style={styles.card}>
+                    <DashboardCard style={styles.card}>
                       <p style={styles.smallLabel}>Local LLM service is not present in the service catalog.</p>
-                    </div>
+                    </DashboardCard>
                   )}
-                  {codexRevampedService ? renderServiceCard(codexRevampedService) : (
-                    <div style={styles.card}>
-                      <p style={styles.smallLabel}>Codex ReVamped service is not present in the service catalog.</p>
-                    </div>
-                  )}
-
-                  <div style={styles.card}>
-                    <div style={styles.sectionHeader}>
+                  <DashboardCard style={styles.card}>
+                    <DashboardSectionHeader style={styles.sectionHeader}>
                       <div>
                         <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Access Settings</h3>
                         <p style={styles.smallLabel}>Use OpenAI-compatible endpoints behind the gateway with your configured LLM API key.</p>
                       </div>
-                    </div>
+                    </DashboardSectionHeader>
                     <div style={styles.mountList}>
                       <div style={styles.mountRow}>
                         <div style={styles.mountLeft}>
@@ -5089,40 +5091,37 @@ export default function Dashboard() {
                         </div>
                         <div style={styles.mountRight}>
                           <div style={styles.actionWrap}>
-                            <button
-                              className="ui-button"
+                            <DashboardActionButton
                               style={styles.actionBtn}
-                              type="button"
                               disabled={llmModelBusyId === 'online-refresh'}
                               onClick={() => void refreshOnlineLlmModels()}
                             >
                               {llmModelBusyId === 'online-refresh' ? 'Refreshing…' : 'Refresh'}
-                            </button>
-                            <button
+                            </DashboardActionButton>
+                            <DashboardActionButton
                               className="ui-button ui-button--primary"
                               style={styles.actionBtn}
-                              type="button"
                               disabled={!llmOnlineConfigured || !llmOnlineAvailable || !llmOnlineModelId || llmModelBusyId === 'online-select'}
                               onClick={() => void selectOnlineLlmModel()}
                             >
                               {llmModelBusyId === 'online-select' ? 'Saving…' : 'Save'}
-                            </button>
+                            </DashboardActionButton>
                           </div>
                         </div>
                       </div>
                     </div>
-                  </div>
+                  </DashboardCard>
 
-                  <div style={styles.card}>
-                    <div style={styles.sectionHeader}>
+                  <DashboardCard style={styles.card}>
+                    <DashboardSectionHeader style={styles.sectionHeader}>
                       <div>
                         <h3 style={{ ...styles.cardTitle, marginBottom: 4 }}>Models</h3>
                         <p style={styles.smallLabel}>Install curated presets or attach a local GGUF path. Only installed models can be selected.</p>
                       </div>
-                      <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => void loadLlmState()}>
+                      <DashboardActionButton style={styles.actionBtn} onClick={() => void loadLlmState()}>
                         Refresh
-                      </button>
-                    </div>
+                      </DashboardActionButton>
+                    </DashboardSectionHeader>
                     <div style={{ ...styles.serviceCardGrid, marginTop: 10 }}>
                       {llmModels.length === 0 ? (
                         <p style={styles.smallLabel}>No models discovered yet.</p>
@@ -5143,24 +5142,20 @@ export default function Dashboard() {
                               </div>
                             </div>
                             <div style={styles.serviceCardRail}>
-                              <button
-                                className="ui-button"
+                              <DashboardActionButton
                                 style={styles.serviceActionBtn}
-                                type="button"
                                 disabled={llmModelBusyId === model.id || !model.installed || llmActiveModelId === model.id}
                                 onClick={() => void selectLlmModel(model.id)}
                               >
                                 {llmModelBusyId === model.id ? 'Applying…' : 'Use'}
-                              </button>
-                              <button
-                                className="ui-button"
+                              </DashboardActionButton>
+                              <DashboardActionButton
                                 style={styles.serviceActionBtn}
-                                type="button"
                                 disabled={llmModelBusyId === model.id || model.installed}
                                 onClick={() => void pullLlmModel(model.id)}
                               >
                                 {llmModelBusyId === model.id ? 'Pulling…' : model.installed ? 'Installed' : 'Pull'}
-                              </button>
+                              </DashboardActionButton>
                             </div>
                           </div>
                         </article>
@@ -5191,9 +5186,9 @@ export default function Dashboard() {
                         placeholder="/data/data/com.termux/files/home/services/llm/models/custom.gguf"
                       />
                       <div style={styles.actionWrap}>
-                        <button className="ui-button" style={styles.actionBtn} type="button" disabled={llmModelBusyId === 'add-local'} onClick={() => void addLocalLlmModel()}>
+                        <DashboardActionButton style={styles.actionBtn} disabled={llmModelBusyId === 'add-local'} onClick={() => void addLocalLlmModel()}>
                           {llmModelBusyId === 'add-local' ? 'Adding…' : 'Add Local Model'}
-                        </button>
+                        </DashboardActionButton>
                       </div>
                     </div>
                     {llmPullJobs.length > 0 ? (
@@ -5211,7 +5206,7 @@ export default function Dashboard() {
                         ))}
                       </div>
                     ) : null}
-                  </div>
+                  </DashboardCard>
                 </>
               )}
             </div>
@@ -5225,41 +5220,41 @@ export default function Dashboard() {
             meta={[`Signed in as ${sessionUser?.username || 'unknown'}`, `Role: ${sessionUser?.role || 'user'}`]}
           >
             <div style={styles.surfaceStack}>
-              <div style={styles.card}>
+              <DashboardCard style={styles.card}>
                 <h3 style={styles.cardTitle}>Appearance & Power</h3>
                 <p style={styles.smallLabel}>Theme, polling mode, and onboarding help are managed here instead of the global header.</p>
                 <div style={styles.actionWrap}>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={toggleTheme}>Cycle Theme</button>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setLowPowerMode((current) => !current)}>
+                  <DashboardActionButton style={styles.actionBtn} onClick={toggleTheme}>Cycle Theme</DashboardActionButton>
+                  <DashboardActionButton style={styles.actionBtn} onClick={() => setLowPowerMode((current) => !current)}>
                     {lowPowerMode ? 'Disable Low-Power' : 'Enable Low-Power'}
-                  </button>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => setShowOnboarding(true)}>Help</button>
+                  </DashboardActionButton>
+                  <DashboardActionButton style={styles.actionBtn} onClick={() => setShowOnboarding(true)}>Help</DashboardActionButton>
                 </div>
-              </div>
+              </DashboardCard>
 
-              <div style={styles.card}>
+              <DashboardCard style={styles.card}>
                 <h3 style={styles.cardTitle}>Session</h3>
                 <p style={styles.smallLabel}>Session access is cookie-based and invalidates on logout or timeout.</p>
                 <div style={styles.actionWrap}>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => clearSession()}>Log Out Everywhere Here</button>
+                  <DashboardActionButton style={styles.actionBtn} onClick={() => clearSession()}>Log Out Everywhere Here</DashboardActionButton>
                 </div>
-              </div>
+              </DashboardCard>
 
-              <div style={styles.card}>
+              <DashboardCard style={styles.card}>
                 <h3 style={styles.cardTitle}>Logging</h3>
                 <p style={styles.smallLabel}>Verbose mode keeps richer audit and service transition entries in the dashboard log.</p>
                 <div style={styles.actionWrap}>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(true)}>Enable Verbose</button>
-                  <button className="ui-button" style={styles.actionBtn} type="button" onClick={() => toggleVerboseLogging(false)}>Disable Verbose</button>
+                  <DashboardActionButton style={styles.actionBtn} onClick={() => toggleVerboseLogging(true)}>Enable Verbose</DashboardActionButton>
+                  <DashboardActionButton style={styles.actionBtn} onClick={() => toggleVerboseLogging(false)}>Disable Verbose</DashboardActionButton>
                 </div>
-              </div>
+              </DashboardCard>
 
               {sessionUser?.role === 'admin' ? (
-                <div style={styles.card}>
-                  <div style={styles.sectionHeader}>
+                <DashboardCard style={styles.card}>
+                  <DashboardSectionHeader style={styles.sectionHeader}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Users</h3>
                     <span style={styles.smallLabel}>{managedUsers.length} managed users</span>
-                  </div>
+                  </DashboardSectionHeader>
                   <div style={styles.tableWrap}>
                     <table style={styles.table}>
                       <thead>
@@ -5283,28 +5278,22 @@ export default function Dashboard() {
                             <td style={styles.td}>{user.isDisabled ? 'disabled' : 'active'}</td>
                             <td style={styles.td}>
                               <div style={styles.ftpRowActions}>
-                                <button
-                                  className="ui-button"
+                                <DashboardActionButton
                                   style={styles.actionBtn}
-                                  type="button"
                                   disabled={usersBusy || user.username === sessionUser?.username}
                                   onClick={() => void updateManagedUser(user, { role: user.role === 'admin' ? 'user' : 'admin' })}
                                 >
                                   {user.role === 'admin' ? 'Make User' : 'Make Admin'}
-                                </button>
-                                <button
-                                  className="ui-button"
+                                </DashboardActionButton>
+                                <DashboardActionButton
                                   style={styles.actionBtn}
-                                  type="button"
                                   disabled={usersBusy || user.username === sessionUser?.username}
                                   onClick={() => void updateManagedUser(user, { isDisabled: !user.isDisabled })}
                                 >
                                   {user.isDisabled ? 'Enable' : 'Disable'}
-                                </button>
-                                <button
-                                  className="ui-button"
+                                </DashboardActionButton>
+                                <DashboardActionButton
                                   style={styles.actionBtn}
-                                  type="button"
                                   disabled={usersBusy}
                                   onClick={() => {
                                     const nextPassword = window.prompt(`Set a new password for ${user.username}`);
@@ -5315,7 +5304,7 @@ export default function Dashboard() {
                                   }}
                                 >
                                   Reset Password
-                                </button>
+                                </DashboardActionButton>
                               </div>
                             </td>
                           </tr>
@@ -5324,10 +5313,10 @@ export default function Dashboard() {
                     </table>
                   </div>
 
-                  <div style={{ ...styles.sectionHeader, marginTop: 16 }}>
+                  <DashboardSectionHeader style={{ ...styles.sectionHeader, marginTop: 16 }}>
                     <h3 style={{ ...styles.cardTitle, marginBottom: 0 }}>Create User</h3>
                     <span style={styles.smallLabel}>Use this for per-user share grants and controlled read-only access.</span>
-                  </div>
+                  </DashboardSectionHeader>
                   <div style={styles.ftpActionGroup}>
                     <TextField
                       id="user-create-name"
@@ -5363,12 +5352,12 @@ export default function Dashboard() {
                         <option value="admin">Admin</option>
                       </select>
                     </label>
-                    <button className="ui-button" style={styles.actionBtn} type="button" disabled={usersBusy} onClick={() => void createManagedUser()}>
+                    <DashboardActionButton style={styles.actionBtn} disabled={usersBusy} onClick={() => void createManagedUser()}>
                       {usersBusy ? 'Saving…' : 'Create User'}
-                    </button>
+                    </DashboardActionButton>
                   </div>
                   {userStatus ? <p style={{ ...styles.smallLabel, color: userStatus.toLowerCase().includes('unable') || userStatus.toLowerCase().includes('error') ? THEME.crimsonRed : THEME.ok }}>{userStatus}</p> : null}
-                </div>
+                </DashboardCard>
               ) : null}
             </div>
           </Panel>
@@ -5377,24 +5366,20 @@ export default function Dashboard() {
       </main>
 
       {isPhone && (
-        <nav aria-label="Dashboard Sections" style={styles.bottomNav}>
-          {TABS.map((tab) => (
-            <button
-              key={tab.key}
-              className="ui-button"
-              aria-pressed={activeTab === tab.key}
-              aria-label={tab.label}
-              style={{ ...styles.bottomNavBtn, ...(activeTab === tab.key ? styles.bottomNavBtnActive : {}) }}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-            >
-              <span style={styles.bottomNavBtnContent}>
-                {navButtonIcon(tab.key)}
-                <span style={styles.bottomNavBtnText}>{tab.label}</span>
-              </span>
-            </button>
-          ))}
-        </nav>
+        <TabNavbar
+          ariaLabel="Dashboard Sections"
+          items={TABS}
+          activeKey={activeTab}
+          onSelect={setActiveTab}
+          renderIcon={navButtonIcon}
+          resolveLabel={(tab) => navButtonLabel(tab)}
+          navStyle={styles.bottomNav}
+          buttonClassName="ui-button"
+          buttonStyle={styles.bottomNavBtn}
+          activeButtonStyle={styles.bottomNavBtnActive}
+          contentStyle={styles.bottomNavBtnContent}
+          textStyle={styles.bottomNavBtnText}
+        />
       )}
 
       <DialogSurface
@@ -5458,15 +5443,15 @@ export default function Dashboard() {
           </div>
         </div>
         <div style={{ ...styles.actionWrap, marginTop: 16 }}>
-          <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => openExternalLink(DOCS_HUB_URL)}>
+          <DashboardActionButton style={styles.actionBtn} onClick={() => openExternalLink(DOCS_HUB_URL)}>
             Docs Hub
-          </button>
-          <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => openExternalLink(ROADMAP_DOC_URL)}>
+          </DashboardActionButton>
+          <DashboardActionButton style={styles.actionBtn} onClick={() => openExternalLink(ROADMAP_DOC_URL)}>
             Roadmap
-          </button>
-          <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={dismissOnboarding}>
+          </DashboardActionButton>
+          <DashboardActionButton className="ui-button ui-button--primary" style={styles.actionBtn} onClick={dismissOnboarding}>
             Get Started
-          </button>
+          </DashboardActionButton>
         </div>
       </DialogSurface>
 
@@ -5483,12 +5468,12 @@ export default function Dashboard() {
           Kick {disconnectTarget?.username} at {disconnectTarget?.ip} from the dashboard session list?
         </p>
         <div style={styles.actionWrap}>
-          <button className="ui-button" type="button" style={styles.actionBtn} onClick={() => setDisconnectTarget(null)}>
+          <DashboardActionButton style={styles.actionBtn} onClick={() => setDisconnectTarget(null)}>
             Cancel
-          </button>
-          <button className="ui-button ui-button--primary" type="button" style={styles.actionBtn} onClick={() => disconnectTarget && void disconnectConnection(disconnectTarget)}>
+          </DashboardActionButton>
+          <DashboardActionButton className="ui-button ui-button--primary" style={styles.actionBtn} onClick={() => disconnectTarget && void disconnectConnection(disconnectTarget)}>
             Confirm
-          </button>
+          </DashboardActionButton>
         </div>
       </DialogSurface>
     </div>

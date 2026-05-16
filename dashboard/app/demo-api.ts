@@ -1112,6 +1112,7 @@ const LEGACY_TAB_TO_WORKSPACE: Record<string, typeof UI_WORKSPACES[number]> = {
   filesystem: 'files',
   ftp: 'transfers',
   ai: 'ai',
+  analytics: 'admin',
   settings: 'admin',
 };
 
@@ -1143,7 +1144,7 @@ const buildUiBootstrapPayload = (state: DemoState) => {
       { key: 'transfers', label: 'Transfers', legacyTabs: ['ftp'], summary: 'FTP favourites and remote transfer tools', available: canUseTransfersWorkspace, status: canUseTransfersWorkspace ? aggregateCatalogStatus(transferServices) : 'unavailable' },
       { key: 'ai', label: 'AI Chat', legacyTabs: ['ai'], summary: 'Local and online LLM runtime workspace', available: Boolean(aiService?.available), status: aiService?.status || 'unavailable' },
       { key: 'terminal', label: 'Terminal', legacyTabs: ['terminal'], summary: 'Terminal and command access surface', available: Boolean(terminalService?.available), status: terminalService?.status || 'unavailable' },
-      { key: 'admin', label: 'Analytics', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations', available: true, status: lifecycle.state },
+      { key: 'admin', label: 'Settings', legacyTabs: ['settings'], summary: 'Service controls, access policy, and operations', available: true, status: lifecycle.state },
     ],
     legacyTabMap: LEGACY_TAB_TO_WORKSPACE,
     capabilities: {
@@ -1296,12 +1297,14 @@ const buildUiWorkspacePayload = (state: DemoState, workspaceKey: string) => {
   const serviceCatalog = dashboard.serviceCatalog || [];
 
   if (workspaceKey === 'overview') {
+    const protection = buildMediaWorkflow(state, buildServiceCatalog(state)).storage?.protection || null;
     return {
       generatedAt: nowIso(),
       workspaceKey,
       telemetry,
       connections: dashboard.connections,
       storage: dashboard.storage,
+      storageProtection: protection,
       designTelemetry: buildOverviewDesignTelemetry(dashboard),
     };
   }

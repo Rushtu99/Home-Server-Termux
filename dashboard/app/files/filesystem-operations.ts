@@ -311,3 +311,59 @@ export const dedupeUploadFiles = (files: FsUploadFile[]): FsUploadFile[] => {
   });
   return [...byPath.values()];
 };
+
+type FsUploadSequenceDeps = {
+  cancelFsOperation?: (operationId: string) => Promise<void>;
+  createFsOperation: (endpoint: string, payload: Record<string, unknown>) => Promise<FsOperation>;
+  finalizeFsOperation: (operationId: string) => Promise<void>;
+  uploadFileToOperation: (operation: FsOperation, fileEntry: FsUploadFile, uploadedBytesBeforeFile: number) => Promise<FsOperation>;
+};
+
+export const runFsUploadSequence = async (
+  destinationPath: string,
+  files: FsUploadFile[],
+  deps: FsUploadSequenceDeps
+) => {
+  const uploadFiles = dedupeUploadFiles(files);
+  if (uploadFiles.length === 0) {
+    return;
+  }
+
+  let operation: FsOperation | null = null;
+  try {
+    operation = await deps.createFsOperation('/fs/operations/upload', {
+      destinationPath,
+      manifest: uploadFiles.map((entry) => ({
+        lastModified: entry.lastModified,
+        relativePath: entry.relativePath,
+        size: entry.size,
+      })),
+    });
+
+    let uploadedBytes = operation.processedBytes;
+    const uploadedSet = new Set(operation.uploadedFiles || []);
+    for (const fileEntry of uploadFiles) {
+      if (uploadedSet.has(fileEntry.relativePath)) {
+        uploadedBytes += fileEntry.size;
+        continue;
+      }
+      operation = await deps.uploadFileToOperation(operation, fileEntry, uploadedBytes);
+      uploadedBytes += fileEntry.size;
+    }
+  } catch (error) {
+    if (deps.cancelFsOperation && operation?.id) {
+      try {
+        await deps.cancelFsOperation(operation.id);
+      } catch {
+        // best effort cleanup on partial upload failures
+      }
+    }
+    throw error;
+  }
+
+  if (!operation) {
+    return;
+  }
+
+  await deps.finalizeFsOperation(operation.id);
+};

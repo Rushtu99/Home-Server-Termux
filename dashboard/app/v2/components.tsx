@@ -45,8 +45,8 @@ export function MetricTile({ label, value, helper }: { label: string; value: Rea
 export function EmptyState({ title, message }: { title: string; message: string }) {
   return (
     <div className="dash2-empty" role="status" aria-live="polite">
-      <strong>{title}</strong>
-      <p>{message}</p>
+      <strong className="dash2-empty__title">{title}</strong>
+      <p className="dash2-empty__message">{message}</p>
     </div>
   );
 }
@@ -54,7 +54,8 @@ export function EmptyState({ title, message }: { title: string; message: string 
 export function ErrorState({ message }: { message: string }) {
   return (
     <div className="dash2-error" role="alert">
-      {message}
+      <strong className="dash2-error__title">Action required</strong>
+      <p className="dash2-error__message">{message}</p>
     </div>
   );
 }
@@ -62,8 +63,11 @@ export function ErrorState({ message }: { message: string }) {
 export function LoadingState({ label = 'Loading workspace…' }: { label?: string }) {
   return (
     <div className="dash2-loading" role="status" aria-live="polite">
-      <span className="dash2-spinner" aria-hidden="true" />
-      <span>{label}</span>
+      <span className="dash2-loading__skeleton" aria-hidden="true">
+        <span className="dash2-loading__line dash2-loading__line--short" />
+        <span className="dash2-loading__line dash2-loading__line--long" />
+      </span>
+      <span className="dash2-loading__label">{label}</span>
     </div>
   );
 }

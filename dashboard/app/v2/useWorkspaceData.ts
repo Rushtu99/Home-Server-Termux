@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchUiBootstrap, fetchUiInitialPayload, fetchWorkspacePayload } from './api';
+import { fetchControlPlaneSnapshot, fetchUiBootstrap, fetchUiInitialPayload, fetchWorkspacePayload } from './api';
 import { DEFAULT_WORKSPACE, resolveWorkspaceFromQuery } from './workspaceMap';
 import type { NormalizedUiInitial, UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
 
@@ -30,6 +30,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const [isWorkspaceStale, setIsWorkspaceStale] = useState(false);
   const [loadingBootstrap, setLoadingBootstrap] = useState(true);
   const [bootstrapReloadTick, setBootstrapReloadTick] = useState(0);
+  const [isHidden, setIsHidden] = useState(() => (typeof document === 'undefined' ? false : document.hidden));
   const [sessionInactive, setSessionInactive] = useState(false);
   const [workspaceData, setWorkspaceData] = useState<UiWorkspaceResponse | null>(null);
   const [workspaceError, setWorkspaceError] = useState('');
@@ -38,7 +39,18 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const workspaceRequestRef = useRef(0);
   const loadedWorkspaceKeyRef = useRef('');
   const workspaceCacheRef = useRef<Map<string, UiWorkspaceResponse>>(new Map());
-  const hiddenRef = useRef(false);
+  const controlPlaneRef = useRef<UiWorkspaceResponse['controlPlane'] | null>(null);
+  const controlPlaneInFlightRef = useRef<Promise<UiWorkspaceResponse['controlPlane']> | null>(null);
+  const workspaceFetchInFlightRef = useRef<Promise<[UiWorkspaceResponse, UiWorkspaceResponse['controlPlane'] | null]> | null>(null);
+  const workspaceFetchKeyRef = useRef<WorkspaceKey | ''>('');
+
+  const mergeControlPlane = useCallback(
+    (workspace: UiWorkspaceResponse, controlPlane: UiWorkspaceResponse['controlPlane'] | null): UiWorkspaceResponse => ({
+      ...workspace,
+      controlPlane: controlPlane || undefined,
+    }),
+    []
+  );
 
   const applyInitialPayload = useCallback(
     (requestedWorkspace: WorkspaceKey, payload: NormalizedUiInitial) => {
@@ -67,9 +79,10 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
 
       if (payload.workspace) {
         const resolvedWorkspace = String(payload.workspace.workspaceKey || requestedWorkspace) as WorkspaceKey;
-        workspaceCacheRef.current.set(resolvedWorkspace, payload.workspace);
+        const mergedWorkspace = mergeControlPlane(payload.workspace, controlPlaneRef.current);
+        workspaceCacheRef.current.set(resolvedWorkspace, mergedWorkspace);
         loadedWorkspaceKeyRef.current = resolvedWorkspace;
-        setWorkspaceData(payload.workspace);
+        setWorkspaceData(mergedWorkspace);
         setDisplayedWorkspace(resolvedWorkspace);
         setWorkspaceError('');
         setIsWorkspaceStale(false);
@@ -82,7 +95,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
 
       setLoadingWorkspace(false);
     },
-    []
+    [mergeControlPlane]
   );
 
   const setActiveWorkspace = useCallback((workspace: WorkspaceKey) => {
@@ -107,10 +120,44 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     setWorkspaceReloadTick((current) => current + 1);
   }, []);
 
+  const loadControlPlaneSnapshot = useCallback(async () => {
+    if (controlPlaneInFlightRef.current) {
+      return controlPlaneInFlightRef.current;
+    }
+
+    const request = fetchControlPlaneSnapshot().then((snapshot) => {
+      const controlPlane = {
+        catalog: snapshot.catalog,
+        clusters: snapshot.clusters,
+        errors: snapshot.errors,
+        health: snapshot.health || null,
+        metrics: snapshot.metrics || null,
+        serviceState: snapshot.serviceState || null,
+        state: snapshot.state || null,
+        workflowEvents: snapshot.workflowEvents,
+        workflowRuns: snapshot.workflowRuns,
+        workflows: snapshot.workflows,
+      };
+      controlPlaneRef.current = controlPlane;
+      return controlPlane;
+    }).finally(() => {
+      if (controlPlaneInFlightRef.current === request) {
+        controlPlaneInFlightRef.current = null;
+      }
+    });
+
+    controlPlaneInFlightRef.current = request;
+    return request;
+  }, []);
+
   const markLoggedOut = useCallback(() => {
     setSessionInactive(true);
     loadedWorkspaceKeyRef.current = '';
     workspaceCacheRef.current.clear();
+    controlPlaneRef.current = null;
+    controlPlaneInFlightRef.current = null;
+    workspaceFetchInFlightRef.current = null;
+    workspaceFetchKeyRef.current = '';
     setBootstrap(null);
     setBootstrapError('Login required');
     setDisplayedWorkspace(DEFAULT_WORKSPACE);
@@ -137,13 +184,14 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       return;
     }
     const handleVisibilityChange = () => {
-      hiddenRef.current = document.hidden;
-      if (!document.hidden) {
+      const hidden = document.hidden;
+      setIsHidden(hidden);
+      if (!hidden) {
         setBootstrapReloadTick((current) => current + 1);
         setWorkspaceReloadTick((current) => current + 1);
       }
     };
-    hiddenRef.current = document.hidden;
+    setIsHidden(document.hidden);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
@@ -171,6 +219,10 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
           return;
         }
         applyInitialPayload(requestedWorkspace, payload);
+        const controlPlane = await loadControlPlaneSnapshot().catch(() => null);
+        if (!cancelled && controlPlane) {
+          setWorkspaceData((current) => (current ? mergeControlPlane(current, controlPlane) : current));
+        }
       } catch (error) {
         if (cancelled) {
           return;
@@ -207,13 +259,13 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     void loadInitial();
     const bootstrapTimer = window.setInterval(() => {
       void refreshBootstrap();
-    }, hiddenRef.current ? 60000 : 30000);
+    }, isHidden ? 60000 : 30000);
 
     return () => {
       cancelled = true;
       window.clearInterval(bootstrapTimer);
     };
-  }, [bootstrapReloadTick, sessionInactive]);
+  }, [applyInitialPayload, bootstrapReloadTick, isHidden, loadControlPlaneSnapshot, mergeControlPlane, sessionInactive]);
 
   useEffect(() => {
     if (sessionInactive) {
@@ -236,15 +288,30 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       const requestId = workspaceRequestRef.current + 1;
       workspaceRequestRef.current = requestId;
       const hasDisplayedWorkspace = Boolean(workspaceData || loadedWorkspaceKeyRef.current);
-      setLoadingWorkspace(true);
+      setLoadingWorkspace(!hasDisplayedWorkspace);
       setIsWorkspaceStale(hasDisplayedWorkspace && !cachedWorkspace);
       try {
-        const payload = await fetchWorkspacePayload(activeWorkspace);
+        let request = workspaceFetchInFlightRef.current;
+        if (!request || workspaceFetchKeyRef.current !== activeWorkspace) {
+          workspaceFetchKeyRef.current = activeWorkspace;
+          request = Promise.all([
+            fetchWorkspacePayload(activeWorkspace),
+            loadControlPlaneSnapshot().catch(() => controlPlaneRef.current),
+          ]).finally(() => {
+            if (workspaceFetchInFlightRef.current === request) {
+              workspaceFetchInFlightRef.current = null;
+            }
+          });
+          workspaceFetchInFlightRef.current = request;
+        }
+
+        const [payload, controlPlane] = await request;
         if (cancelled || requestId !== workspaceRequestRef.current) {
           return;
         }
-        workspaceCacheRef.current.set(String(payload.workspaceKey || activeWorkspace), payload);
-        setWorkspaceData(payload);
+        const mergedPayload = mergeControlPlane(payload, controlPlane);
+        workspaceCacheRef.current.set(String(payload.workspaceKey || activeWorkspace), mergedPayload);
+        setWorkspaceData(mergedPayload);
         loadedWorkspaceKeyRef.current = String(payload.workspaceKey || activeWorkspace);
         setDisplayedWorkspace(String(payload.workspaceKey || activeWorkspace) as WorkspaceKey);
         setWorkspaceError('');
@@ -268,13 +335,13 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     }
     const workspaceTimer = window.setInterval(() => {
       void loadWorkspace();
-    }, hiddenRef.current ? 60000 : activeWorkspace === 'overview' ? 5000 : 9000);
+    }, isHidden ? 60000 : activeWorkspace === 'overview' ? 5000 : 9000);
 
     return () => {
       cancelled = true;
       window.clearInterval(workspaceTimer);
     };
-  }, [activeWorkspace, sessionInactive, workspaceReloadTick]);
+  }, [activeWorkspace, isHidden, loadControlPlaneSnapshot, mergeControlPlane, sessionInactive, workspaceReloadTick, workspaceData]);
 
   const transitionLabel = useMemo(() => {
     if (!isWorkspaceStale || displayedWorkspace === activeWorkspace) {

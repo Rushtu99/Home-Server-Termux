@@ -12,6 +12,10 @@ export type UiNavItem = {
 export type UiBootstrapResponse = {
   generatedAt: string;
   user: null | { role: string; username: string };
+  device?: {
+    batteryPct?: number | null;
+    charging?: boolean | null;
+  };
   lifecycle?: {
     state?: string;
     counts?: {
@@ -38,6 +42,18 @@ export type UiBootstrapResponse = {
 export type UiWorkspaceResponse = {
   generatedAt: string;
   workspaceKey: WorkspaceKey;
+  controlPlane?: {
+    catalog?: {
+      generatedAt?: string;
+      groups?: string[];
+      services?: Array<Record<string, unknown>>;
+      workers?: Array<Record<string, unknown>>;
+    };
+    serviceState?: Record<string, unknown> | null;
+    workflows?: Array<Record<string, unknown>>;
+    workflowRuns?: Array<Record<string, unknown>>;
+    errors?: string[];
+  };
   designTelemetry?: {
     workspace?: WorkspaceKey;
     [key: string]: unknown;

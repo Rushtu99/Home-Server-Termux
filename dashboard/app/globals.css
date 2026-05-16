@@ -15,6 +15,8 @@
   --warning: #b88b45;
   --danger: #c45b5b;
   --focus-ring: rgba(125, 147, 107, 0.28);
+  --radius-min-button: 4px;
+  --radius-min-section: 4px;
   color-scheme: dark;
 }
 
@@ -183,6 +185,7 @@ html[data-theme="purple-haze"] {
 html {
   min-height: 100%;
   background: var(--background);
+  scroll-behavior: smooth;
 }
 
 body {
@@ -222,6 +225,52 @@ select {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+button,
+.ui-button,
+[role="button"],
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  border-radius: var(--radius-min-button) !important;
+}
+
+section,
+.dash2-header,
+.dash2-card,
+.dash2-metric,
+.dash2-loading,
+.dash2-empty,
+.dash2-error,
+.dash2-login-card,
+.dash2-service-admin-card,
+.dash2-chatbox-rail,
+.dash2-chatbox-thread,
+.dash2-workflow-card,
+.dash2-media-health-card,
+.dash2-drive-card,
+.dash2-graph-card,
+.dash2-graph-card--legacy,
+.dash2-search-results,
+.dash2-search-result,
+.dash2-utility-menu__panel,
+.tool-frame-shell,
+.tool-banner,
+.tool-card,
+.tool-log-shell,
+.fs-sidebar,
+.fs-main,
+.fs-selection,
+.fs-topbar,
+.fs-clipboard-card,
+.fs-operations-panel,
+.fs-drop-choice,
+.fs-operation-card,
+.fs-browser-item,
+.fs-row-menu__panel,
+.fs-mobile-sheet__panel {
+  border-radius: var(--radius-min-section) !important;
 }
 
 @keyframes hmstx-pulse {
@@ -291,12 +340,12 @@ select {
 
 .ui-input {
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 9px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #121519;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, var(--background));
   color: var(--foreground);
-  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease, transform 140ms ease;
 }
 
 .ui-input::placeholder {
@@ -304,7 +353,7 @@ select {
 }
 
 .ui-input:hover {
-  background: #15191d;
+  background: color-mix(in srgb, var(--panel-raised) 94%, var(--background));
 }
 
 .ui-input:focus-visible {
@@ -316,20 +365,32 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  min-width: 40px;
-  padding: 7px 10px;
+  min-height: 36px;
+  min-width: 36px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--panel-raised);
   color: var(--foreground);
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  transform: translateY(0) scale(1);
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
 }
 
 .ui-button:hover {
-  background: #242930;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--panel-raised) 70%, var(--accent-soft));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--background) 62%, transparent);
+}
+
+.ui-button:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.ui-button:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .nav-ribbon-btn {
@@ -416,7 +477,7 @@ select {
 
 .field {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .field__label {
@@ -448,8 +509,10 @@ select {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: clamp(14px, 3vw, 24px);
+  gap: 12px;
+  width: min(100%, 1600px);
+  margin: 0 auto;
+  padding: clamp(10px, 2vw, 16px);
   background: var(--background);
 }
 
@@ -461,14 +524,14 @@ select {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .tool-toolbar__actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -478,27 +541,24 @@ select {
 
 .tool-toolbar__title h1 {
   margin: 0;
-  font-size: 24px;
+  font-size: clamp(24px, 2.4vw, 34px);
   line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  text-wrap: balance;
 }
 
 .tool-toolbar__title p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--muted);
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 14px;
+  max-width: 72ch;
+  text-wrap: pretty;
 }
 
 .tool-frame-shell {
   flex: 1;
   min-height: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--panel);
   overflow: hidden;
 }
@@ -515,7 +575,7 @@ select {
 .tool-frame--mock {
   min-height: calc(100dvh - 162px);
   height: auto;
-  padding: 18px;
+  padding: 14px;
   background: #121519;
 }
 
@@ -525,7 +585,7 @@ select {
   min-height: calc(100dvh - 198px);
   overflow-x: auto;
   border-radius: 10px;
-  padding: 18px;
+  padding: 14px;
   background: #101314;
   color: #dfe7d7;
   font-family: var(--font-geist-mono), monospace;
@@ -537,22 +597,22 @@ select {
   min-height: 52dvh;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 16px;
   color: var(--muted);
   text-align: center;
 }
 
 .tool-stack {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .tool-banner {
   display: grid;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: 8px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   background: var(--panel);
 }
 
@@ -570,12 +630,12 @@ select {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .tool-banner__meta {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   font-size: 12px;
   color: var(--muted);
   overflow-wrap: anywhere;
@@ -584,7 +644,7 @@ select {
 .tool-inline-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -595,16 +655,16 @@ select {
 
 .tool-card-grid {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .tool-card {
   display: grid;
   gap: 8px;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   background: var(--panel);
 }
 
@@ -639,8 +699,8 @@ select {
 .tool-status-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 4px 8px;
+  min-height: 22px;
+  padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 12px;
@@ -658,7 +718,7 @@ select {
 }
 
 .tool-log-shell {
-  padding: 14px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
@@ -666,13 +726,13 @@ select {
 
 .tool-log-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   max-height: 280px;
   overflow: auto;
 }
 
 .tool-log-item {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #121519;
@@ -693,7 +753,7 @@ select {
 .fs-shell {
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
-  gap: 18px;
+  gap: 12px;
   min-height: 0;
   position: relative;
 }
@@ -709,15 +769,15 @@ select {
 .fs-sidebar {
   display: grid;
   align-content: start;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  padding: 12px;
   position: relative;
   z-index: 3;
 }
 
 .fs-sidebar__section {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .fs-sidebar__header {
@@ -761,10 +821,10 @@ select {
 .fs-selection {
   display: grid;
   gap: 6px;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #14181d;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 86%, var(--background));
 }
 
 .fs-selection p,
@@ -784,7 +844,7 @@ select {
 
 .fs-policy-form {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .fs-policy-field {
@@ -799,13 +859,13 @@ select {
 
 .fs-policy-user-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .fs-policy-user-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -851,31 +911,31 @@ select {
 
 .fs-policy-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .fs-main {
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .fs-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #14181d;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, var(--background));
   flex-wrap: wrap;
 }
 
 .fs-pathbar-shell {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   flex: 1 1 420px;
 }
@@ -884,10 +944,10 @@ select {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   flex-wrap: nowrap;
   overflow-x: auto;
-  padding: 3px 2px;
+  padding: 2px 1px;
   scrollbar-width: none;
 }
 
@@ -898,8 +958,8 @@ select {
 .fs-crumb {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: 5px;
+  padding: 4px 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -907,6 +967,7 @@ select {
   cursor: pointer;
   transition: color 140ms ease, background-color 140ms ease;
   white-space: nowrap;
+  font-size: 11px;
 }
 
 .fs-crumb:hover {
@@ -932,25 +993,23 @@ select {
 
 .fs-titlebar {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   flex: 1 1 260px;
 }
 
 .fs-titlebar h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: clamp(18px, 1.7vw, 24px);
   line-height: 1.2;
   color: var(--foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  text-wrap: balance;
 }
 
 .fs-titlebar__meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
   color: var(--muted);
   font-size: 12px;
@@ -959,7 +1018,7 @@ select {
 .fs-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -973,17 +1032,47 @@ select {
 }
 
 .fs-search {
-  min-width: min(320px, 100%);
+  min-width: min(360px, 100%);
 }
 
 .fs-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10px;
   flex-wrap: wrap;
+}
+
+.fs-meta__path {
+  min-width: 0;
+  flex: 1 1 260px;
+  max-width: 100%;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, var(--background));
+  white-space: nowrap;
+  line-height: 1.25;
+  font-size: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.fs-meta__detail {
+  min-width: 0;
+  flex: 1 1 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+
+.fs-meta__count {
+  flex: 0 0 auto;
+  font-size: 10px;
 }
 
 .fs-entry-button {
@@ -1020,7 +1109,7 @@ select {
 
 .fs-browser-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .fs-browser-list--drop {
@@ -1032,9 +1121,9 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 2px 2px;
+  padding: 8px 2px 2px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -1060,30 +1149,30 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
   width: min(420px, 100%);
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid rgba(125, 147, 107, 0.34);
-  border-radius: 8px;
-  background: #14181d;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, var(--background));
 }
 
 .fs-operations-panel,
 .fs-drop-choice {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #14181d;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, var(--background));
 }
 
 .fs-operations-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -1106,16 +1195,16 @@ select {
 
 .fs-operations-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .fs-operation-card {
   display: grid;
-  gap: 10px;
-  min-height: 148px;
-  padding: 16px 18px;
+  gap: 8px;
+  min-height: 130px;
+  padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  border-radius: 12px;
   background: #101419;
 }
 
@@ -1143,7 +1232,7 @@ select {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -1152,7 +1241,7 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -1164,7 +1253,7 @@ select {
 .fs-operation-card__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -1189,9 +1278,9 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid rgba(182, 112, 99, 0.36);
   border-radius: 8px;
   background: #151010;
@@ -1218,7 +1307,7 @@ select {
 .fs-operation-card__conflict-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -1256,7 +1345,7 @@ select {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .fs-operation-card__progress-row strong {
@@ -1305,17 +1394,17 @@ select {
 .fs-browser-item {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #13171b;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 84%, var(--background));
   transition: border-color 140ms ease, background-color 140ms ease;
 }
 
 .fs-browser-item:hover {
-  background: #171b20;
+  background: color-mix(in srgb, var(--panel-raised) 92%, var(--background));
 }
 
 .fs-browser-item--selected {
@@ -1335,7 +1424,7 @@ select {
 .fs-browser-main {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -1387,7 +1476,7 @@ select {
 .fs-browser-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -1409,12 +1498,12 @@ select {
   right: 0;
   z-index: 6;
   display: grid;
-  gap: 6px;
+  gap: 5px;
   min-width: 148px;
-  padding: 8px;
+  padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #15191d;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 92%, var(--background));
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
 }
 
@@ -1426,8 +1515,8 @@ select {
 .fs-row-menu__item {
   width: 100%;
   justify-content: flex-start;
-  min-height: 34px;
-  padding: 7px 10px;
+  min-height: 30px;
+  padding: 5px 8px;
   font-size: 12px;
 }
 
@@ -1436,9 +1525,9 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px dashed rgba(255, 255, 255, 0.1);
   color: var(--muted);
   font-size: 12px;
@@ -1464,8 +1553,8 @@ select {
   bottom: 0;
   left: 0;
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 12px;
   border-top: 1px solid var(--border);
   border-radius: 10px 10px 0 0;
   background: #14181d;
@@ -1480,7 +1569,7 @@ select {
 
 .fs-mobile-sheet__actions {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 @media (max-width: 900px) {
@@ -1508,7 +1597,7 @@ select {
 
 @media (max-width: 800px) {
   .tool-page {
-    padding: 14px;
+    padding: 10px;
   }
 
   .tool-frame {
@@ -1521,7 +1610,7 @@ select {
   }
 
   .fs-topbar {
-    padding: 10px 12px;
+    padding: 8px 10px;
   }
 
   .fs-titlebar h2 {

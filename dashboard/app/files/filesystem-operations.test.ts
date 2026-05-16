@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   collectDirectoryPickerUploadFiles,
   collectDroppedUploadFiles,
@@ -6,6 +6,7 @@ import {
   dedupeUploadFiles,
   isFsOperationActive,
   normalizeFsOperation,
+  runFsUploadSequence,
 } from './filesystem-operations';
 
 describe('filesystem-operations helpers', () => {
@@ -124,5 +125,105 @@ describe('filesystem-operations helpers', () => {
     const files = await collectDroppedUploadFiles(dataTransfer);
     expect(files).toHaveLength(1);
     expect(files[0].relativePath).toBe('sample.txt');
+  });
+
+  it('runs upload sequence and skips files already uploaded by the operation', async () => {
+    const fileA = new File(['a'], 'a.txt', { lastModified: 1 });
+    const fileB = new File(['b'], 'b.txt', { lastModified: 2 });
+    const createFsOperation = vi.fn(async () => normalizeFsOperation({
+      id: 'op-1',
+      kind: 'upload',
+      status: 'receiving',
+      processedBytes: 1,
+      processedItems: 1,
+      totalBytes: 3,
+      totalItems: 2,
+      uploadedFiles: ['a.txt'],
+    }));
+    const uploadFileToOperation = vi.fn(async (operation, _file, uploadedBytesBeforeFile) => normalizeFsOperation({
+      ...operation,
+      processedBytes: uploadedBytesBeforeFile + 2,
+      processedItems: 2,
+      uploadedFiles: ['a.txt', 'b.txt'],
+    }));
+    const finalizeFsOperation = vi.fn(async () => undefined);
+
+    await runFsUploadSequence(
+      '/Shared',
+      [
+        { file: fileA, lastModified: 1, relativePath: 'a.txt', size: 1 },
+        { file: fileB, lastModified: 2, relativePath: 'b.txt', size: 2 },
+      ],
+      {
+        createFsOperation,
+        finalizeFsOperation,
+        uploadFileToOperation,
+      }
+    );
+
+    expect(createFsOperation).toHaveBeenCalledTimes(1);
+    expect(uploadFileToOperation).toHaveBeenCalledTimes(1);
+    expect(uploadFileToOperation.mock.calls[0][1].relativePath).toBe('b.txt');
+    expect(finalizeFsOperation).toHaveBeenCalledWith('op-1');
+  });
+
+  it('cancels the created upload operation when a file upload fails', async () => {
+    const fileA = new File(['a'], 'a.txt', { lastModified: 1 });
+    const createFsOperation = vi.fn(async () => normalizeFsOperation({
+      id: 'op-cancel',
+      kind: 'upload',
+      status: 'receiving',
+    }));
+    const uploadFileToOperation = vi.fn(async () => {
+      throw new Error('Upload failed');
+    });
+    const finalizeFsOperation = vi.fn(async () => undefined);
+    const cancelFsOperation = vi.fn(async () => undefined);
+
+    await expect(runFsUploadSequence(
+      '/Shared',
+      [{ file: fileA, lastModified: 1, relativePath: 'a.txt', size: 1 }],
+      {
+        cancelFsOperation,
+        createFsOperation,
+        finalizeFsOperation,
+        uploadFileToOperation,
+      }
+    )).rejects.toThrow('Upload failed');
+
+    expect(cancelFsOperation).toHaveBeenCalledWith('op-cancel');
+    expect(finalizeFsOperation).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-cancel when finalize fails', async () => {
+    const fileA = new File(['a'], 'a.txt', { lastModified: 1 });
+    const createFsOperation = vi.fn(async () => normalizeFsOperation({
+      id: 'op-finalize',
+      kind: 'upload',
+      status: 'receiving',
+      uploadedFiles: [],
+    }));
+    const uploadFileToOperation = vi.fn(async (operation) => normalizeFsOperation({
+      ...operation,
+      uploadedFiles: ['a.txt'],
+    }));
+    const finalizeFsOperation = vi.fn(async () => {
+      throw new Error('Finalize failed');
+    });
+    const cancelFsOperation = vi.fn(async () => undefined);
+
+    await expect(runFsUploadSequence(
+      '/Shared',
+      [{ file: fileA, lastModified: 1, relativePath: 'a.txt', size: 1 }],
+      {
+        cancelFsOperation,
+        createFsOperation,
+        finalizeFsOperation,
+        uploadFileToOperation,
+      }
+    )).rejects.toThrow('Finalize failed');
+
+    expect(cancelFsOperation).not.toHaveBeenCalled();
+    expect(finalizeFsOperation).toHaveBeenCalledWith('op-finalize');
   });
 });

@@ -43,7 +43,16 @@ export const dispatchLlmStreamEvent = (
     return false;
   }
 
-  const json = JSON.parse(parsed.data) as Record<string, unknown>;
+  let json = {} as Record<string, unknown>;
+  try {
+    json = JSON.parse(parsed.data) as Record<string, unknown>;
+  } catch {
+    handlers.onError({
+      code: 'parse_error',
+      message: 'Malformed stream payload',
+    });
+    return true;
+  }
 
   if (parsed.event === 'meta') {
     handlers.onMeta({

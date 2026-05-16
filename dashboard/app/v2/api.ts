@@ -113,6 +113,165 @@ export const fetchUiInitialPayload = (workspace: WorkspaceKey) =>
 export const fetchWorkspacePayload = (workspace: WorkspaceKey) =>
   fetchJson<UiWorkspaceResponse>(`${API}/ui/workspaces/${workspace}`);
 
+export type ControlPlaneCatalogServicesResponse = {
+  generatedAt?: string;
+  groups?: string[];
+  services?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneCatalogWorkersResponse = {
+  generatedAt?: string;
+  workers?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneServiceStateResponse = {
+  generatedAt?: string;
+  state?: string;
+  counts?: Record<string, number>;
+  services?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneWorkflowDefinitionsResponse = {
+  generatedAt?: string;
+  workflows?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneWorkflowRunsResponse = {
+  generatedAt?: string;
+  runs?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneClustersResponse = {
+  generatedAt?: string;
+  clusters?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneWorkflowEventsResponse = {
+  generatedAt?: string;
+  events?: Array<Record<string, unknown>>;
+};
+
+export type ControlPlaneMetricsResponse = {
+  generatedAt?: string;
+  metrics?: Record<string, unknown>;
+};
+
+export type ControlPlaneHealthResponse = {
+  generatedAt?: string;
+  summary?: Record<string, unknown>;
+  services?: Record<string, unknown>;
+};
+
+export type ControlPlaneStateResponse = Record<string, unknown>;
+
+export type ControlPlaneSnapshot = {
+  catalog: {
+    generatedAt?: string;
+    groups: string[];
+    services: Array<Record<string, unknown>>;
+    workers: Array<Record<string, unknown>>;
+  };
+  serviceState: ControlPlaneServiceStateResponse | null;
+  workflows: Array<Record<string, unknown>>;
+  workflowRuns: Array<Record<string, unknown>>;
+  workflowEvents: Array<Record<string, unknown>>;
+  clusters: Array<Record<string, unknown>>;
+  metrics: ControlPlaneMetricsResponse | null;
+  health: ControlPlaneHealthResponse | null;
+  state: ControlPlaneStateResponse | null;
+  errors: string[];
+};
+
+export const fetchControlPlaneSnapshot = async (): Promise<ControlPlaneSnapshot> => {
+  const [
+    servicesResult,
+    workersResult,
+    stateResult,
+    workflowsResult,
+    runsResult,
+    clustersResult,
+    workflowEventsResult,
+    metricsResult,
+    healthResult,
+    systemStateResult,
+  ] = await Promise.allSettled([
+    fetchJson<ControlPlaneCatalogServicesResponse>(`${API}/catalog/services`),
+    fetchJson<ControlPlaneCatalogWorkersResponse>(`${API}/catalog/workers`),
+    fetchJson<ControlPlaneServiceStateResponse>(`${API}/state/services`),
+    fetchJson<ControlPlaneWorkflowDefinitionsResponse>(`${API}/workflows`),
+    fetchJson<ControlPlaneWorkflowRunsResponse>(`${API}/workflows/runs`),
+    fetchJson<ControlPlaneClustersResponse>(`${API}/clusters`),
+    fetchJson<ControlPlaneWorkflowEventsResponse>(`${API}/events/workflows?limit=80`),
+    fetchJson<ControlPlaneMetricsResponse>(`${API}/metrics`),
+    fetchJson<ControlPlaneHealthResponse>(`${API}/health`),
+    fetchJson<ControlPlaneStateResponse>(`${API}/state`),
+  ]);
+
+  const errors: string[] = [];
+  const toErrorString = (value: unknown, fallback: string) =>
+    String(value instanceof Error ? value.message : value || fallback);
+
+  if (servicesResult.status === 'rejected') {
+    errors.push(toErrorString(servicesResult.reason, 'catalog/services failed'));
+  }
+  if (workersResult.status === 'rejected') {
+    errors.push(toErrorString(workersResult.reason, 'catalog/workers failed'));
+  }
+  if (stateResult.status === 'rejected') {
+    errors.push(toErrorString(stateResult.reason, 'state/services failed'));
+  }
+  if (workflowsResult.status === 'rejected') {
+    errors.push(toErrorString(workflowsResult.reason, 'workflows failed'));
+  }
+  if (runsResult.status === 'rejected') {
+    errors.push(toErrorString(runsResult.reason, 'workflows/runs failed'));
+  }
+  if (clustersResult.status === 'rejected') {
+    errors.push(toErrorString(clustersResult.reason, 'clusters failed'));
+  }
+  if (workflowEventsResult.status === 'rejected') {
+    errors.push(toErrorString(workflowEventsResult.reason, 'events/workflows failed'));
+  }
+  if (metricsResult.status === 'rejected') {
+    errors.push(toErrorString(metricsResult.reason, 'metrics failed'));
+  }
+  if (healthResult.status === 'rejected') {
+    errors.push(toErrorString(healthResult.reason, 'health failed'));
+  }
+  if (systemStateResult.status === 'rejected') {
+    errors.push(toErrorString(systemStateResult.reason, 'state failed'));
+  }
+
+  const servicesPayload = servicesResult.status === 'fulfilled' ? servicesResult.value : {};
+  const workersPayload = workersResult.status === 'fulfilled' ? workersResult.value : {};
+  const statePayload = stateResult.status === 'fulfilled' ? stateResult.value : null;
+  const workflowsPayload = workflowsResult.status === 'fulfilled' ? workflowsResult.value : {};
+  const runsPayload = runsResult.status === 'fulfilled' ? runsResult.value : {};
+  const clustersPayload = clustersResult.status === 'fulfilled' ? clustersResult.value : {};
+  const workflowEventsPayload = workflowEventsResult.status === 'fulfilled' ? workflowEventsResult.value : {};
+  const metricsPayload = metricsResult.status === 'fulfilled' ? metricsResult.value : null;
+  const healthPayload = healthResult.status === 'fulfilled' ? healthResult.value : null;
+  const systemStatePayload = systemStateResult.status === 'fulfilled' ? systemStateResult.value : null;
+
+  return {
+    catalog: {
+      generatedAt: servicesPayload.generatedAt || workersPayload.generatedAt,
+      groups: Array.isArray(servicesPayload.groups) ? servicesPayload.groups : [],
+      services: Array.isArray(servicesPayload.services) ? servicesPayload.services : [],
+      workers: Array.isArray(workersPayload.workers) ? workersPayload.workers : [],
+    },
+    errors,
+    serviceState: statePayload,
+    clusters: Array.isArray(clustersPayload.clusters) ? clustersPayload.clusters : [],
+    workflowEvents: Array.isArray(workflowEventsPayload.events) ? workflowEventsPayload.events : [],
+    metrics: metricsPayload,
+    health: healthPayload,
+    state: systemStatePayload,
+    workflowRuns: Array.isArray(runsPayload.runs) ? runsPayload.runs : [],
+    workflows: Array.isArray(workflowsPayload.workflows) ? workflowsPayload.workflows : [],
+  };
+};
+
 const postJson = async <T>(url: string, body: Record<string, unknown> = {}): Promise<T> => {
   const response = await appFetchWithTimeout(url, {
     method: 'POST',
@@ -156,16 +315,70 @@ export const controlService = (
     ...(adminPassword ? { adminPassword } : {}),
   });
 
+export const listClusters = () =>
+  fetchJson<{ generatedAt?: string; clusters?: Array<Record<string, unknown>> }>(`${API}/clusters`);
+
+export const getCluster = (name: string) =>
+  fetchJson<Record<string, unknown>>(`${API}/clusters/${encodeURIComponent(name)}`);
+
+export const controlCluster = (name: string, action: 'start' | 'stop' | 'restart') =>
+  postJson<{ success?: boolean; cluster?: Record<string, unknown>; error?: string }>(
+    `${API}/clusters/${encodeURIComponent(name)}/${action}`,
+    {}
+  );
+
+export const controlClusterService = (name: string, action: 'start' | 'stop' | 'restart') =>
+  postJson<{ success?: boolean; running?: boolean; error?: string }>(
+    `${API}/services/${encodeURIComponent(name)}/${action}`,
+    {}
+  );
+
+export const startWorkflow = (name: string, input: Record<string, unknown> = {}) =>
+  postJson<{ success?: boolean; run?: Record<string, unknown>; error?: string }>(
+    `${API}/workflows/${encodeURIComponent(name)}/start`,
+    { input }
+  );
+
+export type StorageHelperStatus = {
+  path?: string;
+  exists?: boolean;
+  installed?: boolean;
+};
+
+export type StorageHelperStatuses = {
+  usbMount?: StorageHelperStatus;
+  watchdog?: StorageHelperStatus;
+};
+
+export type StorageProtectionActionResponse = {
+  success?: boolean;
+  error?: string;
+  code?: string;
+  warning?: string;
+  installHint?: string;
+  manualCommand?: string;
+  storageProtection?: Record<string, unknown>;
+  helpers?: StorageHelperStatuses;
+};
+
 export const checkDrives = () =>
-  postJson<{ success?: boolean; error?: string }>(`${API}/drives/check`);
+  postJson<StorageProtectionActionResponse & Record<string, unknown>>(`${API}/drives/check`);
 
 export const recheckStorageProtection = () =>
-  postJson<{ success?: boolean; error?: string }>(`${API}/storage/protection/recheck`);
+  postJson<StorageProtectionActionResponse>(`${API}/storage/protection/recheck`);
 
 export const resumeStorageProtection = () =>
-  postJson<{ success?: boolean; resumed?: string[]; failed?: Array<{ service: string; error: string }>; error?: string }>(
+  postJson<StorageProtectionActionResponse & { resumed?: string[]; failed?: Array<{ service: string; error: string }> }>(
     `${API}/storage/protection/resume`
   );
+
+export const repairDriveHelpers = () =>
+  postJson<StorageProtectionActionResponse & {
+    repaired?: Array<{ helper: string; path: string; action?: string }>;
+    started?: Array<{ helper: string; path: string }>;
+    failed?: Array<{ helper: string; path: string; error: string }>;
+    missing?: Array<{ helper: string; path: string }>;
+  }>(`${API}/drives/helpers/repair`);
 
 export const mountFtpFavourite = (id: number) =>
   postJson<{ success?: boolean; error?: string }>(`${API}/ftp/favourites/${id}/mount`);

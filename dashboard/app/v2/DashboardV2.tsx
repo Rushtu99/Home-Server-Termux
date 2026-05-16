@@ -52,7 +52,7 @@ const fallbackNav: UiNavItem[] = [
   { key: 'transfers', label: 'Transfers', summary: 'FTP and remote transfer tools', available: true, status: 'working', legacyTabs: ['ftp'] },
   { key: 'ai', label: 'AI Chat', summary: 'LLM runtime management', available: true, status: 'working', legacyTabs: ['ai'] },
   { key: 'terminal', label: 'Terminal', summary: 'Shell access route', available: true, status: 'working', legacyTabs: ['terminal'] },
-  { key: 'admin', label: 'Analytics', summary: 'Service controls and analytics operations', available: true, status: 'working', legacyTabs: ['settings'] },
+  { key: 'admin', label: 'Settings', summary: 'Service controls and operations settings', available: true, status: 'working', legacyTabs: ['settings'] },
 ];
 
 export default function DashboardV2() {
@@ -87,30 +87,22 @@ export default function DashboardV2() {
   const [styleVariant, setStyleVariant] = useState('obsidian-stitch');
   const [loginNextPath, setLoginNextPath] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const utilityMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const utilityMenuRef = useRef<HTMLDivElement | null>(null);
 
   const nav = bootstrap?.nav && bootstrap.nav.length > 0 ? bootstrap.nav : fallbackNav;
   const userLabel = bootstrap?.user?.username || 'operator';
   const lifecycleState = String(bootstrap?.lifecycle?.state || 'unknown');
-  const lastCommitDateRaw = process.env.NEXT_PUBLIC_LAST_COMMIT_DATE;
-  const lastCommitDateLabel = useMemo(() => {
-    if (!lastCommitDateRaw) {
-      return '';
-    }
-    const parsed = new Date(lastCommitDateRaw);
-    if (Number.isNaN(parsed.getTime())) {
-      return lastCommitDateRaw;
-    }
-    return parsed.toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  }, [lastCommitDateRaw]);
   const authRequired = useMemo(
     () => /login required|session expired|unauthorized|401/i.test(bootstrapError),
     [bootstrapError]
   );
+  const workspaceRefreshing = Boolean(transitionLabel || loadingWorkspace || headerBusy);
+  const refreshIndicatorLabel = transitionLabel ? `${transitionLabel}…` : 'Refreshing workspace data…';
+  const batteryPct = Number.isFinite(Number(bootstrap?.device?.batteryPct))
+    ? Number(bootstrap?.device?.batteryPct)
+    : null;
+  const batteryPctLabel = batteryPct != null ? `${Math.round(batteryPct)}%` : '--';
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -185,13 +177,13 @@ export default function DashboardV2() {
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
       const menu = utilityMenuRef.current;
-      if (menu?.open && !menu.contains(event.target as Node)) {
-        menu.open = false;
+      if (preferencesOpen && menu && !menu.contains(event.target as Node)) {
+        setPreferencesOpen(false);
       }
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && utilityMenuRef.current?.open) {
-        utilityMenuRef.current.open = false;
+      if (event.key === 'Escape' && preferencesOpen) {
+        setPreferencesOpen(false);
       }
     };
     document.addEventListener('mousedown', handlePointerDown);
@@ -200,7 +192,7 @@ export default function DashboardV2() {
       document.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, []);
+  }, [preferencesOpen]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -441,7 +433,7 @@ export default function DashboardV2() {
             ) : null}
             <div className="dash2-header__copy">
               <h1>{authRequired ? 'HmSTx Dashboard' : activeWorkspaceTitle}</h1>
-              <p>{authRequired ? 'Admin workspace sign-in is required.' : activeWorkspaceSummary}</p>
+              <p>{authRequired ? 'Settings workspace sign-in is required.' : activeWorkspaceSummary}</p>
             </div>
           </div>
           {!authRequired ? (
@@ -473,11 +465,20 @@ export default function DashboardV2() {
               <>
                 <StatusBadge tone={statusTone(lifecycleState)}>{lifecycleState}</StatusBadge>
                 <span>{bootstrap?.generatedAt ? new Date(bootstrap.generatedAt).toLocaleTimeString() : 'Waiting for snapshot'}</span>
-                {lastCommitDateLabel ? (
-                  <span title={lastCommitDateRaw || undefined}>
-                    <StatusBadge tone="muted">Demo commit {lastCommitDateLabel}</StatusBadge>
-                  </span>
-                ) : null}
+                <span
+                  className={`dash2-battery ${bootstrap?.device?.charging ? 'dash2-battery--charging' : ''}`}
+                  title={batteryPct != null ? `Battery ${batteryPctLabel}${bootstrap?.device?.charging ? ' charging' : ''}` : 'Battery unavailable'}
+                >
+                  <span className="dash2-battery__icon" aria-hidden="true" />
+                  <strong>{batteryPctLabel}</strong>
+                </span>
+                <span
+                  className={`dash2-sync-dot ${workspaceRefreshing ? 'is-active' : ''}`}
+                  aria-live={workspaceRefreshing ? 'polite' : undefined}
+                  aria-label={workspaceRefreshing ? refreshIndicatorLabel : 'Workspace synchronized'}
+                >
+                  <span aria-hidden="true" />
+                </span>
                 <button
                   className="ui-button"
                   type="button"
@@ -489,11 +490,17 @@ export default function DashboardV2() {
                 >
                   {headerBusy ? 'Refreshing…' : 'Refresh'}
                 </button>
-                <details className="dash2-utility-menu" ref={utilityMenuRef}>
-                  <summary className="ui-button dash2-utility-menu__trigger" aria-haspopup="menu">
+                <div className={`dash2-utility-menu ${preferencesOpen ? 'dash2-utility-menu--open' : ''}`} ref={utilityMenuRef}>
+                  <button
+                    className="ui-button dash2-utility-menu__trigger"
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={preferencesOpen}
+                    onClick={() => setPreferencesOpen((current) => !current)}
+                  >
                     Preferences
-                  </summary>
-                  <div className="dash2-utility-menu__panel" role="menu" aria-label="Theme and account">
+                  </button>
+                  <div className="dash2-utility-menu__panel" role="menu" aria-label="Theme and account" hidden={!preferencesOpen}>
                     <label className="dash2-theme-picker">
                       <span>Theme</span>
                       <select className="ui-input" value={theme} onChange={(event) => setTheme(event.target.value)}>
@@ -515,6 +522,7 @@ export default function DashboardV2() {
                       type="button"
                       onClick={(event) => {
                         event.preventDefault();
+                        setPreferencesOpen(false);
                         void handleLogout();
                       }}
                       disabled={headerBusy}
@@ -522,7 +530,7 @@ export default function DashboardV2() {
                       Log out
                     </button>
                   </div>
-                </details>
+                </div>
               </>
             )}
           </div>
@@ -536,7 +544,7 @@ export default function DashboardV2() {
               <p>
                 {loginNextPath
                   ? `Sign in to continue to ${loginNextPath.replaceAll('/', '').replace(/^\w/, (char) => char.toUpperCase())}.`
-                  : 'Dashboard v2 reads protected admin workspace snapshots.'}
+                  : 'Dashboard v2 reads protected settings workspace snapshots.'}
               </p>
               <form className="dash2-login-form" onSubmit={handleLogin}>
                 <label>
@@ -572,11 +580,6 @@ export default function DashboardV2() {
 
         {!authRequired && workspaceData && hasDisplayedWorkspaceData ? (
           <section className="dash2-content">
-            {transitionLabel ? <p className="dash2-admin-note">{transitionLabel}…</p> : null}
-            {!transitionLabel && loadingWorkspace ? <p className="dash2-admin-note">Refreshing workspace data…</p> : null}
-            {isWorkspaceStale && activeWorkspace === displayedWorkspace ? (
-              <p className="dash2-admin-note">Showing the last successful snapshot while the workspace refresh completes.</p>
-            ) : null}
             {workspaceError ? <ErrorState message={workspaceError} /> : null}
             <WorkspaceViewport
               workspace={displayedWorkspace}

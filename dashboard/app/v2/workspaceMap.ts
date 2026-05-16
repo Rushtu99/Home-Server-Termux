@@ -16,6 +16,7 @@ export const LEGACY_TAB_FALLBACK_MAP: Record<string, WorkspaceKey> = {
   ftp: 'transfers',
   ai: 'ai',
   admin: 'admin',
+  analytics: 'admin',
   settings: 'admin',
 };
 
@@ -31,6 +32,9 @@ const WORKSPACE_SET = new Set<WorkspaceKey>([
 
 export const normalizeWorkspace = (value: string | null | undefined): WorkspaceKey | null => {
   const key = String(value || '').trim().toLowerCase();
+  if (key === 'settings' || key === 'analytics') {
+    return 'admin';
+  }
   return WORKSPACE_SET.has(key as WorkspaceKey) ? (key as WorkspaceKey) : null;
 };
 
@@ -45,7 +49,7 @@ export const resolveWorkspaceFromQuery = (
 
   const tab = String(searchParams.get('tab') || '').trim().toLowerCase();
   const map = legacyMap || LEGACY_TAB_FALLBACK_MAP;
-  return map[tab] || DEFAULT_WORKSPACE;
+  return map[tab] || LEGACY_TAB_FALLBACK_MAP[tab] || DEFAULT_WORKSPACE;
 };
 
 export const normalizeSafeNextPath = (value: string | null | undefined): string | null => {

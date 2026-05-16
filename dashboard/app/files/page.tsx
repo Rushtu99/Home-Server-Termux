@@ -10,16 +10,15 @@ import {
   collectDirectoryPickerUploadFiles,
   collectDroppedUploadFiles,
   collectInputUploadFiles,
-  dedupeUploadFiles,
   isFsOperationActive,
   normalizeFsOperation,
+  runFsUploadSequence,
 } from './filesystem-operations';
 import type { FsOperation, FsUploadFile } from './filesystem-operations';
 import { DialogSurface, MenuButton, ToolPage } from '../ui-primitives';
 import { usePolling } from '../usePolling';
 
 const API = '/api';
-const HIDDEN_FILESYSTEM_DRIVE_LETTERS = new Set(['D', 'E']);
 
 type FsEntry = {
   accessLevel?: 'deny' | 'read' | 'write' | string;
@@ -127,18 +126,6 @@ const formatTimestamp = (value: string | null) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? 'Waiting for first scan' : parsed.toLocaleString();
 };
-
-const resolveDriveLetter = (entry: { letter?: string; dirName?: string }) => {
-  const direct = String(entry.letter || '').trim().toUpperCase();
-  if (direct) {
-    return direct;
-  }
-  const match = String(entry.dirName || '').match(/^([A-Za-z])\s+\(/);
-  return match ? match[1].toUpperCase() : '';
-};
-
-const shouldHideDriveEntry = (entry: { letter?: string; dirName?: string }) =>
-  HIDDEN_FILESYSTEM_DRIVE_LETTERS.has(resolveDriveLetter(entry));
 
 const formatEntryTime = (value: string) => {
   const parsed = new Date(value);
@@ -314,6 +301,7 @@ export default function FilesPage() {
   const [loadError, setLoadError] = useState('');
   const [browserError, setBrowserError] = useState('');
   const [manualBusy, setManualBusy] = useState(false);
+  const [helperBusy, setHelperBusy] = useState(false);
   const [browserBusy, setBrowserBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [driveAccessDenied, setDriveAccessDenied] = useState(false);
@@ -523,6 +511,23 @@ export default function FilesPage() {
         );
       }
 
+      if ((rawPayload as { success?: boolean }).success === false) {
+        const responseCode = String((rawPayload as { code?: unknown }).code || '').toLowerCase();
+        const protection = (rawPayload as { storageProtection?: Record<string, unknown> }).storageProtection || {};
+        const storageState = String(protection.state || 'unknown').trim().toLowerCase() || 'unknown';
+        const watchdogReason = String(protection.reasonCompact || protection.reason || 'watchdog state unknown').trim() || 'watchdog state unknown';
+        const helperError = String((rawPayload as { error?: unknown }).error || 'Storage helpers are unavailable.');
+        const helperHint = String((rawPayload as { installHint?: unknown }).installHint || '').trim();
+        setLoadError(`Storage status: ${storageState}. ${watchdogReason} ${helperError}${helperHint ? ` ${helperHint}` : ''}`);
+        if (responseCode === 'usb_mount_helper_missing' || responseCode === 'watchdog_helper_missing') {
+          const payload = normalizeDrivePayload(rawPayload as DrivePayload);
+          startTransition(() => {
+            setDriveState(payload);
+          });
+        }
+        return;
+      }
+
       const payload = normalizeDrivePayload(rawPayload as DrivePayload);
       startTransition(() => {
         setDriveState(payload);
@@ -533,6 +538,33 @@ export default function FilesPage() {
       setLoadError(String(error instanceof Error ? error.message : error || 'Drive check failed'));
     } finally {
       setManualBusy(false);
+    }
+  };
+
+  const runHelperRepair = async () => {
+    setHelperBusy(true);
+    try {
+      const res = await appFetch(`${API}/drives/helpers/repair`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const payload = await res.json().catch(() => ({} as Record<string, unknown>));
+      if (!res.ok) {
+        throw new Error(String(payload.error || 'Storage helper repair failed'));
+      }
+
+      const missing = Array.isArray(payload.missing) ? payload.missing.length : 0;
+      const failed = Array.isArray(payload.failed) ? payload.failed.length : 0;
+      if (payload.success === true) {
+        setLoadError('Storage helper repair completed. Run Check drives (manual) to refresh mounts.');
+      } else {
+        setLoadError(`Storage status: unknown. watchdog state unknown. Helper repair incomplete (${missing} missing, ${failed} failed).`);
+      }
+      await syncDriveState();
+    } catch (error) {
+      setLoadError(String(error instanceof Error ? error.message : error || 'Storage helper repair failed'));
+    } finally {
+      setHelperBusy(false);
     }
   };
 
@@ -698,38 +730,23 @@ export default function FilesPage() {
     });
 
   const startUploadOperation = async (destinationPath: string, files: FsUploadFile[]) => {
-    const uploadFiles = dedupeUploadFiles(files);
-    if (uploadFiles.length === 0) {
-      return;
-    }
-
     setUploadBusy(true);
     setBrowserError('');
     try {
-      let operation = await createFsOperation('/fs/operations/upload', {
-        destinationPath,
-        manifest: uploadFiles.map((entry) => ({
-          lastModified: entry.lastModified,
-          relativePath: entry.relativePath,
-          size: entry.size,
-        })),
+      await runFsUploadSequence(destinationPath, files, {
+        cancelFsOperation: async (operationId) => {
+          await runFsCommand(`/fs/operations/${encodeURIComponent(operationId)}/control`, { action: 'cancel' });
+        },
+        createFsOperation,
+        finalizeFsOperation: async (operationId) => {
+          await createFsOperation(`/fs/operations/${operationId}/finalize`, {});
+        },
+        uploadFileToOperation,
       });
-
-      let uploadedBytes = operation.processedBytes;
-      const uploadedSet = new Set(operation.uploadedFiles || []);
-      for (const fileEntry of uploadFiles) {
-        if (uploadedSet.has(fileEntry.relativePath)) {
-          uploadedBytes += fileEntry.size;
-          continue;
-        }
-        operation = await uploadFileToOperation(operation, fileEntry, uploadedBytes);
-        uploadedBytes += fileEntry.size;
-      }
-
-      await createFsOperation(`/fs/operations/${operation.id}/finalize`, {});
       await loadFsOperations();
     } catch (error) {
       setBrowserError(String(error instanceof Error ? error.message : error || 'Upload failed'));
+      await loadFsOperations().catch(() => {});
     } finally {
       setUploadBusy(false);
     }
@@ -1142,16 +1159,17 @@ export default function FilesPage() {
     }
   };
 
-  const drives = driveState.manifest.drives.filter((drive) => !shouldHideDriveEntry(drive));
-  const visibleDriveEvents = driveState.events.filter((event) => !shouldHideDriveEntry(event));
+  const drives = driveState.manifest.drives;
+  const visibleDriveEvents = driveState.events;
   const fallbackDrives = drives.filter((drive) => isFallbackDriveEntry(drive));
   const removableDrives = drives.filter((drive) => !isFallbackDriveEntry(drive));
   const visibleDriveCards = driveTab === 'fallback' ? fallbackDrives : removableDrives;
   const activeDriveCount = visibleDriveCards.length + (driveTab === 'drives' ? 1 : 0);
+  const helperRepairRecommended = !driveState.agentInstalled || /helper|not installed|watchdog|storage status: unknown/i.test(loadError);
   const statusText = driveAccessDenied
     ? 'Drive management is admin-only. Share browsing remains available for accounts with share access.'
     : !driveState.agentInstalled
-    ? 'USB mount service is not installed yet. Only internal storage and fallback compatibility links will appear.'
+    ? 'Storage status: unknown. watchdog state unknown. USB mount service is not installed yet. Only internal storage and fallback compatibility links will appear.'
     : removableDrives.length > 0
       ? `${removableDrives.length} removable drive${removableDrives.length === 1 ? '' : 's'} detected.${fallbackDrives.length > 0 ? ` ${fallbackDrives.length} fallback drive${fallbackDrives.length === 1 ? '' : 's'} available in Fallback Drives tab.` : ''}`
       : 'Only internal storage is currently present. Connect a removable drive or run Check drives (manual) to validate external mounts + compatibility links.';
@@ -1206,6 +1224,11 @@ export default function FilesPage() {
               {manualBusy ? 'Checking…' : 'Check drives (manual)'}
             </button>
           ) : null}
+          {!driveAccessDenied && helperRepairRecommended ? (
+            <button className="ui-button" type="button" onClick={runHelperRepair} disabled={helperBusy || manualBusy}>
+              {helperBusy ? 'Repairing…' : 'Install/Repair helpers'}
+            </button>
+          ) : null}
           <button className="ui-button" type="button" onClick={() => void loadDirectory(browser.path, { preserveSelection: true })} disabled={browserBusy}>
             {browserBusy ? 'Refreshing…' : 'Refresh Folder'}
           </button>
@@ -1239,6 +1262,7 @@ export default function FilesPage() {
             <button
               className={`ui-button ${driveTab === 'drives' ? 'tool-tab-button--active' : ''}`}
               type="button"
+              aria-pressed={driveTab === 'drives'}
               onClick={() => setDriveTab('drives')}
             >
               Drives ({removableDrives.length + 1})
@@ -1246,6 +1270,7 @@ export default function FilesPage() {
             <button
               className={`ui-button ${driveTab === 'fallback' ? 'tool-tab-button--active' : ''}`}
               type="button"
+              aria-pressed={driveTab === 'fallback'}
               onClick={() => setDriveTab('fallback')}
             >
               Fallback Drives ({fallbackDrives.length})
@@ -1548,9 +1573,15 @@ export default function FilesPage() {
             </div>
 
             <div className="fs-meta">
-              <span>{rootPathLabel}</span>
-              {browser.share ? <span>{browser.share.name} · {browser.share.accessLevel}{browser.share.isReadOnly ? ' · read-only share' : ''}</span> : <span>Shared folders</span>}
-              <span>{filteredEntries.length} visible entr{filteredEntries.length === 1 ? 'y' : 'ies'}</span>
+              <span className="fs-meta__path" title={rootPathLabel}>{rootPathLabel}</span>
+              {browser.share ? (
+                <span className="fs-meta__detail" title={`${browser.share.name} · ${browser.share.accessLevel}${browser.share.isReadOnly ? ' · read-only share' : ''}`}>
+                  {browser.share.name} · {browser.share.accessLevel}{browser.share.isReadOnly ? ' · read-only share' : ''}
+                </span>
+              ) : (
+                <span className="fs-meta__detail">Shared folders</span>
+              )}
+              <span className="fs-meta__count">{filteredEntries.length} visible entr{filteredEntries.length === 1 ? 'y' : 'ies'}</span>
             </div>
 
             {browserError ? <p className="status-message status-message--error">{browserError}</p> : null}

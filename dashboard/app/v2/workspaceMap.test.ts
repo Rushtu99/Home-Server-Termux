@@ -4,6 +4,8 @@ import { DEFAULT_WORKSPACE, normalizeSafeNextPath, normalizeWorkspace, resolveWo
 describe('workspaceMap helpers', () => {
   it('normalizes known workspace keys', () => {
     expect(normalizeWorkspace(' media ')).toBe('media');
+    expect(normalizeWorkspace('settings')).toBe('admin');
+    expect(normalizeWorkspace('analytics')).toBe('admin');
     expect(normalizeWorkspace('unknown')).toBeNull();
   });
 
@@ -13,6 +15,13 @@ describe('workspaceMap helpers', () => {
 
     const legacy = new URLSearchParams('tab=terminal');
     expect(resolveWorkspaceFromQuery(legacy)).toBe('terminal');
+  });
+
+  it('falls back to built-in legacy aliases when server map is partial', () => {
+    const partialLegacyMap = {
+      settings: 'admin',
+    } as const;
+    expect(resolveWorkspaceFromQuery(new URLSearchParams('tab=analytics'), partialLegacyMap)).toBe('admin');
   });
 
   it('falls back to default workspace', () => {

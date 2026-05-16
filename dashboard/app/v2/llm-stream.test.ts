@@ -26,4 +26,21 @@ describe('llm-stream helpers', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledTimes(1);
   });
+
+  it('handles malformed payloads without throwing', () => {
+    const onMeta = vi.fn();
+    const onDelta = vi.fn();
+    const onDone = vi.fn();
+    const onError = vi.fn();
+    const handlers = { onMeta, onDelta, onDone, onError };
+
+    expect(dispatchLlmStreamEvent({ event: 'delta', data: '[DONE]' }, handlers)).toBe(true);
+    expect(onError).toHaveBeenCalledWith({
+      code: 'parse_error',
+      message: 'Malformed stream payload',
+    });
+    expect(onMeta).not.toHaveBeenCalled();
+    expect(onDelta).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+  });
 });
