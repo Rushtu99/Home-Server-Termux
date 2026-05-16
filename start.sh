@@ -78,6 +78,10 @@ SSHD_PORT="${SSHD_PORT:-8022}"
 ENABLE_SSHD="${ENABLE_SSHD:-false}"
 SSHD_AUTH_MODE="${SSHD_AUTH_MODE:-password_and_key}"
 SSHD_AUTHORIZED_KEY_PATH="${SSHD_AUTHORIZED_KEY_PATH:-$USER_HOME/.ssh/id_ed25519.pub}"
+BOOT_OPTIONAL_SSH="${BOOT_OPTIONAL_SSH:-true}"
+SSHD_RETRY_INITIAL_DELAY_SECONDS="${SSHD_RETRY_INITIAL_DELAY_SECONDS:-60}"
+SSHD_RETRY_MAX_DELAY_SECONDS="${SSHD_RETRY_MAX_DELAY_SECONDS:-300}"
+SSHD_RETRY_MAX_ATTEMPTS="${SSHD_RETRY_MAX_ATTEMPTS:-20}"
 TERMUX_PREFIX="${TERMUX_PREFIX:-${PREFIX:-/data/data/com.termux/files/usr}}"
 SVDIR_PATH="${SVDIR_PATH:-${SVDIR:-$TERMUX_PREFIX/var/service}}"
 LOGDIR_PATH="${LOGDIR_PATH:-${LOGDIR:-$TERMUX_PREFIX/var/log}}"
@@ -86,6 +90,15 @@ SV_BIN="${SV_BIN:-$TERMUX_PREFIX/bin/sv}"
 SSHD_MANAGED_CONFIG_PATH="${SSHD_MANAGED_CONFIG_PATH:-$TERMUX_PREFIX/etc/ssh/sshd_config.d/50-home-server-managed.conf}"
 SSHD_SERVICE_LOG_PATH="${SSHD_SERVICE_LOG_PATH:-$LOGDIR_PATH/sv/sshd/current}"
 START_LOCK_WAIT_SECONDS="${START_LOCK_WAIT_SECONDS:-30}"
+START_MEDIA_STAGE_DELAY_SECONDS="${START_MEDIA_STAGE_DELAY_SECONDS:-15}"
+START_WAIT_TIMEOUT_SECONDS="${START_WAIT_TIMEOUT_SECONDS:-180}"
+START_WAIT_ARR_TIMEOUT_SECONDS="${START_WAIT_ARR_TIMEOUT_SECONDS:-240}"
+START_WAIT_POSTGRES_TIMEOUT_SECONDS="${START_WAIT_POSTGRES_TIMEOUT_SECONDS:-120}"
+START_WAIT_PID_EXIT_GRACE_SECONDS="${START_WAIT_PID_EXIT_GRACE_SECONDS:-45}"
+SERVICE_FAIL_MODE="${SERVICE_FAIL_MODE:-fail_quiet}"
+SERVICE_RETRY_MAX_PER_HOUR="${SERVICE_RETRY_MAX_PER_HOUR:-4}"
+SERVICE_BACKOFF_STEPS="${SERVICE_BACKOFF_STEPS:-60,300,900,3600}"
+SERVICE_DEGRADED_COOLDOWN_SECONDS="${SERVICE_DEGRADED_COOLDOWN_SECONDS:-3600}"
 TAILSCALE_MODE="${TAILSCALE_MODE:-disabled}"
 TERMUX_CLOUD_MOUNT_CMD="${TERMUX_CLOUD_MOUNT_CMD:-/data/data/com.termux/files/usr/bin/termux-cloud-mount}"
 LOOPBACK_LOCKDOWN_CMD="${LOOPBACK_LOCKDOWN_CMD:-$PROJECT/scripts/loopback-lockdown.sh}"
@@ -204,6 +217,8 @@ fi
 START_DEBUG_ECHO="${START_DEBUG_ECHO:-true}"
 START_DEBUG_MAX_LINES_PER_STEP="${START_DEBUG_MAX_LINES_PER_STEP:-80}"
 START_COMPACT_LOG="${START_COMPACT_LOG:-true}"
+SFQ_HELPER="${SFQ_HELPER:-$PROJECT/scripts/service-fail-quiet.sh}"
+[ -f "$SFQ_HELPER" ] && . "$SFQ_HELPER"
 
 timestamp() {
     date '+%Y-%m-%d %H:%M:%S'
@@ -338,7 +353,9 @@ run_logged_command() {
 
     mkdir -p "$LOG_DIR"
     start_line="$(log_file_line_count "$log_path")"
-    if ! "$@" >>"$log_path" 2>&1; then
+    if "$@" >>"$log_path" 2>&1; then
+        status=0
+    else
         status=$?
     fi
     emit_new_debug_lines "$name" "$log_path" "$start_line"
@@ -410,7 +427,6 @@ stop_hotkey_listener() {
 ensure_node_dependencies() {
     local app_dir="$1"
     local label="$2"
-    local stale=0
 
     [ -f "$app_dir/package.json" ] || return 0
 
@@ -419,15 +435,15 @@ ensure_node_dependencies() {
         return 1
     fi
 
-    if [ -f "$app_dir/package-lock.json" ] && [ "$app_dir/package-lock.json" -nt "$app_dir/node_modules" ]; then
-        stale=1
+    if [ -f "$app_dir/package-lock.json" ]; then
+        if ! (cd "$app_dir" && npm ci --dry-run --ignore-scripts --no-audit --no-fund >/dev/null 2>&1); then
+            log_error "$label dependencies look out of date; run 'npm install' in $app_dir before starting."
+            return 1
+        fi
+        return 0
     fi
 
-    if [ "$app_dir/package.json" -nt "$app_dir/node_modules" ]; then
-        stale=1
-    fi
-
-    if [ "$stale" -eq 1 ]; then
+    if ! (cd "$app_dir" && npm ls --depth=0 >/dev/null 2>&1); then
         log_error "$label dependencies look out of date; run 'npm install' in $app_dir before starting."
         return 1
     fi
@@ -551,9 +567,23 @@ wait_for_port() {
     local name="$2"
     local pid_file="${3:-}"
     local host="${4:-127.0.0.1}"
+    local timeout_seconds="${5:-$START_WAIT_TIMEOUT_SECONDS}"
+    local status_script="${6:-}"
+    local pid_exit_grace_seconds="${7:-$START_WAIT_PID_EXIT_GRACE_SECONDS}"
     local attempts=0
+    local start_epoch=0
+    local now_epoch=0
+    local elapsed=0
+    local pid_exit_epoch=0
     local pid=""
 
+    if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]]; then
+        timeout_seconds="$START_WAIT_TIMEOUT_SECONDS"
+    fi
+    if ! [[ "$pid_exit_grace_seconds" =~ ^[0-9]+$ ]]; then
+        pid_exit_grace_seconds="$START_WAIT_PID_EXIT_GRACE_SECONDS"
+    fi
+    start_epoch="$(date +%s)"
     log_info "Waiting for $name on $host:$port"
     while true; do
         if command -v nc >/dev/null 2>&1; then
@@ -566,12 +596,35 @@ wait_for_port() {
             return 0
         fi
 
+        if [ -n "$status_script" ] && [ -x "$status_script" ] && "$status_script" status >/dev/null 2>&1; then
+            :
+        fi
+
         if [ -n "$pid_file" ] && [ -f "$pid_file" ]; then
             pid="$(cat "$pid_file" 2>/dev/null || true)"
             if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-                log_error "$name exited before opening $host:$port"
-                return 1
+                now_epoch="$(date +%s)"
+                if [ "$pid_exit_epoch" -eq 0 ]; then
+                    pid_exit_epoch="$now_epoch"
+                    log_warn "$name pid $pid exited before listener probe succeeded; allowing ${pid_exit_grace_seconds}s grace"
+                fi
+
+                if [ -n "$status_script" ] && [ -x "$status_script" ] && "$status_script" status >/dev/null 2>&1; then
+                    :
+                elif [ $((now_epoch - pid_exit_epoch)) -ge "$pid_exit_grace_seconds" ]; then
+                    log_error "$name exited before opening $host:$port"
+                    return 1
+                fi
+            else
+                pid_exit_epoch=0
             fi
+        fi
+
+        now_epoch="$(date +%s)"
+        elapsed=$((now_epoch - start_epoch))
+        if [ "$timeout_seconds" -gt 0 ] && [ "$elapsed" -ge "$timeout_seconds" ]; then
+            log_error "Timed out waiting for $name on $host:$port after ${timeout_seconds}s"
+            return 1
         fi
 
         attempts=$((attempts + 1))
@@ -1911,6 +1964,62 @@ start_repo_sshd() {
     return 0
 }
 
+start_repo_sshd_optional() {
+    local attempt=0
+    local retry_delay=0
+    local max_attempts=0
+    local recovered=0
+
+    if start_repo_sshd; then
+        return 0
+    fi
+
+    if [ "$BOOT_OPTIONAL_SSH" != "true" ]; then
+        return 1
+    fi
+
+    retry_delay="$SSHD_RETRY_INITIAL_DELAY_SECONDS"
+    if ! [[ "$retry_delay" =~ ^[0-9]+$ ]] || [ "$retry_delay" -lt 1 ]; then
+        retry_delay=5
+    fi
+
+    if ! [[ "$SSHD_RETRY_MAX_DELAY_SECONDS" =~ ^[0-9]+$ ]] || [ "$SSHD_RETRY_MAX_DELAY_SECONDS" -lt "$retry_delay" ]; then
+        SSHD_RETRY_MAX_DELAY_SECONDS="$retry_delay"
+    fi
+    max_attempts="$SSHD_RETRY_MAX_ATTEMPTS"
+    if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then
+        max_attempts=20
+    fi
+
+    log_warn "Optional SSH startup failed; continuing core startup in degraded mode"
+
+    (
+        while [ "$attempt" -lt "$max_attempts" ]; do
+            attempt=$((attempt + 1))
+            log_warn "Optional SSH retry scheduled in ${retry_delay}s (attempt=${attempt})"
+            sleep "$retry_delay"
+
+            if start_repo_sshd; then
+                recovered=1
+                log_info "Optional SSH recovered on retry attempt ${attempt}"
+                break
+            fi
+
+            if [ "$retry_delay" -lt "$SSHD_RETRY_MAX_DELAY_SECONDS" ]; then
+                retry_delay=$((retry_delay * 2))
+                if [ "$retry_delay" -gt "$SSHD_RETRY_MAX_DELAY_SECONDS" ]; then
+                    retry_delay="$SSHD_RETRY_MAX_DELAY_SECONDS"
+                fi
+            fi
+        done
+        if [ "$recovered" -ne 1 ]; then
+            log_error "Optional SSH retries exhausted after ${attempt} attempts; leaving SSH in degraded mode"
+        fi
+    ) &
+
+    return 0
+}
+
 stop_managed_services() {
     log_info "Cleaning old processes"
     stop_pidfile_process "backend" "$BACKEND_PID_PATH"
@@ -1938,6 +2047,9 @@ stop_managed_services() {
 stop_legacy_services() {
     stop_matching_process "backend" "$PROJECT/server/index.js"
     stop_matching_process "backend" "node $PROJECT/server/index.js"
+    stop_matching_process "backend" "npm --prefix $PROJECT/server run start"
+    stop_matching_process "backend" "node $PROJECT/server/src/main/start-server.js"
+    stop_matching_process "backend" "node src/main/start-server.js"
     stop_matching_process "frontend" "next start -H 0.0.0.0"
     stop_matching_process "frontend" "next start -H 127.0.0.1"
     stop_matching_process "frontend" "next dev --webpack --hostname 0.0.0.0"
@@ -2046,6 +2158,8 @@ start_service_helper() {
     local pid_file="$4"
     local host="$5"
     local helper_log=""
+    local service_key=""
+    local wait_timeout="$START_WAIT_TIMEOUT_SECONDS"
 
     if [ ! -x "$script_path" ]; then
         log_warn "Skipping $name (helper not found: $script_path)"
@@ -2053,16 +2167,52 @@ start_service_helper() {
     fi
 
     helper_log="$(service_log_path "$name")"
+    service_key="$(slugify_log_name "$name")"
+    [ -n "$service_key" ] || service_key="service"
+    case "$service_key" in
+        sonarr|radarr|prowlarr)
+            wait_timeout="$START_WAIT_ARR_TIMEOUT_SECONDS"
+            ;;
+        postgresql)
+            wait_timeout="$START_WAIT_POSTGRES_TIMEOUT_SECONDS"
+            ;;
+    esac
+    if type sfq_is_cooldown_active >/dev/null 2>&1 && sfq_is_cooldown_active "$RUNTIME_DIR" "$service_key"; then
+        local cooldown_left=0
+        cooldown_left="$(sfq_remaining_cooldown "$RUNTIME_DIR" "$service_key" 2>/dev/null || echo 0)"
+        log_warn "Skipping $name due to fail-quiet cooldown (${cooldown_left}s remaining)"
+        return 0
+    fi
+
     log_info "Starting $name (debug log: $helper_log)"
     if ! run_logged_command "$name" "$helper_log" "$script_path" start; then
+        log_warn "$name start helper returned non-zero; verifying listener health before marking failure"
+        if wait_for_port "$port" "$name" "$pid_file" "$host" "$wait_timeout" "$script_path"; then
+            log_warn "$name appears healthy despite helper non-zero exit; continuing"
+            if type sfq_mark_success >/dev/null 2>&1; then
+                sfq_mark_success "$RUNTIME_DIR" "$service_key"
+            fi
+            return 0
+        fi
+
         log_warn "$name start failed (see $helper_log)"
+        if type sfq_record_failure >/dev/null 2>&1; then
+            sfq_record_failure "$RUNTIME_DIR" "$service_key" "$helper_log" "service helper returned non-zero during start"
+        fi
         log_recent_tail "$name" "$helper_log"
         return 0
     fi
 
-    if ! wait_for_port "$port" "$name" "$pid_file" "$host"; then
+    if ! wait_for_port "$port" "$name" "$pid_file" "$host" "$wait_timeout" "$script_path"; then
         log_warn "$name failed to listen on $host:$port"
+        if type sfq_record_failure >/dev/null 2>&1; then
+            sfq_record_failure "$RUNTIME_DIR" "$service_key" "$helper_log" "listener not ready after service start"
+        fi
         return 0
+    fi
+
+    if type sfq_mark_success >/dev/null 2>&1; then
+        sfq_mark_success "$RUNTIME_DIR" "$service_key"
     fi
 }
 
@@ -2100,6 +2250,11 @@ start_worker_helper() {
 start_media_stack_services() {
     start_service_helper "Redis" "$REDIS_SERVICE_CMD" 6379 "$REDIS_PID_PATH" "127.0.0.1"
     start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
+
+    if [ "$START_MEDIA_STAGE_DELAY_SECONDS" -gt 0 ]; then
+        log_info "Staging non-core media stack startup delay (${START_MEDIA_STAGE_DELAY_SECONDS}s)"
+        sleep "$START_MEDIA_STAGE_DELAY_SECONDS"
+    fi
 
     if [ "$EXTERNAL_ROLE_MOUNTS_READY" = "true" ]; then
         start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1"
@@ -2161,9 +2316,55 @@ detect_host_ip() {
 }
 
 build_allowed_dev_origins() {
+    local origins
     local host_ip
-    host_ip="$(detect_host_ip)"
-    printf '127.0.0.1,localhost,%s,%s:8088\n' "$host_ip" "$host_ip"
+    local ip
+    local ip_list=""
+
+    append_origin() {
+        local candidate="$1"
+        [ -n "$candidate" ] || return 0
+        case ",$origins," in
+            *",$candidate,"*) ;;
+            *) origins="${origins},${candidate}" ;;
+        esac
+    }
+
+    origins="127.0.0.1,localhost"
+
+    if command -v ifconfig >/dev/null 2>&1; then
+        ip_list="$(ifconfig 2>/dev/null | awk '/inet / { print $2 }' | grep -v '^127\.' || true)"
+    fi
+
+    if [ -z "$ip_list" ] && command -v ip >/dev/null 2>&1; then
+        ip_list="$(ip -o -4 addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' || true)"
+    fi
+
+    if [ -z "$ip_list" ]; then
+        host_ip="$(detect_host_ip)"
+        ip_list="$host_ip"
+    fi
+
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        append_origin "$ip"
+        append_origin "${ip}:3000"
+        append_origin "${ip}:8088"
+        append_origin "http://${ip}"
+        append_origin "http://${ip}:3000"
+        append_origin "http://${ip}:8088"
+    done <<EOF
+$ip_list
+EOF
+
+    append_origin "http://127.0.0.1"
+    append_origin "http://127.0.0.1:3000"
+    append_origin "http://127.0.0.1:8088"
+    append_origin "http://localhost"
+    append_origin "http://localhost:3000"
+    append_origin "http://localhost:8088"
+
+    printf '%s\n' "$origins"
 }
 
 HOST_IP="$(detect_host_ip)"
@@ -2215,7 +2416,10 @@ stop_managed_services
 stop_legacy_services
 start_tailscale_service
 log_info "Checking SSH"
-start_repo_sshd
+if ! start_repo_sshd_optional; then
+    log_error "SSH startup failed and BOOT_OPTIONAL_SSH=false; aborting startup."
+    exit 1
+fi
 
 if ! ensure_node_dependencies "$PROJECT/server" "backend"; then
     log_error "Backend dependencies check failed; aborting startup."
@@ -2231,7 +2435,7 @@ start_background_command \
     "Backend" \
     "$BACKEND_PORT" \
     "$BACKEND_PID_PATH" \
-    "mkdir -p '$LOG_DIR'; cd '$PROJECT/server' && export NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST' PORT='$BACKEND_PORT'; exec node '$PROJECT/server/index.js' > '$LOG_DIR/backend.log' 2>&1" \
+    "mkdir -p '$LOG_DIR'; exec env NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST' PORT='$BACKEND_PORT' npm --prefix '$PROJECT/server' run start --silent > '$LOG_DIR/backend.log' 2>&1" \
     "$BACKEND_BIND_HOST"
 
 start_media_stack_services
@@ -2289,6 +2493,9 @@ fi
 if [ -f "$HOME/services/flarearr/app/flaresolverr.py" ] || [ -f "$HOME/services/flarearr/app/src/flaresolverr.py" ]; then
     printf '[%s] INFO  FlareArr:  http://%s:8088/flarearr/\n' "$(timestamp)" "$HOST_IP"
 fi
+printf '[%s] INFO  Network request logs: %s/access.log\n' "$(timestamp)" "$LOG_DIR"
+printf '[%s] INFO  Network error logs:   %s/error.log\n' "$(timestamp)" "$LOG_DIR"
+printf '[%s] INFO  Follow live requests: tail -f %s/access.log\n' "$(timestamp)" "$LOG_DIR"
 
 trap 'reload_launcher' USR1
 trap 'stop_hotkey_listener; release_start_lock' EXIT
