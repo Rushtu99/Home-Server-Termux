@@ -23,6 +23,20 @@ The current repo already has strong foundations:
 
 The next phase should close the remaining operational gaps instead of replacing those systems.
 
+## Current Progress Snapshot (2026-05-17)
+
+Completed recently:
+- repo-wide lifecycle surface exists (`scripts/hmstx-control.sh`)
+- machine-friendly stack status exists (`scripts/hmstx-control.sh status --json` and `scripts/service-status.sh --json`)
+- service wrappers now include core processes (`backend`, `frontend`, `nginx`, `ttyd`) plus media/storage helpers
+- control-plane backup helper exists (`scripts/control-plane-backup.sh`)
+- baseline operator runbooks exist for first boot, drive replacement, recovery, and upgrade/rollback
+
+Still open:
+- dashboard UX should distinguish degraded vs blocked vs crashed states more explicitly
+- backup restore still relies on operator-guided staged extraction rather than a one-shot restore command
+- historical audit retention and timeline views remain incomplete
+
 ## Phase 1: Operability
 
 First priority is removing manual repo babysitting:

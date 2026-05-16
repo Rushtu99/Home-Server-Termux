@@ -5,8 +5,19 @@
 - [start.sh](../start.sh): startup orchestrator, drive prep, media layout preflight, service boot order
 - [nginx.conf](../nginx.conf): single public gateway, reverse proxy, protected internal tools
 - [dashboard/](../dashboard): Next.js frontend used for both production and demo mode
-- [server/index.js](../server/index.js): auth, dashboard payloads, service control, storage telemetry, file and FTP APIs
+- [server/index.js](../server/index.js): stable backend entrypoint wrapper (`node server/index.js` contract)
+- [server/src/](../server/src): backend runtime modules (`main/`, auth/domain/observability scaffolding, route/runtime contracts)
 - [scripts/](../scripts): service wrappers and host-specific helpers
+
+## Runtime Contracts
+
+Backend runtime contract stability is guarded by parity tests under `server/test/`:
+- route manifest parity
+- startup invariants parity
+- runtime API contract checks
+- control-plane handler and route tests
+
+Dashboard workspace contract stability is guarded by `dashboard/app/v2/*` tests and shared API client typing.
 
 ## Request Flow
 
@@ -51,6 +62,17 @@ The scratch side holds:
 
 The vault side holds:
 - long-term media libraries for Jellyfin and the ARR stack
+
+### Mount Source-Of-Truth
+
+Runtime mount mapping is:
+- physical mount (or ntfs/exfat raw mount) under `runtime/mounts/*-raw` when bindfs staging is required
+- operator-visible mount under `~/Drives/<Letter (Label)>`
+- chroot mirror mount under `/mnt/termux-drives/<Letter (Label)>`
+
+`~/Drives/.state/drives.json` is the canonical dashboard feed. Its `rawMountPoint` now reflects the actual runtime raw mount path when staging is used.
+
+Fallback roots (`D (VAULT_fallback)`, `E (SCRATCH_fallback)`) are internal compatibility paths, not removable-drive proof.
 
 ## Safety Layers
 

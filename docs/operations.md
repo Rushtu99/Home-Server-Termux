@@ -86,6 +86,14 @@ That script restores the expected qBittorrent save paths plus the Sonarr/Radarr 
 
 ## Static Validation
 
+One-command validation path:
+
+```bash
+scripts/validate-platform.sh
+```
+
+Manual equivalent:
+
 ```bash
 npm --prefix server run check
 cd dashboard && npx tsc --noEmit && cd ..
@@ -99,6 +107,9 @@ nginx -t -p "$(pwd)" -c "$(pwd)/nginx.conf"
 After startup:
 
 ```bash
+scripts/service-status.sh
+scripts/service-status.sh --json
+bash scripts/hmstx-control.sh status --json
 curl -I http://127.0.0.1:8088/
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/api/auth/me
 scripts/qbittorrent-service.sh status --json
@@ -110,6 +121,22 @@ scripts/storage-watchdog-service.sh check-now
 ```
 
 If you need a lightweight repo-only media smoke test, point the importer at temporary vault/scratch directories and set test-sized thresholds such as `MEDIA_IMPORT_ABORT_FREE_GB=0`.
+
+## Control Plane Backups
+
+Use the repo-managed backup helper to snapshot and verify control-plane files:
+
+```bash
+scripts/control-plane-backup.sh create
+scripts/control-plane-backup.sh list
+scripts/control-plane-backup.sh verify <archive.tar.gz>
+```
+
+For restore drills, extract into a staging path first:
+
+```bash
+scripts/control-plane-backup.sh extract <archive.tar.gz> /tmp/hmstx-restore
+```
 
 ## Demo Publishing
 

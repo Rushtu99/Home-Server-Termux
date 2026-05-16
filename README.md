@@ -39,6 +39,14 @@ Request flow:
 3. Backend API serves from Express (`:4000`, loopback by default).
 4. Backend invokes service wrappers in `scripts/` for host-level control.
 
+Control-plane modules (`server/src/infra/control-plane/`):
+- `service-catalog.js`: canonical backend-owned service/worker metadata
+- `service-manager.js`: unified service/worker command control
+- `workflow-engine.js`: resumable workflow execution with explicit events
+- `event-bus.js`: operation/workflow event stream
+- `state-store.js`: persisted workflow runs/events and service snapshots
+- `health-manager.js`: lifecycle normalization and service-state rollups
+
 Primary roots:
 - `dashboard/` -> frontend app
 - `server/` -> backend runtime, routes, handlers
@@ -111,6 +119,16 @@ API routes are registered in `server/src/routes/register-api-routes.js` and expo
 Major API domains:
 - Auth/session: `/auth/*`
 - Dashboard/workspaces/control: `/services`, `/dashboard`, `/ui/*`, `/control*`
+- Control plane catalog/workflows/state:
+  - `/catalog/services`
+  - `/catalog/workers`
+  - `/state/services`
+  - `/workflows`
+  - `/workflows/runs`
+  - `/workflows/runs/:id`
+  - `/workflows/:key/run`
+  - `/workflows/runs/:id/resume`
+  - `/events/workflows`
 - Storage and drives: `/storage*`, `/drives*`, `/shares*`
 - Filesystem operations: `/fs/*` and `/fs/operations/*`
 - FTP integration: `/ftp/*`
@@ -150,6 +168,34 @@ Managed layout under `~/Drives`:
 - Scratch roots: `<Drive>/SCRATCH/HmSTxScratch` (downloads, temp, cache, workflow logs)
 
 Compatibility paths are maintained, but managed services should target vault/scratch scoped paths.
+
+## Wrapper Contract
+
+`scripts/` wrappers are execution adapters. Orchestration decisions stay in backend control-plane modules.
+
+Expected wrapper contract:
+- `start`
+- `stop`
+- `restart`
+- `status`
+- optional machine output: `status --json`
+
+Worker adapters validated in this repo:
+- `scripts/media-workflow-service.sh`
+- `scripts/storage-watchdog-service.sh`
+- `scripts/usb-mount-service.sh`
+- `scripts/jellyfin-library-sync.sh`
+- `scripts/media-importer.sh` (`status --json`, run-to-completion worker)
+- `scripts/service-status.sh` (stack-wide service status, text or `--json`)
+
+Core process wrappers available for direct lifecycle control:
+- `scripts/backend-service.sh`
+- `scripts/frontend-service.sh`
+- `scripts/nginx-service.sh`
+- `scripts/ttyd-service.sh`
+
+Control-plane backup helper:
+- `scripts/control-plane-backup.sh` (`create`, `list`, `verify`, `extract`)
 
 ## Quick Start
 
@@ -198,4 +244,8 @@ npm --prefix dashboard test
 - `docs/operations.md`
 - `docs/testing.md`
 - `docs/troubleshooting.md`
+- `docs/runbooks/first-boot.md`
+- `docs/runbooks/drive-replacement.md`
+- `docs/runbooks/recovery.md`
+- `docs/runbooks/upgrade-rollback.md`
 - `document.MD` (full feature/UI/API inventory)

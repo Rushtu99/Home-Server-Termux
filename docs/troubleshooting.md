@@ -31,6 +31,7 @@ rm -rf runtime/start.lock.d
 Inspect the watchdog directly:
 
 ```bash
+scripts/service-status.sh
 scripts/storage-watchdog-service.sh check-now
 cat runtime/storage-watchdog-state.json
 ```
@@ -120,4 +121,42 @@ npx tsc --noEmit
 npm run build
 ```
 
+## Upgrade Or Config Regression Recovery
+
+Before rolling back, verify and stage the latest control-plane backup:
+
+```bash
+scripts/control-plane-backup.sh list
+scripts/control-plane-backup.sh verify <archive.tar.gz>
+scripts/control-plane-backup.sh extract <archive.tar.gz> /tmp/hmstx-restore
+```
+
+Then use the runbook flow in `docs/runbooks/upgrade-rollback.md`.
+
 If the production build is the problem but type-checking passes, fall back to `start-wsl.sh` for a Linux-hosted build/debug session instead of debugging Next.js platform issues on Android first.
+
+## Termux Suspends And Drops `sshd` / `tmux`
+
+The common failure mode is Android suspending or killing the Termux app process, which drops all child processes (`sshd`, `tmux`, runsv services).
+
+Check watchdog status and logs:
+
+```bash
+scripts/termux-session-watchdog.sh status
+tail -n 200 ~/.termux/logs/termux-session-watchdog.log
+tail -n 200 logs/termux-boot.log
+```
+
+The watchdog will:
+- keep `termux-wake-lock` active
+- recreate a keepalive tmux session (`termux-keepalive`) if missing
+- restart `sshd` (supervised first, direct fallback) if listener or process disappears
+- capture forensic snapshots with `ps` + filtered `logcat` lines
+
+Android settings checklist (one-time):
+- set `Termux`, `Termux:Boot`, and `Termux:API` battery mode to `Unrestricted`
+- disable battery optimization for the same apps
+- disable “pause app if unused” for Termux
+- allow background activity/autostart for Termux apps (OEM-specific)
+- lock/pin Termux in Recents to reduce OEM task-killer pressure
+- exclude Termux from vendor cleaner / memory optimizer apps

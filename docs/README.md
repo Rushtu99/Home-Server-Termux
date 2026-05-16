@@ -10,5 +10,6 @@ This repo now uses a small docs hub instead of one long README. The structure is
 - [Live NAS Roadmap](./roadmap.md): the next maintenance work required to make this a full private NAS
 - [Operations](./operations.md): startup, logs, service helpers, validation, and demo publishing
 - [Troubleshooting](./troubleshooting.md): common failure modes and where to inspect them
+- [Runbooks](./runbooks/first-boot.md): first boot, drive replacement, recovery, and upgrade/rollback procedures
 
 Use the root [README](../README.md) for the short version and these pages for operator detail.
