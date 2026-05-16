@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -14,6 +15,25 @@ const writeFile = (target, content) => {
 };
 
 const readText = (target) => fs.readFileSync(target, 'utf8');
+
+const removeDirWithRetry = async (target, attempts = 8) => {
+  for (let index = 0; index < attempts; index += 1) {
+    if (!fs.existsSync(target)) {
+      return;
+    }
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error && typeof error === 'object' ? error.code : '';
+      if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') {
+        throw error;
+      }
+      await delay(25 * (index + 1));
+    }
+  }
+  fs.rmSync(target, { recursive: true, force: true });
+};
 
 const createHarness = (extraEnv = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'media-importer-test-'));
@@ -88,11 +108,11 @@ const createHarness = (extraEnv = {}) => {
   };
 };
 
-afterEach(() => {
+afterEach(async () => {
   while (tempRoots.length > 0) {
     const root = tempRoots.pop();
     if (root && fs.existsSync(root)) {
-      fs.rmSync(root, { recursive: true, force: true });
+      await removeDirWithRetry(root);
     }
   }
 });
@@ -109,7 +129,7 @@ describe('media importer move safety', () => {
     expect(fs.existsSync(source)).toBe(false);
     expect(readText(dest)).toBe('payload-a');
     expect(readText(harness.eventsFile)).toContain('\tmoved\t');
-  }, 20000);
+  }, 60000);
 
   it('does not overwrite existing destination and keeps source', () => {
     const harness = createHarness();
@@ -123,7 +143,7 @@ describe('media importer move safety', () => {
     expect(fs.existsSync(source)).toBe(true);
     expect(readText(dest)).toBe('existing-content');
     expect(readText(harness.eventsFile)).toContain('\tskipped-existing\t');
-  }, 20000);
+  }, 60000);
 
   it('rolls back atomic rename on interruption after rename', () => {
     const harness = createHarness({

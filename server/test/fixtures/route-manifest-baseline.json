@@ -1,0 +1,3674 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-04-30T18:49:53.409Z",
+  "sourceEntrypoint": "server/index.js",
+  "totalRoutes": 198,
+  "routes": [
+    {
+      "registrationIndex": 0,
+      "method": "POST",
+      "path": "/auth/login",
+      "mirrorPath": "/api/auth/login",
+      "mirrorGroup": "/auth/login",
+      "authChain": [],
+      "middlewareChain": [
+        "loginHandler"
+      ],
+      "handlerName": "loginHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 1,
+      "method": "POST",
+      "path": "/api/auth/login",
+      "mirrorPath": "/auth/login",
+      "mirrorGroup": "/auth/login",
+      "authChain": [],
+      "middlewareChain": [
+        "loginHandler"
+      ],
+      "handlerName": "loginHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 2,
+      "method": "GET",
+      "path": "/auth/me",
+      "mirrorPath": "/api/auth/me",
+      "mirrorGroup": "/auth/me",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "meHandler"
+      ],
+      "handlerName": "meHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 3,
+      "method": "GET",
+      "path": "/api/auth/me",
+      "mirrorPath": "/auth/me",
+      "mirrorGroup": "/auth/me",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "meHandler"
+      ],
+      "handlerName": "meHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 4,
+      "method": "GET",
+      "path": "/auth/verify",
+      "mirrorPath": "/api/auth/verify",
+      "mirrorGroup": "/auth/verify",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "verifyHandler"
+      ],
+      "handlerName": "verifyHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 5,
+      "method": "GET",
+      "path": "/api/auth/verify",
+      "mirrorPath": "/auth/verify",
+      "mirrorGroup": "/auth/verify",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "verifyHandler"
+      ],
+      "handlerName": "verifyHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 6,
+      "method": "GET",
+      "path": "/auth/verify-admin",
+      "mirrorPath": "/api/auth/verify-admin",
+      "mirrorGroup": "/auth/verify-admin",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/auth/verify-admin:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/auth/verify-admin:1",
+        "verifyAdminHandler"
+      ],
+      "handlerName": "verifyAdminHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 7,
+      "method": "GET",
+      "path": "/api/auth/verify-admin",
+      "mirrorPath": "/auth/verify-admin",
+      "mirrorGroup": "/auth/verify-admin",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/auth/verify-admin:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/auth/verify-admin:1",
+        "verifyAdminHandler"
+      ],
+      "handlerName": "verifyAdminHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 8,
+      "method": "POST",
+      "path": "/auth/logout",
+      "mirrorPath": "/api/auth/logout",
+      "mirrorGroup": "/auth/logout",
+      "authChain": [],
+      "middlewareChain": [
+        "logoutHandler"
+      ],
+      "handlerName": "logoutHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 9,
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "mirrorPath": "/auth/logout",
+      "mirrorGroup": "/auth/logout",
+      "authChain": [],
+      "middlewareChain": [
+        "logoutHandler"
+      ],
+      "handlerName": "logoutHandler",
+      "rawBodyParser": false,
+      "registrar": "explicit-auth"
+    },
+    {
+      "registrationIndex": 10,
+      "method": "GET",
+      "path": "/status",
+      "mirrorPath": "/api/status",
+      "mirrorGroup": "/status",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "statusHandler"
+      ],
+      "handlerName": "statusHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 11,
+      "method": "GET",
+      "path": "/api/status",
+      "mirrorPath": "/status",
+      "mirrorGroup": "/status",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "statusHandler"
+      ],
+      "handlerName": "statusHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 12,
+      "method": "GET",
+      "path": "/services",
+      "mirrorPath": "/api/services",
+      "mirrorGroup": "/services",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/services:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/services:1",
+        "servicesHandler"
+      ],
+      "handlerName": "servicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 13,
+      "method": "GET",
+      "path": "/api/services",
+      "mirrorPath": "/services",
+      "mirrorGroup": "/services",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/services:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/services:1",
+        "servicesHandler"
+      ],
+      "handlerName": "servicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 14,
+      "method": "POST",
+      "path": "/control/unlock",
+      "mirrorPath": "/api/control/unlock",
+      "mirrorGroup": "/control/unlock",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/control/unlock:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/control/unlock:1",
+        "controlUnlockHandler"
+      ],
+      "handlerName": "controlUnlockHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 15,
+      "method": "POST",
+      "path": "/api/control/unlock",
+      "mirrorPath": "/control/unlock",
+      "mirrorGroup": "/control/unlock",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/control/unlock:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/control/unlock:1",
+        "controlUnlockHandler"
+      ],
+      "handlerName": "controlUnlockHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 16,
+      "method": "POST",
+      "path": "/control/lock",
+      "mirrorPath": "/api/control/lock",
+      "mirrorGroup": "/control/lock",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/control/lock:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/control/lock:1",
+        "controlLockHandler"
+      ],
+      "handlerName": "controlLockHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 17,
+      "method": "POST",
+      "path": "/api/control/lock",
+      "mirrorPath": "/control/lock",
+      "mirrorGroup": "/control/lock",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/control/lock:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/control/lock:1",
+        "controlLockHandler"
+      ],
+      "handlerName": "controlLockHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 18,
+      "method": "POST",
+      "path": "/control",
+      "mirrorPath": "/api/control",
+      "mirrorGroup": "/control",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/control:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/control:1",
+        "controlHandler"
+      ],
+      "handlerName": "controlHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 19,
+      "method": "POST",
+      "path": "/api/control",
+      "mirrorPath": "/control",
+      "mirrorGroup": "/control",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/control:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/control:1",
+        "controlHandler"
+      ],
+      "handlerName": "controlHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 20,
+      "method": "GET",
+      "path": "/monitor",
+      "mirrorPath": "/api/monitor",
+      "mirrorGroup": "/monitor",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/monitor:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/monitor:1",
+        "monitorHandler"
+      ],
+      "handlerName": "monitorHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 21,
+      "method": "GET",
+      "path": "/api/monitor",
+      "mirrorPath": "/monitor",
+      "mirrorGroup": "/monitor",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/monitor:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/monitor:1",
+        "monitorHandler"
+      ],
+      "handlerName": "monitorHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 22,
+      "method": "GET",
+      "path": "/dashboard",
+      "mirrorPath": "/api/dashboard",
+      "mirrorGroup": "/dashboard",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/dashboard:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/dashboard:1",
+        "dashboardHandler"
+      ],
+      "handlerName": "dashboardHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 23,
+      "method": "GET",
+      "path": "/api/dashboard",
+      "mirrorPath": "/dashboard",
+      "mirrorGroup": "/dashboard",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/dashboard:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/dashboard:1",
+        "dashboardHandler"
+      ],
+      "handlerName": "dashboardHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 24,
+      "method": "GET",
+      "path": "/ui/bootstrap",
+      "mirrorPath": "/api/ui/bootstrap",
+      "mirrorGroup": "/ui/bootstrap",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/ui/bootstrap:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/ui/bootstrap:1",
+        "uiBootstrapHandler"
+      ],
+      "handlerName": "uiBootstrapHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 25,
+      "method": "GET",
+      "path": "/api/ui/bootstrap",
+      "mirrorPath": "/ui/bootstrap",
+      "mirrorGroup": "/ui/bootstrap",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ui/bootstrap:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ui/bootstrap:1",
+        "uiBootstrapHandler"
+      ],
+      "handlerName": "uiBootstrapHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 26,
+      "method": "GET",
+      "path": "/ui/initial",
+      "mirrorPath": "/api/ui/initial",
+      "mirrorGroup": "/ui/initial",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/ui/initial:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/ui/initial:1",
+        "uiInitialHandler"
+      ],
+      "handlerName": "uiInitialHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 27,
+      "method": "GET",
+      "path": "/api/ui/initial",
+      "mirrorPath": "/ui/initial",
+      "mirrorGroup": "/ui/initial",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ui/initial:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ui/initial:1",
+        "uiInitialHandler"
+      ],
+      "handlerName": "uiInitialHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 28,
+      "method": "GET",
+      "path": "/ui/workspaces/:workspaceKey",
+      "mirrorPath": "/api/ui/workspaces/:workspaceKey",
+      "mirrorGroup": "/ui/workspaces/:workspaceKey",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/ui/workspaces/:workspaceKey:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/ui/workspaces/:workspaceKey:1",
+        "uiWorkspacePayloadHandler"
+      ],
+      "handlerName": "uiWorkspacePayloadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 29,
+      "method": "GET",
+      "path": "/api/ui/workspaces/:workspaceKey",
+      "mirrorPath": "/ui/workspaces/:workspaceKey",
+      "mirrorGroup": "/ui/workspaces/:workspaceKey",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ui/workspaces/:workspaceKey:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ui/workspaces/:workspaceKey:1",
+        "uiWorkspacePayloadHandler"
+      ],
+      "handlerName": "uiWorkspacePayloadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 30,
+      "method": "GET",
+      "path": "/catalog/services",
+      "mirrorPath": "/api/catalog/services",
+      "mirrorGroup": "/catalog/services",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/catalog/services:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/catalog/services:1",
+        "catalogServicesHandler"
+      ],
+      "handlerName": "catalogServicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 31,
+      "method": "GET",
+      "path": "/api/catalog/services",
+      "mirrorPath": "/catalog/services",
+      "mirrorGroup": "/catalog/services",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/catalog/services:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/catalog/services:1",
+        "catalogServicesHandler"
+      ],
+      "handlerName": "catalogServicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 32,
+      "method": "GET",
+      "path": "/catalog/workers",
+      "mirrorPath": "/api/catalog/workers",
+      "mirrorGroup": "/catalog/workers",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/catalog/workers:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/catalog/workers:1",
+        "catalogWorkersHandler"
+      ],
+      "handlerName": "catalogWorkersHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 33,
+      "method": "GET",
+      "path": "/api/catalog/workers",
+      "mirrorPath": "/catalog/workers",
+      "mirrorGroup": "/catalog/workers",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/catalog/workers:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/catalog/workers:1",
+        "catalogWorkersHandler"
+      ],
+      "handlerName": "catalogWorkersHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 34,
+      "method": "GET",
+      "path": "/state/services",
+      "mirrorPath": "/api/state/services",
+      "mirrorGroup": "/state/services",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/state/services:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/state/services:1",
+        "workflowStateServicesHandler"
+      ],
+      "handlerName": "workflowStateServicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 35,
+      "method": "GET",
+      "path": "/api/state/services",
+      "mirrorPath": "/state/services",
+      "mirrorGroup": "/state/services",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/state/services:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/state/services:1",
+        "workflowStateServicesHandler"
+      ],
+      "handlerName": "workflowStateServicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 36,
+      "method": "GET",
+      "path": "/clusters",
+      "mirrorPath": "/api/clusters",
+      "mirrorGroup": "/clusters",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/clusters:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/clusters:1",
+        "clustersHandler"
+      ],
+      "handlerName": "clustersHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 37,
+      "method": "GET",
+      "path": "/api/clusters",
+      "mirrorPath": "/clusters",
+      "mirrorGroup": "/clusters",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/clusters:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/clusters:1",
+        "clustersHandler"
+      ],
+      "handlerName": "clustersHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 38,
+      "method": "GET",
+      "path": "/clusters/:name",
+      "mirrorPath": "/api/clusters/:name",
+      "mirrorGroup": "/clusters/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/clusters/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/clusters/:name:1",
+        "clusterDetailHandler"
+      ],
+      "handlerName": "clusterDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 39,
+      "method": "GET",
+      "path": "/api/clusters/:name",
+      "mirrorPath": "/clusters/:name",
+      "mirrorGroup": "/clusters/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/clusters/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/clusters/:name:1",
+        "clusterDetailHandler"
+      ],
+      "handlerName": "clusterDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 40,
+      "method": "POST",
+      "path": "/clusters/:name/start",
+      "mirrorPath": "/api/clusters/:name/start",
+      "mirrorGroup": "/clusters/:name/start",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/:name/start:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/:name/start:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 41,
+      "method": "POST",
+      "path": "/api/clusters/:name/start",
+      "mirrorPath": "/clusters/:name/start",
+      "mirrorGroup": "/clusters/:name/start",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/:name/start:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/:name/start:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 42,
+      "method": "POST",
+      "path": "/clusters/:name/stop",
+      "mirrorPath": "/api/clusters/:name/stop",
+      "mirrorGroup": "/clusters/:name/stop",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/:name/stop:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/:name/stop:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 43,
+      "method": "POST",
+      "path": "/api/clusters/:name/stop",
+      "mirrorPath": "/clusters/:name/stop",
+      "mirrorGroup": "/clusters/:name/stop",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/:name/stop:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/:name/stop:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 44,
+      "method": "POST",
+      "path": "/clusters/:name/restart",
+      "mirrorPath": "/api/clusters/:name/restart",
+      "mirrorGroup": "/clusters/:name/restart",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/:name/restart:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/:name/restart:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 45,
+      "method": "POST",
+      "path": "/api/clusters/:name/restart",
+      "mirrorPath": "/clusters/:name/restart",
+      "mirrorGroup": "/clusters/:name/restart",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/:name/restart:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/:name/restart:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 46,
+      "method": "GET",
+      "path": "/services/:name",
+      "mirrorPath": "/api/services/:name",
+      "mirrorGroup": "/services/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/services/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/services/:name:1",
+        "serviceDetailHandler"
+      ],
+      "handlerName": "serviceDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 47,
+      "method": "GET",
+      "path": "/api/services/:name",
+      "mirrorPath": "/services/:name",
+      "mirrorGroup": "/services/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/services/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/services/:name:1",
+        "serviceDetailHandler"
+      ],
+      "handlerName": "serviceDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 48,
+      "method": "POST",
+      "path": "/services/:name/start",
+      "mirrorPath": "/api/services/:name/start",
+      "mirrorGroup": "/services/:name/start",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/services/:name/start:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/services/:name/start:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 49,
+      "method": "POST",
+      "path": "/api/services/:name/start",
+      "mirrorPath": "/services/:name/start",
+      "mirrorGroup": "/services/:name/start",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/:name/start:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/:name/start:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 50,
+      "method": "POST",
+      "path": "/services/:name/stop",
+      "mirrorPath": "/api/services/:name/stop",
+      "mirrorGroup": "/services/:name/stop",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/services/:name/stop:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/services/:name/stop:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 51,
+      "method": "POST",
+      "path": "/api/services/:name/stop",
+      "mirrorPath": "/services/:name/stop",
+      "mirrorGroup": "/services/:name/stop",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/:name/stop:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/:name/stop:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 52,
+      "method": "POST",
+      "path": "/services/:name/restart",
+      "mirrorPath": "/api/services/:name/restart",
+      "mirrorGroup": "/services/:name/restart",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/services/:name/restart:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/services/:name/restart:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 53,
+      "method": "POST",
+      "path": "/api/services/:name/restart",
+      "mirrorPath": "/services/:name/restart",
+      "mirrorGroup": "/services/:name/restart",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/:name/restart:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/:name/restart:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 54,
+      "method": "GET",
+      "path": "/workflows",
+      "mirrorPath": "/api/workflows",
+      "mirrorGroup": "/workflows",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows:1",
+        "workflowDefinitionsHandler"
+      ],
+      "handlerName": "workflowDefinitionsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 55,
+      "method": "GET",
+      "path": "/api/workflows",
+      "mirrorPath": "/workflows",
+      "mirrorGroup": "/workflows",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows:1",
+        "workflowDefinitionsHandler"
+      ],
+      "handlerName": "workflowDefinitionsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 56,
+      "method": "GET",
+      "path": "/workflows/runs",
+      "mirrorPath": "/api/workflows/runs",
+      "mirrorGroup": "/workflows/runs",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows/runs:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows/runs:1",
+        "workflowRunsHandler"
+      ],
+      "handlerName": "workflowRunsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 57,
+      "method": "GET",
+      "path": "/api/workflows/runs",
+      "mirrorPath": "/workflows/runs",
+      "mirrorGroup": "/workflows/runs",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows/runs:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows/runs:1",
+        "workflowRunsHandler"
+      ],
+      "handlerName": "workflowRunsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 58,
+      "method": "GET",
+      "path": "/workflows/runs/:id",
+      "mirrorPath": "/api/workflows/runs/:id",
+      "mirrorGroup": "/workflows/runs/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows/runs/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows/runs/:id:1",
+        "workflowRunDetailHandler"
+      ],
+      "handlerName": "workflowRunDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 59,
+      "method": "GET",
+      "path": "/api/workflows/runs/:id",
+      "mirrorPath": "/workflows/runs/:id",
+      "mirrorGroup": "/workflows/runs/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows/runs/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows/runs/:id:1",
+        "workflowRunDetailHandler"
+      ],
+      "handlerName": "workflowRunDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 60,
+      "method": "POST",
+      "path": "/workflows/:key/run",
+      "mirrorPath": "/api/workflows/:key/run",
+      "mirrorGroup": "/workflows/:key/run",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/workflows/:key/run:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/workflows/:key/run:1",
+        "workflowRunHandler"
+      ],
+      "handlerName": "workflowRunHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 61,
+      "method": "POST",
+      "path": "/api/workflows/:key/run",
+      "mirrorPath": "/workflows/:key/run",
+      "mirrorGroup": "/workflows/:key/run",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/workflows/:key/run:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/workflows/:key/run:1",
+        "workflowRunHandler"
+      ],
+      "handlerName": "workflowRunHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 62,
+      "method": "POST",
+      "path": "/workflows/:name/start",
+      "mirrorPath": "/api/workflows/:name/start",
+      "mirrorGroup": "/workflows/:name/start",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/workflows/:name/start:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/workflows/:name/start:1",
+        "workflowStartHandler"
+      ],
+      "handlerName": "workflowStartHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 63,
+      "method": "POST",
+      "path": "/api/workflows/:name/start",
+      "mirrorPath": "/workflows/:name/start",
+      "mirrorGroup": "/workflows/:name/start",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/workflows/:name/start:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/workflows/:name/start:1",
+        "workflowStartHandler"
+      ],
+      "handlerName": "workflowStartHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 64,
+      "method": "POST",
+      "path": "/workflows/runs/:id/resume",
+      "mirrorPath": "/api/workflows/runs/:id/resume",
+      "mirrorGroup": "/workflows/runs/:id/resume",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/workflows/runs/:id/resume:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/workflows/runs/:id/resume:1",
+        "workflowResumeHandler"
+      ],
+      "handlerName": "workflowResumeHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 65,
+      "method": "POST",
+      "path": "/api/workflows/runs/:id/resume",
+      "mirrorPath": "/workflows/runs/:id/resume",
+      "mirrorGroup": "/workflows/runs/:id/resume",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/workflows/runs/:id/resume:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/workflows/runs/:id/resume:1",
+        "workflowResumeHandler"
+      ],
+      "handlerName": "workflowResumeHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 66,
+      "method": "GET",
+      "path": "/workflows/:id",
+      "mirrorPath": "/api/workflows/:id",
+      "mirrorGroup": "/workflows/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/workflows/:id:1",
+        "workflowDetailHandler"
+      ],
+      "handlerName": "workflowDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 67,
+      "method": "GET",
+      "path": "/api/workflows/:id",
+      "mirrorPath": "/workflows/:id",
+      "mirrorGroup": "/workflows/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/workflows/:id:1",
+        "workflowDetailHandler"
+      ],
+      "handlerName": "workflowDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 68,
+      "method": "GET",
+      "path": "/events/workflows",
+      "mirrorPath": "/api/events/workflows",
+      "mirrorGroup": "/events/workflows",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/events/workflows:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/events/workflows:1",
+        "workflowEventsHandler"
+      ],
+      "handlerName": "workflowEventsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 69,
+      "method": "GET",
+      "path": "/api/events/workflows",
+      "mirrorPath": "/events/workflows",
+      "mirrorGroup": "/events/workflows",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/events/workflows:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/events/workflows:1",
+        "workflowEventsHandler"
+      ],
+      "handlerName": "workflowEventsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 70,
+      "method": "GET",
+      "path": "/metrics",
+      "mirrorPath": "/api/metrics",
+      "mirrorGroup": "/metrics",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/metrics:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/metrics:1",
+        "metricsHandler"
+      ],
+      "handlerName": "metricsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 71,
+      "method": "GET",
+      "path": "/api/metrics",
+      "mirrorPath": "/metrics",
+      "mirrorGroup": "/metrics",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/metrics:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/metrics:1",
+        "metricsHandler"
+      ],
+      "handlerName": "metricsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 72,
+      "method": "GET",
+      "path": "/health",
+      "mirrorPath": "/api/health",
+      "mirrorGroup": "/health",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/health:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/health:1",
+        "healthHandler"
+      ],
+      "handlerName": "healthHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 73,
+      "method": "GET",
+      "path": "/api/health",
+      "mirrorPath": "/health",
+      "mirrorGroup": "/health",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/health:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/health:1",
+        "healthHandler"
+      ],
+      "handlerName": "healthHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 74,
+      "method": "GET",
+      "path": "/state",
+      "mirrorPath": "/api/state",
+      "mirrorGroup": "/state",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/state:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/state:1",
+        "stateHandler"
+      ],
+      "handlerName": "stateHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 75,
+      "method": "GET",
+      "path": "/api/state",
+      "mirrorPath": "/state",
+      "mirrorGroup": "/state",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/state:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/state:1",
+        "stateHandler"
+      ],
+      "handlerName": "stateHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 76,
+      "method": "GET",
+      "path": "/system/network/exposure",
+      "mirrorPath": "/api/system/network/exposure",
+      "mirrorGroup": "/system/network/exposure",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/system/network/exposure:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/system/network/exposure:1",
+        "networkExposureHandler"
+      ],
+      "handlerName": "networkExposureHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 77,
+      "method": "GET",
+      "path": "/api/system/network/exposure",
+      "mirrorPath": "/system/network/exposure",
+      "mirrorGroup": "/system/network/exposure",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/system/network/exposure:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/system/network/exposure:1",
+        "networkExposureHandler"
+      ],
+      "handlerName": "networkExposureHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 78,
+      "method": "GET",
+      "path": "/connections",
+      "mirrorPath": "/api/connections",
+      "mirrorGroup": "/connections",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/connections:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/connections:1",
+        "connectionsHandler"
+      ],
+      "handlerName": "connectionsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 79,
+      "method": "GET",
+      "path": "/api/connections",
+      "mirrorPath": "/connections",
+      "mirrorGroup": "/connections",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/connections:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/connections:1",
+        "connectionsHandler"
+      ],
+      "handlerName": "connectionsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 80,
+      "method": "POST",
+      "path": "/connections/:id/disconnect",
+      "mirrorPath": "/api/connections/:id/disconnect",
+      "mirrorGroup": "/connections/:id/disconnect",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/connections/:id/disconnect:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/connections/:id/disconnect:1",
+        "disconnectConnectionHandler"
+      ],
+      "handlerName": "disconnectConnectionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 81,
+      "method": "POST",
+      "path": "/api/connections/:id/disconnect",
+      "mirrorPath": "/connections/:id/disconnect",
+      "mirrorGroup": "/connections/:id/disconnect",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/connections/:id/disconnect:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/connections/:id/disconnect:1",
+        "disconnectConnectionHandler"
+      ],
+      "handlerName": "disconnectConnectionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 82,
+      "method": "GET",
+      "path": "/storage",
+      "mirrorPath": "/api/storage",
+      "mirrorGroup": "/storage",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/storage:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/storage:1",
+        "storageHandler"
+      ],
+      "handlerName": "storageHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 83,
+      "method": "GET",
+      "path": "/api/storage",
+      "mirrorPath": "/storage",
+      "mirrorGroup": "/storage",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/storage:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/storage:1",
+        "storageHandler"
+      ],
+      "handlerName": "storageHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 84,
+      "method": "GET",
+      "path": "/storage/protection",
+      "mirrorPath": "/api/storage/protection",
+      "mirrorGroup": "/storage/protection",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/storage/protection:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/storage/protection:1",
+        "storageProtectionHandler"
+      ],
+      "handlerName": "storageProtectionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 85,
+      "method": "GET",
+      "path": "/api/storage/protection",
+      "mirrorPath": "/storage/protection",
+      "mirrorGroup": "/storage/protection",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/storage/protection:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/storage/protection:1",
+        "storageProtectionHandler"
+      ],
+      "handlerName": "storageProtectionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 86,
+      "method": "POST",
+      "path": "/storage/protection/recheck",
+      "mirrorPath": "/api/storage/protection/recheck",
+      "mirrorGroup": "/storage/protection/recheck",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/storage/protection/recheck:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/storage/protection/recheck:1",
+        "storageProtectionRecheckHandler"
+      ],
+      "handlerName": "storageProtectionRecheckHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 87,
+      "method": "POST",
+      "path": "/api/storage/protection/recheck",
+      "mirrorPath": "/storage/protection/recheck",
+      "mirrorGroup": "/storage/protection/recheck",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/storage/protection/recheck:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/storage/protection/recheck:1",
+        "storageProtectionRecheckHandler"
+      ],
+      "handlerName": "storageProtectionRecheckHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 88,
+      "method": "POST",
+      "path": "/storage/protection/resume",
+      "mirrorPath": "/api/storage/protection/resume",
+      "mirrorGroup": "/storage/protection/resume",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/storage/protection/resume:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/storage/protection/resume:1",
+        "storageProtectionResumeHandler"
+      ],
+      "handlerName": "storageProtectionResumeHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 89,
+      "method": "POST",
+      "path": "/api/storage/protection/resume",
+      "mirrorPath": "/storage/protection/resume",
+      "mirrorGroup": "/storage/protection/resume",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/storage/protection/resume:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/storage/protection/resume:1",
+        "storageProtectionResumeHandler"
+      ],
+      "handlerName": "storageProtectionResumeHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 90,
+      "method": "POST",
+      "path": "/drives/helpers/repair",
+      "mirrorPath": "/api/drives/helpers/repair",
+      "mirrorGroup": "/drives/helpers/repair",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/drives/helpers/repair:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/drives/helpers/repair:1",
+        "storageHelpersRepairHandler"
+      ],
+      "handlerName": "storageHelpersRepairHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 91,
+      "method": "POST",
+      "path": "/api/drives/helpers/repair",
+      "mirrorPath": "/drives/helpers/repair",
+      "mirrorGroup": "/drives/helpers/repair",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/drives/helpers/repair:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/drives/helpers/repair:1",
+        "storageHelpersRepairHandler"
+      ],
+      "handlerName": "storageHelpersRepairHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 92,
+      "method": "GET",
+      "path": "/logs",
+      "mirrorPath": "/api/logs",
+      "mirrorGroup": "/logs",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/logs:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/logs:1",
+        "logsHandler"
+      ],
+      "handlerName": "logsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 93,
+      "method": "GET",
+      "path": "/api/logs",
+      "mirrorPath": "/logs",
+      "mirrorGroup": "/logs",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/logs:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/logs:1",
+        "logsHandler"
+      ],
+      "handlerName": "logsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 94,
+      "method": "GET",
+      "path": "/logging",
+      "mirrorPath": "/api/logging",
+      "mirrorGroup": "/logging",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/logging:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/logging:1",
+        "loggingGetHandler"
+      ],
+      "handlerName": "loggingGetHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 95,
+      "method": "GET",
+      "path": "/api/logging",
+      "mirrorPath": "/logging",
+      "mirrorGroup": "/logging",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/logging:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/logging:1",
+        "loggingGetHandler"
+      ],
+      "handlerName": "loggingGetHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 96,
+      "method": "POST",
+      "path": "/logging",
+      "mirrorPath": "/api/logging",
+      "mirrorGroup": "/logging",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/logging:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/logging:1",
+        "loggingPostHandler"
+      ],
+      "handlerName": "loggingPostHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 97,
+      "method": "POST",
+      "path": "/api/logging",
+      "mirrorPath": "/logging",
+      "mirrorGroup": "/logging",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/logging:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/logging:1",
+        "loggingPostHandler"
+      ],
+      "handlerName": "loggingPostHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 98,
+      "method": "GET",
+      "path": "/drives",
+      "mirrorPath": "/api/drives",
+      "mirrorGroup": "/drives",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/drives:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/drives:1",
+        "drivesHandler"
+      ],
+      "handlerName": "drivesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 99,
+      "method": "GET",
+      "path": "/api/drives",
+      "mirrorPath": "/drives",
+      "mirrorGroup": "/drives",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/drives:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/drives:1",
+        "drivesHandler"
+      ],
+      "handlerName": "drivesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 100,
+      "method": "POST",
+      "path": "/drives/check",
+      "mirrorPath": "/api/drives/check",
+      "mirrorGroup": "/drives/check",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/drives/check:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/drives/check:1",
+        "drivesCheckHandler"
+      ],
+      "handlerName": "drivesCheckHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 101,
+      "method": "POST",
+      "path": "/api/drives/check",
+      "mirrorPath": "/drives/check",
+      "mirrorGroup": "/drives/check",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/drives/check:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/drives/check:1",
+        "drivesCheckHandler"
+      ],
+      "handlerName": "drivesCheckHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 102,
+      "method": "GET",
+      "path": "/shares",
+      "mirrorPath": "/api/shares",
+      "mirrorGroup": "/shares",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/shares:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/shares:1",
+        "sharesHandler"
+      ],
+      "handlerName": "sharesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 103,
+      "method": "GET",
+      "path": "/api/shares",
+      "mirrorPath": "/shares",
+      "mirrorGroup": "/shares",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/shares:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/shares:1",
+        "sharesHandler"
+      ],
+      "handlerName": "sharesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 104,
+      "method": "POST",
+      "path": "/shares",
+      "mirrorPath": "/api/shares",
+      "mirrorGroup": "/shares",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/shares:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/shares:1",
+        "createShareHandler"
+      ],
+      "handlerName": "createShareHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 105,
+      "method": "POST",
+      "path": "/api/shares",
+      "mirrorPath": "/shares",
+      "mirrorGroup": "/shares",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/shares:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/shares:1",
+        "createShareHandler"
+      ],
+      "handlerName": "createShareHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 106,
+      "method": "PUT",
+      "path": "/shares/:id",
+      "mirrorPath": "/api/shares/:id",
+      "mirrorGroup": "/shares/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@PUT:/shares/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@PUT:/shares/:id:1",
+        "updateShareHandler"
+      ],
+      "handlerName": "updateShareHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 107,
+      "method": "PUT",
+      "path": "/api/shares/:id",
+      "mirrorPath": "/shares/:id",
+      "mirrorGroup": "/shares/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@PUT:/api/shares/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@PUT:/api/shares/:id:1",
+        "updateShareHandler"
+      ],
+      "handlerName": "updateShareHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 108,
+      "method": "GET",
+      "path": "/users",
+      "mirrorPath": "/api/users",
+      "mirrorGroup": "/users",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/users:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/users:1",
+        "usersHandler"
+      ],
+      "handlerName": "usersHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 109,
+      "method": "GET",
+      "path": "/api/users",
+      "mirrorPath": "/users",
+      "mirrorGroup": "/users",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/users:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/users:1",
+        "usersHandler"
+      ],
+      "handlerName": "usersHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 110,
+      "method": "POST",
+      "path": "/users",
+      "mirrorPath": "/api/users",
+      "mirrorGroup": "/users",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/users:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/users:1",
+        "createUserHandler"
+      ],
+      "handlerName": "createUserHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 111,
+      "method": "POST",
+      "path": "/api/users",
+      "mirrorPath": "/users",
+      "mirrorGroup": "/users",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/users:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/users:1",
+        "createUserHandler"
+      ],
+      "handlerName": "createUserHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 112,
+      "method": "PUT",
+      "path": "/users/:id",
+      "mirrorPath": "/api/users/:id",
+      "mirrorGroup": "/users/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@PUT:/users/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@PUT:/users/:id:1",
+        "updateUserHandler"
+      ],
+      "handlerName": "updateUserHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 113,
+      "method": "PUT",
+      "path": "/api/users/:id",
+      "mirrorPath": "/users/:id",
+      "mirrorGroup": "/users/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@PUT:/api/users/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@PUT:/api/users/:id:1",
+        "updateUserHandler"
+      ],
+      "handlerName": "updateUserHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 114,
+      "method": "GET",
+      "path": "/telemetry",
+      "mirrorPath": "/api/telemetry",
+      "mirrorGroup": "/telemetry",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/telemetry:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/telemetry:1",
+        "telemetryHandler"
+      ],
+      "handlerName": "telemetryHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 115,
+      "method": "GET",
+      "path": "/api/telemetry",
+      "mirrorPath": "/telemetry",
+      "mirrorGroup": "/telemetry",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/telemetry:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/telemetry:1",
+        "telemetryHandler"
+      ],
+      "handlerName": "telemetryHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 116,
+      "method": "GET",
+      "path": "/fs/list",
+      "mirrorPath": "/api/fs/list",
+      "mirrorGroup": "/fs/list",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemListHandler"
+      ],
+      "handlerName": "filesystemListHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 117,
+      "method": "GET",
+      "path": "/api/fs/list",
+      "mirrorPath": "/fs/list",
+      "mirrorGroup": "/fs/list",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemListHandler"
+      ],
+      "handlerName": "filesystemListHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 118,
+      "method": "POST",
+      "path": "/fs/mkdir",
+      "mirrorPath": "/api/fs/mkdir",
+      "mirrorGroup": "/fs/mkdir",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemMkdirHandler"
+      ],
+      "handlerName": "filesystemMkdirHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 119,
+      "method": "POST",
+      "path": "/api/fs/mkdir",
+      "mirrorPath": "/fs/mkdir",
+      "mirrorGroup": "/fs/mkdir",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemMkdirHandler"
+      ],
+      "handlerName": "filesystemMkdirHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 120,
+      "method": "POST",
+      "path": "/fs/rename",
+      "mirrorPath": "/api/fs/rename",
+      "mirrorGroup": "/fs/rename",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemRenameHandler"
+      ],
+      "handlerName": "filesystemRenameHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 121,
+      "method": "POST",
+      "path": "/api/fs/rename",
+      "mirrorPath": "/fs/rename",
+      "mirrorGroup": "/fs/rename",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemRenameHandler"
+      ],
+      "handlerName": "filesystemRenameHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 122,
+      "method": "GET",
+      "path": "/fs/operations",
+      "mirrorPath": "/api/fs/operations",
+      "mirrorGroup": "/fs/operations",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationsListHandler"
+      ],
+      "handlerName": "filesystemOperationsListHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 123,
+      "method": "GET",
+      "path": "/api/fs/operations",
+      "mirrorPath": "/fs/operations",
+      "mirrorGroup": "/fs/operations",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationsListHandler"
+      ],
+      "handlerName": "filesystemOperationsListHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 124,
+      "method": "GET",
+      "path": "/fs/operations/:id",
+      "mirrorPath": "/api/fs/operations/:id",
+      "mirrorGroup": "/fs/operations/:id",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationDetailHandler"
+      ],
+      "handlerName": "filesystemOperationDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 125,
+      "method": "GET",
+      "path": "/api/fs/operations/:id",
+      "mirrorPath": "/fs/operations/:id",
+      "mirrorGroup": "/fs/operations/:id",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationDetailHandler"
+      ],
+      "handlerName": "filesystemOperationDetailHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 126,
+      "method": "POST",
+      "path": "/fs/operations/:id/control",
+      "mirrorPath": "/api/fs/operations/:id/control",
+      "mirrorGroup": "/fs/operations/:id/control",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationControlHandler"
+      ],
+      "handlerName": "filesystemOperationControlHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 127,
+      "method": "POST",
+      "path": "/api/fs/operations/:id/control",
+      "mirrorPath": "/fs/operations/:id/control",
+      "mirrorGroup": "/fs/operations/:id/control",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationControlHandler"
+      ],
+      "handlerName": "filesystemOperationControlHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 128,
+      "method": "POST",
+      "path": "/fs/operations/upload",
+      "mirrorPath": "/api/fs/operations/upload",
+      "mirrorGroup": "/fs/operations/upload",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationUploadCreateHandler"
+      ],
+      "handlerName": "filesystemOperationUploadCreateHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 129,
+      "method": "POST",
+      "path": "/api/fs/operations/upload",
+      "mirrorPath": "/fs/operations/upload",
+      "mirrorGroup": "/fs/operations/upload",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationUploadCreateHandler"
+      ],
+      "handlerName": "filesystemOperationUploadCreateHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 130,
+      "method": "POST",
+      "path": "/fs/operations/:id/file",
+      "mirrorPath": "/api/fs/operations/:id/file",
+      "mirrorGroup": "/fs/operations/:id/file",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationUploadFileHandler"
+      ],
+      "handlerName": "filesystemOperationUploadFileHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 131,
+      "method": "POST",
+      "path": "/api/fs/operations/:id/file",
+      "mirrorPath": "/fs/operations/:id/file",
+      "mirrorGroup": "/fs/operations/:id/file",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationUploadFileHandler"
+      ],
+      "handlerName": "filesystemOperationUploadFileHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 132,
+      "method": "POST",
+      "path": "/fs/operations/:id/finalize",
+      "mirrorPath": "/api/fs/operations/:id/finalize",
+      "mirrorGroup": "/fs/operations/:id/finalize",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationUploadFinalizeHandler"
+      ],
+      "handlerName": "filesystemOperationUploadFinalizeHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 133,
+      "method": "POST",
+      "path": "/api/fs/operations/:id/finalize",
+      "mirrorPath": "/fs/operations/:id/finalize",
+      "mirrorGroup": "/fs/operations/:id/finalize",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationUploadFinalizeHandler"
+      ],
+      "handlerName": "filesystemOperationUploadFinalizeHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 134,
+      "method": "POST",
+      "path": "/fs/operations/transfer",
+      "mirrorPath": "/api/fs/operations/transfer",
+      "mirrorGroup": "/fs/operations/transfer",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationTransferHandler"
+      ],
+      "handlerName": "filesystemOperationTransferHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 135,
+      "method": "POST",
+      "path": "/api/fs/operations/transfer",
+      "mirrorPath": "/fs/operations/transfer",
+      "mirrorGroup": "/fs/operations/transfer",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationTransferHandler"
+      ],
+      "handlerName": "filesystemOperationTransferHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 136,
+      "method": "POST",
+      "path": "/fs/operations/delete",
+      "mirrorPath": "/api/fs/operations/delete",
+      "mirrorGroup": "/fs/operations/delete",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationDeleteHandler"
+      ],
+      "handlerName": "filesystemOperationDeleteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 137,
+      "method": "POST",
+      "path": "/api/fs/operations/delete",
+      "mirrorPath": "/fs/operations/delete",
+      "mirrorGroup": "/fs/operations/delete",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemOperationDeleteHandler"
+      ],
+      "handlerName": "filesystemOperationDeleteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 138,
+      "method": "POST",
+      "path": "/fs/delete",
+      "mirrorPath": "/api/fs/delete",
+      "mirrorGroup": "/fs/delete",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemDeleteHandler"
+      ],
+      "handlerName": "filesystemDeleteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 139,
+      "method": "POST",
+      "path": "/api/fs/delete",
+      "mirrorPath": "/fs/delete",
+      "mirrorGroup": "/fs/delete",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemDeleteHandler"
+      ],
+      "handlerName": "filesystemDeleteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 140,
+      "method": "GET",
+      "path": "/fs/download",
+      "mirrorPath": "/api/fs/download",
+      "mirrorGroup": "/fs/download",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemDownloadHandler"
+      ],
+      "handlerName": "filesystemDownloadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 141,
+      "method": "GET",
+      "path": "/api/fs/download",
+      "mirrorPath": "/fs/download",
+      "mirrorGroup": "/fs/download",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemDownloadHandler"
+      ],
+      "handlerName": "filesystemDownloadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 142,
+      "method": "POST",
+      "path": "/fs/upload",
+      "mirrorPath": "/api/fs/upload",
+      "mirrorGroup": "/fs/upload",
+      "authChain": [
+        "requireAuth",
+        "rawParser"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "rawParser",
+        "filesystemUploadHandler"
+      ],
+      "handlerName": "filesystemUploadHandler",
+      "rawBodyParser": true,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 143,
+      "method": "POST",
+      "path": "/api/fs/upload",
+      "mirrorPath": "/fs/upload",
+      "mirrorGroup": "/fs/upload",
+      "authChain": [
+        "requireAuth",
+        "rawParser"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "rawParser",
+        "filesystemUploadHandler"
+      ],
+      "handlerName": "filesystemUploadHandler",
+      "rawBodyParser": true,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 144,
+      "method": "POST",
+      "path": "/fs/paste",
+      "mirrorPath": "/api/fs/paste",
+      "mirrorGroup": "/fs/paste",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemPasteHandler"
+      ],
+      "handlerName": "filesystemPasteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 145,
+      "method": "POST",
+      "path": "/api/fs/paste",
+      "mirrorPath": "/fs/paste",
+      "mirrorGroup": "/fs/paste",
+      "authChain": [
+        "requireAuth"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "filesystemPasteHandler"
+      ],
+      "handlerName": "filesystemPasteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 146,
+      "method": "GET",
+      "path": "/ftp/defaults",
+      "mirrorPath": "/api/ftp/defaults",
+      "mirrorGroup": "/ftp/defaults",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/ftp/defaults:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/ftp/defaults:1",
+        "ftpDefaultsHandler"
+      ],
+      "handlerName": "ftpDefaultsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 147,
+      "method": "GET",
+      "path": "/api/ftp/defaults",
+      "mirrorPath": "/ftp/defaults",
+      "mirrorGroup": "/ftp/defaults",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ftp/defaults:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ftp/defaults:1",
+        "ftpDefaultsHandler"
+      ],
+      "handlerName": "ftpDefaultsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 148,
+      "method": "GET",
+      "path": "/ftp/favourites",
+      "mirrorPath": "/api/ftp/favourites",
+      "mirrorGroup": "/ftp/favourites",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/ftp/favourites:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/ftp/favourites:1",
+        "ftpFavouritesHandler"
+      ],
+      "handlerName": "ftpFavouritesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 149,
+      "method": "GET",
+      "path": "/api/ftp/favourites",
+      "mirrorPath": "/ftp/favourites",
+      "mirrorGroup": "/ftp/favourites",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ftp/favourites:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/ftp/favourites:1",
+        "ftpFavouritesHandler"
+      ],
+      "handlerName": "ftpFavouritesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 150,
+      "method": "POST",
+      "path": "/ftp/favourites",
+      "mirrorPath": "/api/ftp/favourites",
+      "mirrorGroup": "/ftp/favourites",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/favourites:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/favourites:1",
+        "createFtpFavouriteHandler"
+      ],
+      "handlerName": "createFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 151,
+      "method": "POST",
+      "path": "/api/ftp/favourites",
+      "mirrorPath": "/ftp/favourites",
+      "mirrorGroup": "/ftp/favourites",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/favourites:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/favourites:1",
+        "createFtpFavouriteHandler"
+      ],
+      "handlerName": "createFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 152,
+      "method": "PUT",
+      "path": "/ftp/favourites/:id",
+      "mirrorPath": "/api/ftp/favourites/:id",
+      "mirrorGroup": "/ftp/favourites/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@PUT:/ftp/favourites/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@PUT:/ftp/favourites/:id:1",
+        "updateFtpFavouriteHandler"
+      ],
+      "handlerName": "updateFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 153,
+      "method": "PUT",
+      "path": "/api/ftp/favourites/:id",
+      "mirrorPath": "/ftp/favourites/:id",
+      "mirrorGroup": "/ftp/favourites/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@PUT:/api/ftp/favourites/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@PUT:/api/ftp/favourites/:id:1",
+        "updateFtpFavouriteHandler"
+      ],
+      "handlerName": "updateFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 154,
+      "method": "DELETE",
+      "path": "/ftp/favourites/:id",
+      "mirrorPath": "/api/ftp/favourites/:id",
+      "mirrorGroup": "/ftp/favourites/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@DELETE:/ftp/favourites/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@DELETE:/ftp/favourites/:id:1",
+        "deleteFtpFavouriteHandler"
+      ],
+      "handlerName": "deleteFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 155,
+      "method": "DELETE",
+      "path": "/api/ftp/favourites/:id",
+      "mirrorPath": "/ftp/favourites/:id",
+      "mirrorGroup": "/ftp/favourites/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@DELETE:/api/ftp/favourites/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@DELETE:/api/ftp/favourites/:id:1",
+        "deleteFtpFavouriteHandler"
+      ],
+      "handlerName": "deleteFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 156,
+      "method": "POST",
+      "path": "/ftp/favourites/:id/mount",
+      "mirrorPath": "/api/ftp/favourites/:id/mount",
+      "mirrorGroup": "/ftp/favourites/:id/mount",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/favourites/:id/mount:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/favourites/:id/mount:1",
+        "mountFtpFavouriteHandler"
+      ],
+      "handlerName": "mountFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 157,
+      "method": "POST",
+      "path": "/api/ftp/favourites/:id/mount",
+      "mirrorPath": "/ftp/favourites/:id/mount",
+      "mirrorGroup": "/ftp/favourites/:id/mount",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/favourites/:id/mount:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/favourites/:id/mount:1",
+        "mountFtpFavouriteHandler"
+      ],
+      "handlerName": "mountFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 158,
+      "method": "POST",
+      "path": "/ftp/favourites/:id/unmount",
+      "mirrorPath": "/api/ftp/favourites/:id/unmount",
+      "mirrorGroup": "/ftp/favourites/:id/unmount",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/favourites/:id/unmount:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/favourites/:id/unmount:1",
+        "unmountFtpFavouriteHandler"
+      ],
+      "handlerName": "unmountFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 159,
+      "method": "POST",
+      "path": "/api/ftp/favourites/:id/unmount",
+      "mirrorPath": "/ftp/favourites/:id/unmount",
+      "mirrorGroup": "/ftp/favourites/:id/unmount",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/favourites/:id/unmount:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/favourites/:id/unmount:1",
+        "unmountFtpFavouriteHandler"
+      ],
+      "handlerName": "unmountFtpFavouriteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 160,
+      "method": "POST",
+      "path": "/ftp/list",
+      "mirrorPath": "/api/ftp/list",
+      "mirrorGroup": "/ftp/list",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/list:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/list:1",
+        "ftpListHandler"
+      ],
+      "handlerName": "ftpListHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 161,
+      "method": "POST",
+      "path": "/api/ftp/list",
+      "mirrorPath": "/ftp/list",
+      "mirrorGroup": "/ftp/list",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/list:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/list:1",
+        "ftpListHandler"
+      ],
+      "handlerName": "ftpListHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 162,
+      "method": "POST",
+      "path": "/ftp/download",
+      "mirrorPath": "/api/ftp/download",
+      "mirrorGroup": "/ftp/download",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/download:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/download:1",
+        "ftpDownloadHandler"
+      ],
+      "handlerName": "ftpDownloadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 163,
+      "method": "POST",
+      "path": "/api/ftp/download",
+      "mirrorPath": "/ftp/download",
+      "mirrorGroup": "/ftp/download",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/download:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/download:1",
+        "ftpDownloadHandler"
+      ],
+      "handlerName": "ftpDownloadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 164,
+      "method": "POST",
+      "path": "/ftp/upload",
+      "mirrorPath": "/api/ftp/upload",
+      "mirrorGroup": "/ftp/upload",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/upload:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/upload:1",
+        "ftpUploadHandler"
+      ],
+      "handlerName": "ftpUploadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 165,
+      "method": "POST",
+      "path": "/api/ftp/upload",
+      "mirrorPath": "/ftp/upload",
+      "mirrorGroup": "/ftp/upload",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/upload:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/upload:1",
+        "ftpUploadHandler"
+      ],
+      "handlerName": "ftpUploadHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 166,
+      "method": "POST",
+      "path": "/ftp/mkdir",
+      "mirrorPath": "/api/ftp/mkdir",
+      "mirrorGroup": "/ftp/mkdir",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/mkdir:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/ftp/mkdir:1",
+        "ftpMkdirHandler"
+      ],
+      "handlerName": "ftpMkdirHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 167,
+      "method": "POST",
+      "path": "/api/ftp/mkdir",
+      "mirrorPath": "/ftp/mkdir",
+      "mirrorGroup": "/ftp/mkdir",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/mkdir:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/ftp/mkdir:1",
+        "ftpMkdirHandler"
+      ],
+      "handlerName": "ftpMkdirHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 168,
+      "method": "POST",
+      "path": "/media/torrents/add",
+      "mirrorPath": "/api/media/torrents/add",
+      "mirrorGroup": "/media/torrents/add",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/media/torrents/add:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/media/torrents/add:1",
+        "mediaTorrentAddHandler"
+      ],
+      "handlerName": "mediaTorrentAddHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 169,
+      "method": "POST",
+      "path": "/api/media/torrents/add",
+      "mirrorPath": "/media/torrents/add",
+      "mirrorGroup": "/media/torrents/add",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/media/torrents/add:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/media/torrents/add:1",
+        "mediaTorrentAddHandler"
+      ],
+      "handlerName": "mediaTorrentAddHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 170,
+      "method": "GET",
+      "path": "/llm/state",
+      "mirrorPath": "/api/llm/state",
+      "mirrorGroup": "/llm/state",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/state:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/state:1",
+        "llmStateHandler"
+      ],
+      "handlerName": "llmStateHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 171,
+      "method": "GET",
+      "path": "/api/llm/state",
+      "mirrorPath": "/llm/state",
+      "mirrorGroup": "/llm/state",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/state:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/state:1",
+        "llmStateHandler"
+      ],
+      "handlerName": "llmStateHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 172,
+      "method": "POST",
+      "path": "/llm/models/select",
+      "mirrorPath": "/api/llm/models/select",
+      "mirrorGroup": "/llm/models/select",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/models/select:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/models/select:1",
+        "llmModelSelectHandler"
+      ],
+      "handlerName": "llmModelSelectHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 173,
+      "method": "POST",
+      "path": "/api/llm/models/select",
+      "mirrorPath": "/llm/models/select",
+      "mirrorGroup": "/llm/models/select",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/models/select:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/models/select:1",
+        "llmModelSelectHandler"
+      ],
+      "handlerName": "llmModelSelectHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 174,
+      "method": "POST",
+      "path": "/llm/models/add-local",
+      "mirrorPath": "/api/llm/models/add-local",
+      "mirrorGroup": "/llm/models/add-local",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/models/add-local:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/models/add-local:1",
+        "llmModelAddLocalHandler"
+      ],
+      "handlerName": "llmModelAddLocalHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 175,
+      "method": "POST",
+      "path": "/api/llm/models/add-local",
+      "mirrorPath": "/llm/models/add-local",
+      "mirrorGroup": "/llm/models/add-local",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/models/add-local:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/models/add-local:1",
+        "llmModelAddLocalHandler"
+      ],
+      "handlerName": "llmModelAddLocalHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 176,
+      "method": "POST",
+      "path": "/llm/models/pull",
+      "mirrorPath": "/api/llm/models/pull",
+      "mirrorGroup": "/llm/models/pull",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/models/pull:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/models/pull:1",
+        "llmModelPullHandler"
+      ],
+      "handlerName": "llmModelPullHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 177,
+      "method": "POST",
+      "path": "/api/llm/models/pull",
+      "mirrorPath": "/llm/models/pull",
+      "mirrorGroup": "/llm/models/pull",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/models/pull:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/models/pull:1",
+        "llmModelPullHandler"
+      ],
+      "handlerName": "llmModelPullHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 178,
+      "method": "GET",
+      "path": "/llm/models/pull/:jobId",
+      "mirrorPath": "/api/llm/models/pull/:jobId",
+      "mirrorGroup": "/llm/models/pull/:jobId",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/models/pull/:jobId:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/models/pull/:jobId:1",
+        "llmModelPullStatusHandler"
+      ],
+      "handlerName": "llmModelPullStatusHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 179,
+      "method": "GET",
+      "path": "/api/llm/models/pull/:jobId",
+      "mirrorPath": "/llm/models/pull/:jobId",
+      "mirrorGroup": "/llm/models/pull/:jobId",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/models/pull/:jobId:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/models/pull/:jobId:1",
+        "llmModelPullStatusHandler"
+      ],
+      "handlerName": "llmModelPullStatusHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 180,
+      "method": "POST",
+      "path": "/llm/online/models/refresh",
+      "mirrorPath": "/api/llm/online/models/refresh",
+      "mirrorGroup": "/llm/online/models/refresh",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/online/models/refresh:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/online/models/refresh:1",
+        "llmOnlineModelsRefreshHandler"
+      ],
+      "handlerName": "llmOnlineModelsRefreshHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 181,
+      "method": "POST",
+      "path": "/api/llm/online/models/refresh",
+      "mirrorPath": "/llm/online/models/refresh",
+      "mirrorGroup": "/llm/online/models/refresh",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/online/models/refresh:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/online/models/refresh:1",
+        "llmOnlineModelsRefreshHandler"
+      ],
+      "handlerName": "llmOnlineModelsRefreshHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 182,
+      "method": "POST",
+      "path": "/llm/online/models/select",
+      "mirrorPath": "/api/llm/online/models/select",
+      "mirrorGroup": "/llm/online/models/select",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/online/models/select:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/online/models/select:1",
+        "llmOnlineModelSelectHandler"
+      ],
+      "handlerName": "llmOnlineModelSelectHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 183,
+      "method": "POST",
+      "path": "/api/llm/online/models/select",
+      "mirrorPath": "/llm/online/models/select",
+      "mirrorGroup": "/llm/online/models/select",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/online/models/select:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/online/models/select:1",
+        "llmOnlineModelSelectHandler"
+      ],
+      "handlerName": "llmOnlineModelSelectHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 184,
+      "method": "GET",
+      "path": "/llm/conversations",
+      "mirrorPath": "/api/llm/conversations",
+      "mirrorGroup": "/llm/conversations",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/conversations:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/conversations:1",
+        "llmConversationsHandler"
+      ],
+      "handlerName": "llmConversationsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 185,
+      "method": "GET",
+      "path": "/api/llm/conversations",
+      "mirrorPath": "/llm/conversations",
+      "mirrorGroup": "/llm/conversations",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/conversations:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/conversations:1",
+        "llmConversationsHandler"
+      ],
+      "handlerName": "llmConversationsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 186,
+      "method": "GET",
+      "path": "/llm/conversations/:id/messages",
+      "mirrorPath": "/api/llm/conversations/:id/messages",
+      "mirrorGroup": "/llm/conversations/:id/messages",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/conversations/:id/messages:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/llm/conversations/:id/messages:1",
+        "llmConversationMessagesHandler"
+      ],
+      "handlerName": "llmConversationMessagesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 187,
+      "method": "GET",
+      "path": "/api/llm/conversations/:id/messages",
+      "mirrorPath": "/llm/conversations/:id/messages",
+      "mirrorGroup": "/llm/conversations/:id/messages",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/conversations/:id/messages:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/llm/conversations/:id/messages:1",
+        "llmConversationMessagesHandler"
+      ],
+      "handlerName": "llmConversationMessagesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 188,
+      "method": "DELETE",
+      "path": "/llm/conversations/:id",
+      "mirrorPath": "/api/llm/conversations/:id",
+      "mirrorGroup": "/llm/conversations/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@DELETE:/llm/conversations/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@DELETE:/llm/conversations/:id:1",
+        "llmConversationDeleteHandler"
+      ],
+      "handlerName": "llmConversationDeleteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 189,
+      "method": "DELETE",
+      "path": "/api/llm/conversations/:id",
+      "mirrorPath": "/llm/conversations/:id",
+      "mirrorGroup": "/llm/conversations/:id",
+      "authChain": [
+        "requireAuth",
+        "anonymous@DELETE:/api/llm/conversations/:id:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@DELETE:/api/llm/conversations/:id:1",
+        "llmConversationDeleteHandler"
+      ],
+      "handlerName": "llmConversationDeleteHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 190,
+      "method": "POST",
+      "path": "/llm/chat",
+      "mirrorPath": "/api/llm/chat",
+      "mirrorGroup": "/llm/chat",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/chat:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/chat:1",
+        "llmChatHandler"
+      ],
+      "handlerName": "llmChatHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 191,
+      "method": "POST",
+      "path": "/api/llm/chat",
+      "mirrorPath": "/llm/chat",
+      "mirrorGroup": "/llm/chat",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/chat:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/chat:1",
+        "llmChatHandler"
+      ],
+      "handlerName": "llmChatHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 192,
+      "method": "POST",
+      "path": "/llm/chat/stream",
+      "mirrorPath": "/api/llm/chat/stream",
+      "mirrorGroup": "/llm/chat/stream",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/chat/stream:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/llm/chat/stream:1",
+        "llmChatStreamHandler"
+      ],
+      "handlerName": "llmChatStreamHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 193,
+      "method": "POST",
+      "path": "/api/llm/chat/stream",
+      "mirrorPath": "/llm/chat/stream",
+      "mirrorGroup": "/llm/chat/stream",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/chat/stream:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/llm/chat/stream:1",
+        "llmChatStreamHandler"
+      ],
+      "handlerName": "llmChatStreamHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 194,
+      "method": "GET",
+      "path": "/openai/v1/models",
+      "mirrorPath": "/api/openai/v1/models",
+      "mirrorGroup": "/openai/v1/models",
+      "authChain": [
+        "requireAdminOrLlmKey"
+      ],
+      "middlewareChain": [
+        "requireAdminOrLlmKey",
+        "openAiModelsHandler"
+      ],
+      "handlerName": "openAiModelsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 195,
+      "method": "GET",
+      "path": "/api/openai/v1/models",
+      "mirrorPath": "/openai/v1/models",
+      "mirrorGroup": "/openai/v1/models",
+      "authChain": [
+        "requireAdminOrLlmKey"
+      ],
+      "middlewareChain": [
+        "requireAdminOrLlmKey",
+        "openAiModelsHandler"
+      ],
+      "handlerName": "openAiModelsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 196,
+      "method": "POST",
+      "path": "/openai/v1/chat/completions",
+      "mirrorPath": "/api/openai/v1/chat/completions",
+      "mirrorGroup": "/openai/v1/chat/completions",
+      "authChain": [
+        "requireAdminOrLlmKey"
+      ],
+      "middlewareChain": [
+        "requireAdminOrLlmKey",
+        "openAiChatCompletionsHandler"
+      ],
+      "handlerName": "openAiChatCompletionsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 197,
+      "method": "POST",
+      "path": "/api/openai/v1/chat/completions",
+      "mirrorPath": "/openai/v1/chat/completions",
+      "mirrorGroup": "/openai/v1/chat/completions",
+      "authChain": [
+        "requireAdminOrLlmKey"
+      ],
+      "middlewareChain": [
+        "requireAdminOrLlmKey",
+        "openAiChatCompletionsHandler"
+      ],
+      "handlerName": "openAiChatCompletionsHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    }
+  ]
+}

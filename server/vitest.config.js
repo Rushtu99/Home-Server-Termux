@@ -5,6 +5,11 @@ module.exports = defineConfig({
     globals: true,
     include: ['test/**/*.test.js'],
     environment: 'node',
+    fileParallelism: false,
+    maxConcurrency: 1,
+    sequence: {
+      concurrent: false,
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

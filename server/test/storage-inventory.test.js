@@ -27,12 +27,14 @@ describe('storage inventory helpers', () => {
       '/dev/block/dm-7 1000 400 600 40% /data',
       '/dev/fuse 1000 400 600 40% /storage/emulated',
       '/dev/block/sda1 2000 1000 1000 50% /storage/ABCD-1234',
+      '/dev/block/sdb1 4000 2000 2000 50% /data/data/com.termux/files/home/home-server/runtime/mounts/T-raw',
       'tmpfs 500 20 480 4% /apex',
     ].join('\n');
     const mountTypes = new Map([
       ['/data', 'f2fs'],
       ['/storage/emulated', 'fuse'],
       ['/storage/ABCD-1234', 'exfat'],
+      ['/data/data/com.termux/files/home/home-server/runtime/mounts/T-raw', 'exfat'],
       ['/apex', 'tmpfs'],
     ]);
     const { mounts, summary } = parseStorageInventoryFromOutput(df, mountTypes, new Set(['f2fs', 'fuse', 'exfat']));

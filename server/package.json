@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node index.js",
     "start": "node index.js",
-    "check": "node --check index.js && node --check app-db.js",
+    "check:syntax": "node test/scripts/check-node-syntax.js",
+    "check:boundaries": "node test/scripts/check-boundaries.js",
+    "check": "npm run check:syntax && npm run check:boundaries",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

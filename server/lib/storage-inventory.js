@@ -56,6 +56,10 @@ const parseMountTypesFromOutput = (mountOutput = '') => {
   return mountTypes;
 };
 
+const isRuntimeStagingMount = (mountPoint = '') => (
+  /\/home-server(?:\/server)?\/runtime\/mounts\/[^/]+-raw$/.test(String(mountPoint || ''))
+);
+
 const parseStorageInventoryFromOutput = (dfOutput = '', mountTypes = new Map(), storageFsTypes = DEFAULT_STORAGE_FS_TYPES) => {
   const mounts = [];
   const dedupeByPool = new Map();
@@ -68,6 +72,9 @@ const parseStorageInventoryFromOutput = (dfOutput = '', mountTypes = new Map(), 
 
     const filesystem = parts[0];
     const mountPoint = parts[5];
+    if (isRuntimeStagingMount(mountPoint)) {
+      continue;
+    }
     const category = classifyStorageMount(mountPoint);
 
     if (category === 'system') {

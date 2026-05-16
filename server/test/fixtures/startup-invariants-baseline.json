@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-04-30T18:49:53.409Z",
+  "sourceEntrypoint": "server/index.js",
+  "invariants": {
+    "envLoadGuardEnabled": true,
+    "trustProxy": "loopback",
+    "jsonBodyLimit": "256kb",
+    "authRoutesBeforeDualRoutes": true,
+    "errorMiddlewareLast": true,
+    "pollIntervalMs": 10000
+  },
+  "registrationOrder": {
+    "firstAuthRouteIndex": 0,
+    "firstDualRouteIndex": 10,
+    "errorMiddlewareIndex": 198,
+    "lastRouteIndex": 197
+  }
+}
