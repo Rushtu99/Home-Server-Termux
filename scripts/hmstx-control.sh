@@ -96,6 +96,8 @@ declare -A SERVICE_STARTUP=()
 STATUS_AVAILABLE_COUNT=0
 STATUS_WORKING_COUNT=0
 STATUS_STOPPED_COUNT=0
+STATUS_DEGRADED_COUNT=0
+STATUS_STALLED_COUNT=0
 STATUS_UNAVAILABLE_COUNT=0
 STATUS_UNKNOWN_COUNT=0
 STATUS_CORE_RUNNING_COUNT=0
@@ -594,6 +596,8 @@ collect_service_state() {
     STATUS_AVAILABLE_COUNT=0
     STATUS_WORKING_COUNT=0
     STATUS_STOPPED_COUNT=0
+    STATUS_DEGRADED_COUNT=0
+    STATUS_STALLED_COUNT=0
     STATUS_UNAVAILABLE_COUNT=0
     STATUS_UNKNOWN_COUNT=0
     probe_core_processes
@@ -605,9 +609,17 @@ collect_service_state() {
                 STATUS_AVAILABLE_COUNT=$((STATUS_AVAILABLE_COUNT + 1))
                 STATUS_WORKING_COUNT=$((STATUS_WORKING_COUNT + 1))
                 ;;
-            stopped|degraded)
+            stopped)
                 STATUS_AVAILABLE_COUNT=$((STATUS_AVAILABLE_COUNT + 1))
                 STATUS_STOPPED_COUNT=$((STATUS_STOPPED_COUNT + 1))
+                ;;
+            degraded)
+                STATUS_AVAILABLE_COUNT=$((STATUS_AVAILABLE_COUNT + 1))
+                STATUS_DEGRADED_COUNT=$((STATUS_DEGRADED_COUNT + 1))
+                ;;
+            stalled)
+                STATUS_AVAILABLE_COUNT=$((STATUS_AVAILABLE_COUNT + 1))
+                STATUS_STALLED_COUNT=$((STATUS_STALLED_COUNT + 1))
                 ;;
             unavailable)
                 STATUS_UNAVAILABLE_COUNT=$((STATUS_UNAVAILABLE_COUNT + 1))
@@ -625,8 +637,16 @@ compute_overall_status() {
         printf 'stalled\n'
         return 0
     fi
+    if [ "$STATUS_STALLED_COUNT" -gt 0 ]; then
+        printf 'stalled\n'
+        return 0
+    fi
     if [ "$STATUS_UNKNOWN_COUNT" -gt 0 ]; then
         printf 'unknown\n'
+        return 0
+    fi
+    if [ "$STATUS_DEGRADED_COUNT" -gt 0 ]; then
+        printf 'degraded\n'
         return 0
     fi
     if [ "$STATUS_WORKING_COUNT" -gt 0 ]; then
@@ -806,8 +826,10 @@ emit_status_text() {
     overall="$(compute_overall_status)"
     printf 'hmstx status: %s\n' "$overall"
     printf '  core=%s/%s running\n' "$STATUS_CORE_RUNNING_COUNT" "$STATUS_CORE_TOTAL_COUNT"
-    printf '  working=%s stopped=%s unknown=%s unavailable=%s\n' \
+    printf '  working=%s degraded=%s stalled=%s stopped=%s unknown=%s unavailable=%s\n' \
         "$STATUS_WORKING_COUNT" \
+        "$STATUS_DEGRADED_COUNT" \
+        "$STATUS_STALLED_COUNT" \
         "$STATUS_STOPPED_COUNT" \
         "$STATUS_UNKNOWN_COUNT" \
         "$STATUS_UNAVAILABLE_COUNT"
@@ -820,8 +842,8 @@ emit_status_text() {
 
 emit_status_json() {
     local overall="$(compute_overall_status)"
-    printf '{"action":"status","checkedAt":"%s","overall":"%s","summary":{"coreRunning":%s,"coreTotal":%s,"working":%s,"stopped":%s,"unknown":%s,"unavailable":%s},"core":[%s],"services":[%s]}\n' \
-        "$(timestamp_iso)" "$overall" "$STATUS_CORE_RUNNING_COUNT" "$STATUS_CORE_TOTAL_COUNT" "$STATUS_WORKING_COUNT" "$STATUS_STOPPED_COUNT" "$STATUS_UNKNOWN_COUNT" "$STATUS_UNAVAILABLE_COUNT" "$(build_core_json)" "$(build_services_json)"
+    printf '{"action":"status","checkedAt":"%s","overall":"%s","summary":{"coreRunning":%s,"coreTotal":%s,"working":%s,"degraded":%s,"stalled":%s,"stopped":%s,"unknown":%s,"unavailable":%s},"core":[%s],"services":[%s]}\n' \
+        "$(timestamp_iso)" "$overall" "$STATUS_CORE_RUNNING_COUNT" "$STATUS_CORE_TOTAL_COUNT" "$STATUS_WORKING_COUNT" "$STATUS_DEGRADED_COUNT" "$STATUS_STALLED_COUNT" "$STATUS_STOPPED_COUNT" "$STATUS_UNKNOWN_COUNT" "$STATUS_UNAVAILABLE_COUNT" "$(build_core_json)" "$(build_services_json)"
 }
 
 emit_audit_text() {

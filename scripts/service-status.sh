@@ -78,8 +78,14 @@ check_one() {
     else
       if printf '%s' "$output" | rg -q '"running"[[:space:]]*:[[:space:]]*true'; then
         status="running"
+      elif printf '%s' "$output" | rg -q '"status"[[:space:]]*:[[:space:]]*"working"'; then
+        status="working"
       elif printf '%s' "$output" | rg -q '"status"[[:space:]]*:[[:space:]]*"degraded"'; then
         status="degraded"
+      elif printf '%s' "$output" | rg -q '"status"[[:space:]]*:[[:space:]]*"stalled"'; then
+        status="stalled"
+      elif printf '%s' "$output" | rg -q '"status"[[:space:]]*:[[:space:]]*"unavailable"'; then
+        status="unavailable"
       elif printf '%s' "$output" | rg -q '"status"[[:space:]]*:[[:space:]]*"external"'; then
         status="external"
       else
