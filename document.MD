@@ -7,6 +7,7 @@ This document inventories the current app surface in this repo:
 1. All operator-facing features exposed by the app, with the backend APIs or gateway routes that support them.
 2. How features are divided across the UI tabs, workspaces, and dedicated routes.
 3. The backend API surface exposed from `server/index.js`.
+4. The control-plane orchestration surface implemented under `server/src/infra/control-plane/`.
 
 ## Source of Truth for This Inventory
 
@@ -18,6 +19,10 @@ This inventory was derived from these canonical files:
 - Legacy dashboard API consumers and tab layout: `dashboard/app/DashboardClient.tsx`
 - Gateway/proxy surfaces: `nginx.conf`
 - Supporting context: `docs/architecture.md`, `docs/media-storage.md`
+- Control-plane modules and handlers:
+  - `server/src/infra/control-plane/*`
+  - `server/src/handlers/control-plane-handlers.js`
+  - `server/src/routes/register-api-routes.js`
 
 ## Canonicalization Rules
 
@@ -238,6 +243,20 @@ All canonical paths below also exist under `/api/...` unless otherwise noted.
 | `PUT` | `/users/:id` | Update user |
 | `GET` | `/telemetry` | Telemetry snapshot |
 
+### Control-Plane Catalog, State, and Workflows
+
+| Method | Canonical path | Notes |
+| --- | --- | --- |
+| `GET` | `/catalog/services` | Canonical service catalog (backend-owned metadata) |
+| `GET` | `/catalog/workers` | Canonical workflow-worker catalog |
+| `GET` | `/state/services` | Lifecycle snapshot (`?force=true` refreshes) |
+| `GET` | `/workflows` | Registered workflow definitions |
+| `GET` | `/workflows/runs` | Workflow run history (`limit` supported) |
+| `GET` | `/workflows/runs/:id` | Workflow run detail |
+| `POST` | `/workflows/:key/run` | Trigger workflow run |
+| `POST` | `/workflows/runs/:id/resume` | Resume blocked/failed workflow run |
+| `GET` | `/events/workflows` | Workflow event stream (`limit`, `since`) |
+
 ### Filesystem APIs
 
 | Method | Canonical path | Notes |
@@ -322,6 +341,23 @@ These are not backend JSON APIs from `server/index.js`, but they are real app fe
 | `/bazarr/` | Bazarr (`127.0.0.1:6767`) | admin |
 | `/llm/` | Local LLM service (`127.0.0.1:11435`) | admin |
 | `/codex-revamped/` | Codex ReVamped (`127.0.0.1:2455`) | admin |
+
+## Script Adapter Contract
+
+The orchestration/control logic lives in backend control-plane modules. Scripts in `scripts/` are execution adapters and should expose:
+
+- `start`
+- `stop`
+- `restart`
+- `status`
+- optional `status --json` for machine-readable health/state
+
+Worker adapters now aligned to this contract:
+- `media-workflow-service.sh`
+- `storage-watchdog-service.sh`
+- `usb-mount-service.sh`
+- `jellyfin-library-sync.sh`
+- `media-importer.sh` (run-to-completion with status reporting)
 
 ## Inventory Gaps and Review Notes
 
