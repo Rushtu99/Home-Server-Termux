@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-04-30T18:49:53.409Z",
+  "capturedAt": "2026-05-17T18:20:30.819Z",
   "sourceEntrypoint": "server/index.js",
   "invariants": {
     "envLoadGuardEnabled": true,
@@ -13,7 +13,7 @@
   "registrationOrder": {
     "firstAuthRouteIndex": 0,
     "firstDualRouteIndex": 10,
-    "errorMiddlewareIndex": 198,
-    "lastRouteIndex": 197
+    "errorMiddlewareIndex": 212,
+    "lastRouteIndex": 211
   }
 }

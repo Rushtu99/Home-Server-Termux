@@ -67,6 +67,9 @@ const createServiceManager = ({
   clearStorageResumeRequirementForService = () => {},
   eventBus,
   serviceAliases = {},
+  serviceDependencies = {},
+  stateEngine = null,
+  beforeServiceAction = null,
 } = {}) => {
   if (typeof runCommand !== 'function') {
     throw new Error('serviceManager requires runCommand');
@@ -77,6 +80,12 @@ const createServiceManager = ({
   const emit = (eventName, payload = {}) => {
     if (eventBus && typeof eventBus.emit === 'function') {
       eventBus.emit(eventName, payload);
+    }
+  };
+
+  const persistServiceState = (serviceName, patch = {}) => {
+    if (stateEngine && typeof stateEngine.updateService === 'function') {
+      stateEngine.updateService(serviceName, patch);
     }
   };
 
@@ -151,6 +160,17 @@ const createServiceManager = ({
       }
     }
 
+    if (normalizedAction === 'status' && descriptor.commands.status) {
+      try {
+        const output = await runCommand(descriptor.commands.status);
+        const parsedState = parseWorkerStateFromStatusOutput(output);
+        return typeof parsedState === 'boolean' ? parsedState : true;
+      } catch (error) {
+        const parsedState = parseWorkerStateFromStatusOutput(error);
+        return typeof parsedState === 'boolean' ? parsedState : false;
+      }
+    }
+
     const expectedRunning = normalizedAction !== 'stop';
     if (typeof waitForServiceState === 'function') {
       return waitForServiceState(descriptor.serviceConfig, expectedRunning);
@@ -166,6 +186,12 @@ const createServiceManager = ({
 
     const running = await getRunningState(descriptor, 'status');
     const state = running ? 'running' : 'stopped';
+    persistServiceState(descriptor.key, {
+      checkedAt: new Date().toISOString(),
+      kind: descriptor.kind,
+      running,
+      status: state,
+    });
     return {
       checkedAt: new Date().toISOString(),
       kind: descriptor.kind,
@@ -200,6 +226,14 @@ const createServiceManager = ({
       }
     }
 
+    if (['start', 'restart'].includes(normalizedAction) && typeof beforeServiceAction === 'function') {
+      await beforeServiceAction({
+        action: normalizedAction,
+        descriptor,
+        serviceKey,
+      });
+    }
+
     if (['start', 'restart'].includes(normalizedAction) && typeof resolveServiceInstall === 'function') {
       const install = await resolveServiceInstall(serviceKey, descriptor.serviceConfig);
       if (!install?.available) {
@@ -208,7 +242,24 @@ const createServiceManager = ({
     }
   };
 
-  const control = async ({ service, action }) => {
+  const startDependencies = async (serviceKey, stack = []) => {
+    const dependencies = Array.isArray(serviceDependencies[serviceKey]) ? serviceDependencies[serviceKey] : [];
+    for (const dependency of dependencies) {
+      const dependencyKey = resolveAlias(dependency);
+      if (!dependencyKey || dependencyKey === serviceKey || stack.includes(dependencyKey)) {
+        throw new Error(`Service dependency cycle detected at '${dependencyKey || serviceKey}'`);
+      }
+      const status = await getServiceStatus(dependencyKey).catch(() => ({ running: false }));
+      if (status.running) {
+        continue;
+      }
+      // Sequential dependency startup preserves Termux process ordering.
+      // eslint-disable-next-line no-await-in-loop
+      await control({ service: dependencyKey, action: 'start', dependencyStack: [...stack, serviceKey] });
+    }
+  };
+
+  const control = async ({ service, action, dependencyStack = [] }) => {
     const requestedServiceKey = String(service || '').trim();
     const normalizedAction = String(action || '').trim().toLowerCase();
 
@@ -226,6 +277,10 @@ const createServiceManager = ({
 
     const serviceKey = descriptor.key;
 
+    if (['start', 'restart'].includes(normalizedAction)) {
+      await startDependencies(serviceKey, dependencyStack);
+    }
+
     await ensureServiceAllowed(serviceKey, descriptor, normalizedAction);
 
     const command = descriptor.commands[normalizedAction];
@@ -234,7 +289,9 @@ const createServiceManager = ({
     }
 
     const statusBefore = await getServiceStatus(serviceKey).catch(() => ({ running: false }));
-    const alreadyInTargetState = normalizedAction === 'stop' && statusBefore.running === false;
+    const alreadyInTargetState = normalizedAction === 'start'
+      ? statusBefore.running === true
+      : normalizedAction === 'stop' && statusBefore.running === false;
 
     emit('service.control.requested', {
       action: normalizedAction,
@@ -269,6 +326,14 @@ const createServiceManager = ({
       lastAction: normalizedAction,
       lastUpdatedAt: new Date().toISOString(),
       requestedServiceKey,
+    });
+    persistServiceState(serviceKey, {
+      desiredState: expectedRunning ? 'running' : 'stopped',
+      lastAction: normalizedAction,
+      output: String(output || '').slice(-4000),
+      requestedServiceKey,
+      running,
+      status: running ? 'running' : 'stopped',
     });
 
     emit('service.control.completed', {

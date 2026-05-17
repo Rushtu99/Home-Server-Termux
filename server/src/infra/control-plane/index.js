@@ -8,6 +8,18 @@ const { createServiceManager } = require('./service-manager');
 const { createStateStore } = require('./state-store');
 const { createWorkflowEngine } = require('./workflow-engine');
 
+let createDescriptorRegistry = null;
+let createStateEngine = null;
+let shouldBlockHeavyService = null;
+try {
+  ({ createDescriptorRegistry } = require('../../../../backend/services/registry'));
+  ({ createStateEngine } = require('../../../../backend/state/engine'));
+  ({ shouldBlockHeavyService } = require('../../../../backend/power/android'));
+} catch (_) {
+  // The v2 descriptor layer is additive. Keep the legacy control plane usable if
+  // a packaged deployment excludes the parallel v2 directories.
+}
+
 const DEFAULT_SERVICE_ALIASES = {
   'fs-worker': 'media-importer',
   'llama.cpp': 'llm',
@@ -40,27 +52,86 @@ const createControlPlane = ({
     fs,
     runtimeDir,
   });
+  const v2Registry = typeof createDescriptorRegistry === 'function'
+    ? createDescriptorRegistry({ projectRoot })
+    : null;
+  const v2StateEngine = typeof createStateEngine === 'function'
+    ? createStateEngine({ projectRoot })
+    : null;
+  const legacyServices = services || {};
+  const legacyWorkers = workerCommands || {};
+  const v2ServiceCommands = v2Registry?.serviceCommands || {};
+  const v2ServiceDependencies = Object.fromEntries(
+    Object.entries(v2Registry?.serviceDescriptors || {}).map(([key, descriptor]) => [
+      key,
+      Array.isArray(descriptor.dependencies) ? descriptor.dependencies : [],
+    ])
+  );
+  const v2ServiceAliases = Object.entries(v2Registry?.serviceAliases || {}).reduce((acc, [alias, target]) => {
+    if (!legacyServices[alias] && !legacyWorkers[alias]) {
+      acc[alias] = target;
+    }
+    return acc;
+  }, {});
+  const mergedServices = {
+    ...v2ServiceCommands,
+    ...legacyServices,
+  };
+  const mergedServiceAliases = {
+    ...DEFAULT_SERVICE_ALIASES,
+    ...v2ServiceAliases,
+  };
+  const mergedGetManageableServiceNames = async () => {
+    const legacyNames = typeof getManageableServiceNames === 'function'
+      ? await getManageableServiceNames()
+      : Object.keys(legacyServices);
+    return [...new Set([...legacyNames, ...Object.keys(v2ServiceCommands)])].sort();
+  };
+  const beforeServiceAction = async ({ serviceKey, action }) => {
+    if (!['start', 'restart'].includes(String(action || '')) || process.env.HS_POWER_GUARD === 'false') {
+      return;
+    }
+    const descriptor = v2Registry?.serviceDescriptors?.[serviceKey];
+    if (!descriptor || typeof shouldBlockHeavyService !== 'function') {
+      return;
+    }
+    const block = shouldBlockHeavyService({ descriptor });
+    if (block.blocked) {
+      const error = new Error(`Power guard blocked ${serviceKey}: ${block.reason}`);
+      error.code = 'blocked_by_power';
+      error.power = block.power;
+      throw error;
+    }
+  };
   let serviceStateSnapshotInFlight = null;
 
   const serviceManager = createServiceManager({
     classifyServiceState,
     clearStorageResumeRequirementForService,
     eventBus,
-    getManageableServiceNames,
+    getManageableServiceNames: mergedGetManageableServiceNames,
     getStorageBlockForService,
     readStorageProtectionState,
     resolveServiceInstall,
     runCommand,
-    serviceAliases: DEFAULT_SERVICE_ALIASES,
+    serviceAliases: mergedServiceAliases,
+    serviceDependencies: v2ServiceDependencies,
     serviceStateCache,
-    services,
+    services: mergedServices,
+    stateEngine: v2StateEngine,
+    beforeServiceAction,
     waitForServiceState,
-    workerCommands,
+    workerCommands: legacyWorkers,
   });
 
   const clusterConfig = loadClusterConfig({ projectRoot });
+  const mergedClusterConfig = {
+    ...clusterConfig.clusters,
+    ...(v2Registry?.clusterConfig || {}),
+  };
   const clusterManager = createClusterManager({
-    clusterConfig: clusterConfig.clusters,
+    clusterAliases: v2Registry?.clusterAliases || {},
+    clusterConfig: mergedClusterConfig,
     eventBus,
     serviceManager,
     stateStore,
@@ -89,13 +160,16 @@ const createControlPlane = ({
       buildLegacyServiceCatalog(),
       serviceManager.listServiceNames(),
     ]);
+    const knownLegacyKeys = new Set((legacyCatalog || []).map((entry) => String(entry.key || '')));
+    const v2CatalogEntries = (v2Registry?.catalogEntries || [])
+      .filter((entry) => !knownLegacyKeys.has(String(entry.key || '')));
 
     return buildCatalogEntries({
       manageableServiceNames,
       optionalServiceNames,
-      serviceCatalog: legacyCatalog,
-      serviceCommands: services,
-      workerCommands,
+      serviceCatalog: [...legacyCatalog, ...v2CatalogEntries],
+      serviceCommands: mergedServices,
+      workerCommands: legacyWorkers,
     });
   };
 
@@ -195,7 +269,7 @@ const createControlPlane = ({
     {
       clusterManager,
       serviceManager,
-      workerCommands,
+      workerCommands: legacyWorkers,
     },
     metadata,
   );
@@ -203,7 +277,7 @@ const createControlPlane = ({
   const resumeWorkflow = async (runId) => workflowEngine.resumeWorkflowRun(runId, {
     clusterManager,
     serviceManager,
-    workerCommands,
+    workerCommands: legacyWorkers,
   });
 
   const refreshMetricsSnapshot = async () => {

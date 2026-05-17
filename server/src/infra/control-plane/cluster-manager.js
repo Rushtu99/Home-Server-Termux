@@ -1,6 +1,7 @@
 const normalizeName = (value) => String(value || '').trim().toLowerCase();
 
 const createClusterManager = ({
+  clusterAliases = {},
   clusterConfig = {},
   serviceManager,
   stateStore,
@@ -11,13 +12,27 @@ const createClusterManager = ({
     throw new Error('clusterManager requires serviceManager');
   }
 
+  const aliases = Object.entries(clusterAliases).reduce((acc, [alias, target]) => {
+    const key = normalizeName(alias);
+    const value = normalizeName(target);
+    if (key && value) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+
+  const resolveClusterName = (name) => {
+    const key = normalizeName(name);
+    return aliases[key] || key;
+  };
+
   const clusters = Object.entries(clusterConfig).reduce((acc, [name, def]) => {
     const key = normalizeName(name);
     if (!key) {
       return acc;
     }
     acc[key] = {
-      dependsOn: Array.isArray(def?.dependsOn) ? def.dependsOn.map(normalizeName).filter(Boolean) : [],
+      dependsOn: Array.isArray(def?.dependsOn) ? def.dependsOn.map(resolveClusterName).filter(Boolean) : [],
       services: Array.isArray(def?.services) ? def.services.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
     };
     return acc;
@@ -32,7 +47,7 @@ const createClusterManager = ({
   };
 
   const getClusterDefinition = (name) => {
-    const key = normalizeName(name);
+    const key = resolveClusterName(name);
     return clusters[key] || null;
   };
 
@@ -115,7 +130,7 @@ const createClusterManager = ({
   };
 
   const resolveDependencies = (name, { includeSelf = false } = {}) => {
-    const key = normalizeName(name);
+    const key = resolveClusterName(name);
     if (!clusters[key]) {
       throw new Error(`Unknown cluster '${key}'`);
     }
@@ -154,7 +169,7 @@ const createClusterManager = ({
   };
 
   const resolveDependents = (name, { includeSelf = true } = {}) => {
-    const key = normalizeName(name);
+    const key = resolveClusterName(name);
     if (!clusters[key]) {
       throw new Error(`Unknown cluster '${key}'`);
     }
@@ -220,7 +235,7 @@ const createClusterManager = ({
   };
 
   const getClusterRuntime = async (name) => {
-    const key = normalizeName(name);
+    const key = resolveClusterName(name);
     const definition = getClusterDefinition(key);
     if (!definition) {
       throw new Error(`Unknown cluster '${key}'`);
@@ -285,7 +300,7 @@ const createClusterManager = ({
   };
 
   const withClusterLock = async (clusterName, handler) => {
-    const key = normalizeName(clusterName);
+    const key = resolveClusterName(clusterName);
     const existing = operationLocks.get(key);
     if (existing) {
       return existing;
@@ -302,7 +317,7 @@ const createClusterManager = ({
   };
 
   const startCluster = async (name) => withClusterLock(name, async () => {
-    const target = normalizeName(name);
+    const target = resolveClusterName(name);
     const ordered = resolveDependencies(target, { includeSelf: true });
 
     for (const clusterName of ordered) {
@@ -323,7 +338,7 @@ const createClusterManager = ({
   });
 
   const stopCluster = async (name) => withClusterLock(name, async () => {
-    const target = normalizeName(name);
+    const target = resolveClusterName(name);
     const ordered = resolveDependents(target, { includeSelf: true });
 
     for (const clusterName of ordered) {
@@ -344,7 +359,7 @@ const createClusterManager = ({
   });
 
   const restartCluster = async (name) => withClusterLock(name, async () => {
-    const target = normalizeName(name);
+    const target = resolveClusterName(name);
     const definition = getClusterDefinition(target);
     if (!definition) {
       throw new Error(`Unknown cluster '${target}'`);
@@ -380,6 +395,7 @@ const createClusterManager = ({
     detectCircularDependencies,
     getCluster: getClusterRuntime,
     listClusters,
+    resolveClusterName,
     resolveDependencies,
     restartCluster,
     startCluster,

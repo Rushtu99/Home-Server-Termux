@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: radarr
+label: "Radarr"
+type: service
+group: arr
+surface: arr
+description: "Movie automation service in the ARR stack."
+aliases: []
+dependencies: [filesystem, qbittorrent, prowlarr]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 7878
+route: "/radarr/"
+powerProfile: radarr0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

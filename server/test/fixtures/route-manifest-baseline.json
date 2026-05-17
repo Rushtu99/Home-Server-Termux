@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-04-30T18:49:53.409Z",
+  "capturedAt": "2026-05-17T18:20:30.819Z",
   "sourceEntrypoint": "server/index.js",
-  "totalRoutes": 198,
+  "totalRoutes": 212,
   "routes": [
     {
       "registrationIndex": 0,
@@ -659,6 +659,44 @@
     {
       "registrationIndex": 36,
       "method": "GET",
+      "path": "/services/status",
+      "mirrorPath": "/api/services/status",
+      "mirrorGroup": "/services/status",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/services/status:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/services/status:1",
+        "workflowStateServicesHandler"
+      ],
+      "handlerName": "workflowStateServicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 37,
+      "method": "GET",
+      "path": "/api/services/status",
+      "mirrorPath": "/services/status",
+      "mirrorGroup": "/services/status",
+      "authChain": [
+        "requireAuth",
+        "anonymous@GET:/api/services/status:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@GET:/api/services/status:1",
+        "workflowStateServicesHandler"
+      ],
+      "handlerName": "workflowStateServicesHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 38,
+      "method": "GET",
       "path": "/clusters",
       "mirrorPath": "/api/clusters",
       "mirrorGroup": "/clusters",
@@ -676,7 +714,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 37,
+      "registrationIndex": 39,
       "method": "GET",
       "path": "/api/clusters",
       "mirrorPath": "/clusters",
@@ -695,7 +733,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 38,
+      "registrationIndex": 40,
       "method": "GET",
       "path": "/clusters/:name",
       "mirrorPath": "/api/clusters/:name",
@@ -714,7 +752,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 39,
+      "registrationIndex": 41,
       "method": "GET",
       "path": "/api/clusters/:name",
       "mirrorPath": "/clusters/:name",
@@ -733,7 +771,121 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 40,
+      "registrationIndex": 42,
+      "method": "POST",
+      "path": "/clusters/start/:name",
+      "mirrorPath": "/api/clusters/start/:name",
+      "mirrorGroup": "/clusters/start/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/start/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/start/:name:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 43,
+      "method": "POST",
+      "path": "/api/clusters/start/:name",
+      "mirrorPath": "/clusters/start/:name",
+      "mirrorGroup": "/clusters/start/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/start/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/start/:name:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 44,
+      "method": "POST",
+      "path": "/clusters/stop/:name",
+      "mirrorPath": "/api/clusters/stop/:name",
+      "mirrorGroup": "/clusters/stop/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/stop/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/stop/:name:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 45,
+      "method": "POST",
+      "path": "/api/clusters/stop/:name",
+      "mirrorPath": "/clusters/stop/:name",
+      "mirrorGroup": "/clusters/stop/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/stop/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/stop/:name:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 46,
+      "method": "POST",
+      "path": "/clusters/restart/:name",
+      "mirrorPath": "/api/clusters/restart/:name",
+      "mirrorGroup": "/clusters/restart/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/restart/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/clusters/restart/:name:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 47,
+      "method": "POST",
+      "path": "/api/clusters/restart/:name",
+      "mirrorPath": "/clusters/restart/:name",
+      "mirrorGroup": "/clusters/restart/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/restart/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/clusters/restart/:name:1",
+        "clusterActionHandler"
+      ],
+      "handlerName": "clusterActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 48,
       "method": "POST",
       "path": "/clusters/:name/start",
       "mirrorPath": "/api/clusters/:name/start",
@@ -752,7 +904,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 41,
+      "registrationIndex": 49,
       "method": "POST",
       "path": "/api/clusters/:name/start",
       "mirrorPath": "/clusters/:name/start",
@@ -771,7 +923,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 42,
+      "registrationIndex": 50,
       "method": "POST",
       "path": "/clusters/:name/stop",
       "mirrorPath": "/api/clusters/:name/stop",
@@ -790,7 +942,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 43,
+      "registrationIndex": 51,
       "method": "POST",
       "path": "/api/clusters/:name/stop",
       "mirrorPath": "/clusters/:name/stop",
@@ -809,7 +961,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 44,
+      "registrationIndex": 52,
       "method": "POST",
       "path": "/clusters/:name/restart",
       "mirrorPath": "/api/clusters/:name/restart",
@@ -828,7 +980,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 45,
+      "registrationIndex": 53,
       "method": "POST",
       "path": "/api/clusters/:name/restart",
       "mirrorPath": "/clusters/:name/restart",
@@ -847,7 +999,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 46,
+      "registrationIndex": 54,
       "method": "GET",
       "path": "/services/:name",
       "mirrorPath": "/api/services/:name",
@@ -866,7 +1018,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 47,
+      "registrationIndex": 55,
       "method": "GET",
       "path": "/api/services/:name",
       "mirrorPath": "/services/:name",
@@ -885,7 +1037,121 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 48,
+      "registrationIndex": 56,
+      "method": "POST",
+      "path": "/services/start/:name",
+      "mirrorPath": "/api/services/start/:name",
+      "mirrorGroup": "/services/start/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/services/start/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/services/start/:name:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 57,
+      "method": "POST",
+      "path": "/api/services/start/:name",
+      "mirrorPath": "/services/start/:name",
+      "mirrorGroup": "/services/start/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/start/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/start/:name:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 58,
+      "method": "POST",
+      "path": "/services/stop/:name",
+      "mirrorPath": "/api/services/stop/:name",
+      "mirrorGroup": "/services/stop/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/services/stop/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/services/stop/:name:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 59,
+      "method": "POST",
+      "path": "/api/services/stop/:name",
+      "mirrorPath": "/services/stop/:name",
+      "mirrorGroup": "/services/stop/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/stop/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/stop/:name:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 60,
+      "method": "POST",
+      "path": "/services/restart/:name",
+      "mirrorPath": "/api/services/restart/:name",
+      "mirrorGroup": "/services/restart/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/services/restart/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/services/restart/:name:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 61,
+      "method": "POST",
+      "path": "/api/services/restart/:name",
+      "mirrorPath": "/services/restart/:name",
+      "mirrorGroup": "/services/restart/:name",
+      "authChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/restart/:name:1"
+      ],
+      "middlewareChain": [
+        "requireAuth",
+        "anonymous@POST:/api/services/restart/:name:1",
+        "serviceActionHandler"
+      ],
+      "handlerName": "serviceActionHandler",
+      "rawBodyParser": false,
+      "registrar": "dual-route"
+    },
+    {
+      "registrationIndex": 62,
       "method": "POST",
       "path": "/services/:name/start",
       "mirrorPath": "/api/services/:name/start",
@@ -904,7 +1170,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 49,
+      "registrationIndex": 63,
       "method": "POST",
       "path": "/api/services/:name/start",
       "mirrorPath": "/services/:name/start",
@@ -923,7 +1189,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 50,
+      "registrationIndex": 64,
       "method": "POST",
       "path": "/services/:name/stop",
       "mirrorPath": "/api/services/:name/stop",
@@ -942,7 +1208,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 51,
+      "registrationIndex": 65,
       "method": "POST",
       "path": "/api/services/:name/stop",
       "mirrorPath": "/services/:name/stop",
@@ -961,7 +1227,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 52,
+      "registrationIndex": 66,
       "method": "POST",
       "path": "/services/:name/restart",
       "mirrorPath": "/api/services/:name/restart",
@@ -980,7 +1246,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 53,
+      "registrationIndex": 67,
       "method": "POST",
       "path": "/api/services/:name/restart",
       "mirrorPath": "/services/:name/restart",
@@ -999,7 +1265,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 54,
+      "registrationIndex": 68,
       "method": "GET",
       "path": "/workflows",
       "mirrorPath": "/api/workflows",
@@ -1018,7 +1284,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 55,
+      "registrationIndex": 69,
       "method": "GET",
       "path": "/api/workflows",
       "mirrorPath": "/workflows",
@@ -1037,7 +1303,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 56,
+      "registrationIndex": 70,
       "method": "GET",
       "path": "/workflows/runs",
       "mirrorPath": "/api/workflows/runs",
@@ -1056,7 +1322,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 57,
+      "registrationIndex": 71,
       "method": "GET",
       "path": "/api/workflows/runs",
       "mirrorPath": "/workflows/runs",
@@ -1075,7 +1341,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 58,
+      "registrationIndex": 72,
       "method": "GET",
       "path": "/workflows/runs/:id",
       "mirrorPath": "/api/workflows/runs/:id",
@@ -1094,7 +1360,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 59,
+      "registrationIndex": 73,
       "method": "GET",
       "path": "/api/workflows/runs/:id",
       "mirrorPath": "/workflows/runs/:id",
@@ -1113,7 +1379,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 60,
+      "registrationIndex": 74,
       "method": "POST",
       "path": "/workflows/:key/run",
       "mirrorPath": "/api/workflows/:key/run",
@@ -1132,7 +1398,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 61,
+      "registrationIndex": 75,
       "method": "POST",
       "path": "/api/workflows/:key/run",
       "mirrorPath": "/workflows/:key/run",
@@ -1151,7 +1417,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 62,
+      "registrationIndex": 76,
       "method": "POST",
       "path": "/workflows/:name/start",
       "mirrorPath": "/api/workflows/:name/start",
@@ -1170,7 +1436,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 63,
+      "registrationIndex": 77,
       "method": "POST",
       "path": "/api/workflows/:name/start",
       "mirrorPath": "/workflows/:name/start",
@@ -1189,7 +1455,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 64,
+      "registrationIndex": 78,
       "method": "POST",
       "path": "/workflows/runs/:id/resume",
       "mirrorPath": "/api/workflows/runs/:id/resume",
@@ -1208,7 +1474,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 65,
+      "registrationIndex": 79,
       "method": "POST",
       "path": "/api/workflows/runs/:id/resume",
       "mirrorPath": "/workflows/runs/:id/resume",
@@ -1227,7 +1493,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 66,
+      "registrationIndex": 80,
       "method": "GET",
       "path": "/workflows/:id",
       "mirrorPath": "/api/workflows/:id",
@@ -1246,7 +1512,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 67,
+      "registrationIndex": 81,
       "method": "GET",
       "path": "/api/workflows/:id",
       "mirrorPath": "/workflows/:id",
@@ -1265,7 +1531,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 68,
+      "registrationIndex": 82,
       "method": "GET",
       "path": "/events/workflows",
       "mirrorPath": "/api/events/workflows",
@@ -1284,7 +1550,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 69,
+      "registrationIndex": 83,
       "method": "GET",
       "path": "/api/events/workflows",
       "mirrorPath": "/events/workflows",
@@ -1303,7 +1569,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 70,
+      "registrationIndex": 84,
       "method": "GET",
       "path": "/metrics",
       "mirrorPath": "/api/metrics",
@@ -1322,7 +1588,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 71,
+      "registrationIndex": 85,
       "method": "GET",
       "path": "/api/metrics",
       "mirrorPath": "/metrics",
@@ -1341,7 +1607,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 72,
+      "registrationIndex": 86,
       "method": "GET",
       "path": "/health",
       "mirrorPath": "/api/health",
@@ -1360,7 +1626,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 73,
+      "registrationIndex": 87,
       "method": "GET",
       "path": "/api/health",
       "mirrorPath": "/health",
@@ -1379,7 +1645,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 74,
+      "registrationIndex": 88,
       "method": "GET",
       "path": "/state",
       "mirrorPath": "/api/state",
@@ -1398,7 +1664,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 75,
+      "registrationIndex": 89,
       "method": "GET",
       "path": "/api/state",
       "mirrorPath": "/state",
@@ -1417,7 +1683,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 76,
+      "registrationIndex": 90,
       "method": "GET",
       "path": "/system/network/exposure",
       "mirrorPath": "/api/system/network/exposure",
@@ -1436,7 +1702,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 77,
+      "registrationIndex": 91,
       "method": "GET",
       "path": "/api/system/network/exposure",
       "mirrorPath": "/system/network/exposure",
@@ -1455,7 +1721,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 78,
+      "registrationIndex": 92,
       "method": "GET",
       "path": "/connections",
       "mirrorPath": "/api/connections",
@@ -1474,7 +1740,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 79,
+      "registrationIndex": 93,
       "method": "GET",
       "path": "/api/connections",
       "mirrorPath": "/connections",
@@ -1493,7 +1759,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 80,
+      "registrationIndex": 94,
       "method": "POST",
       "path": "/connections/:id/disconnect",
       "mirrorPath": "/api/connections/:id/disconnect",
@@ -1512,7 +1778,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 81,
+      "registrationIndex": 95,
       "method": "POST",
       "path": "/api/connections/:id/disconnect",
       "mirrorPath": "/connections/:id/disconnect",
@@ -1531,7 +1797,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 82,
+      "registrationIndex": 96,
       "method": "GET",
       "path": "/storage",
       "mirrorPath": "/api/storage",
@@ -1550,7 +1816,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 83,
+      "registrationIndex": 97,
       "method": "GET",
       "path": "/api/storage",
       "mirrorPath": "/storage",
@@ -1569,7 +1835,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 84,
+      "registrationIndex": 98,
       "method": "GET",
       "path": "/storage/protection",
       "mirrorPath": "/api/storage/protection",
@@ -1588,7 +1854,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 85,
+      "registrationIndex": 99,
       "method": "GET",
       "path": "/api/storage/protection",
       "mirrorPath": "/storage/protection",
@@ -1607,7 +1873,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 86,
+      "registrationIndex": 100,
       "method": "POST",
       "path": "/storage/protection/recheck",
       "mirrorPath": "/api/storage/protection/recheck",
@@ -1626,7 +1892,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 87,
+      "registrationIndex": 101,
       "method": "POST",
       "path": "/api/storage/protection/recheck",
       "mirrorPath": "/storage/protection/recheck",
@@ -1645,7 +1911,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 88,
+      "registrationIndex": 102,
       "method": "POST",
       "path": "/storage/protection/resume",
       "mirrorPath": "/api/storage/protection/resume",
@@ -1664,7 +1930,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 89,
+      "registrationIndex": 103,
       "method": "POST",
       "path": "/api/storage/protection/resume",
       "mirrorPath": "/storage/protection/resume",
@@ -1683,7 +1949,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 90,
+      "registrationIndex": 104,
       "method": "POST",
       "path": "/drives/helpers/repair",
       "mirrorPath": "/api/drives/helpers/repair",
@@ -1702,7 +1968,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 91,
+      "registrationIndex": 105,
       "method": "POST",
       "path": "/api/drives/helpers/repair",
       "mirrorPath": "/drives/helpers/repair",
@@ -1721,7 +1987,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 92,
+      "registrationIndex": 106,
       "method": "GET",
       "path": "/logs",
       "mirrorPath": "/api/logs",
@@ -1740,7 +2006,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 93,
+      "registrationIndex": 107,
       "method": "GET",
       "path": "/api/logs",
       "mirrorPath": "/logs",
@@ -1759,7 +2025,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 94,
+      "registrationIndex": 108,
       "method": "GET",
       "path": "/logging",
       "mirrorPath": "/api/logging",
@@ -1778,7 +2044,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 95,
+      "registrationIndex": 109,
       "method": "GET",
       "path": "/api/logging",
       "mirrorPath": "/logging",
@@ -1797,7 +2063,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 96,
+      "registrationIndex": 110,
       "method": "POST",
       "path": "/logging",
       "mirrorPath": "/api/logging",
@@ -1816,7 +2082,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 97,
+      "registrationIndex": 111,
       "method": "POST",
       "path": "/api/logging",
       "mirrorPath": "/logging",
@@ -1835,7 +2101,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 98,
+      "registrationIndex": 112,
       "method": "GET",
       "path": "/drives",
       "mirrorPath": "/api/drives",
@@ -1854,7 +2120,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 99,
+      "registrationIndex": 113,
       "method": "GET",
       "path": "/api/drives",
       "mirrorPath": "/drives",
@@ -1873,7 +2139,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 100,
+      "registrationIndex": 114,
       "method": "POST",
       "path": "/drives/check",
       "mirrorPath": "/api/drives/check",
@@ -1892,7 +2158,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 101,
+      "registrationIndex": 115,
       "method": "POST",
       "path": "/api/drives/check",
       "mirrorPath": "/drives/check",
@@ -1911,7 +2177,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 102,
+      "registrationIndex": 116,
       "method": "GET",
       "path": "/shares",
       "mirrorPath": "/api/shares",
@@ -1930,7 +2196,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 103,
+      "registrationIndex": 117,
       "method": "GET",
       "path": "/api/shares",
       "mirrorPath": "/shares",
@@ -1949,7 +2215,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 104,
+      "registrationIndex": 118,
       "method": "POST",
       "path": "/shares",
       "mirrorPath": "/api/shares",
@@ -1968,7 +2234,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 105,
+      "registrationIndex": 119,
       "method": "POST",
       "path": "/api/shares",
       "mirrorPath": "/shares",
@@ -1987,7 +2253,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 106,
+      "registrationIndex": 120,
       "method": "PUT",
       "path": "/shares/:id",
       "mirrorPath": "/api/shares/:id",
@@ -2006,7 +2272,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 107,
+      "registrationIndex": 121,
       "method": "PUT",
       "path": "/api/shares/:id",
       "mirrorPath": "/shares/:id",
@@ -2025,7 +2291,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 108,
+      "registrationIndex": 122,
       "method": "GET",
       "path": "/users",
       "mirrorPath": "/api/users",
@@ -2044,7 +2310,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 109,
+      "registrationIndex": 123,
       "method": "GET",
       "path": "/api/users",
       "mirrorPath": "/users",
@@ -2063,7 +2329,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 110,
+      "registrationIndex": 124,
       "method": "POST",
       "path": "/users",
       "mirrorPath": "/api/users",
@@ -2082,7 +2348,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 111,
+      "registrationIndex": 125,
       "method": "POST",
       "path": "/api/users",
       "mirrorPath": "/users",
@@ -2101,7 +2367,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 112,
+      "registrationIndex": 126,
       "method": "PUT",
       "path": "/users/:id",
       "mirrorPath": "/api/users/:id",
@@ -2120,7 +2386,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 113,
+      "registrationIndex": 127,
       "method": "PUT",
       "path": "/api/users/:id",
       "mirrorPath": "/users/:id",
@@ -2139,7 +2405,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 114,
+      "registrationIndex": 128,
       "method": "GET",
       "path": "/telemetry",
       "mirrorPath": "/api/telemetry",
@@ -2158,7 +2424,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 115,
+      "registrationIndex": 129,
       "method": "GET",
       "path": "/api/telemetry",
       "mirrorPath": "/telemetry",
@@ -2177,7 +2443,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 116,
+      "registrationIndex": 130,
       "method": "GET",
       "path": "/fs/list",
       "mirrorPath": "/api/fs/list",
@@ -2194,7 +2460,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 117,
+      "registrationIndex": 131,
       "method": "GET",
       "path": "/api/fs/list",
       "mirrorPath": "/fs/list",
@@ -2211,7 +2477,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 118,
+      "registrationIndex": 132,
       "method": "POST",
       "path": "/fs/mkdir",
       "mirrorPath": "/api/fs/mkdir",
@@ -2228,7 +2494,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 119,
+      "registrationIndex": 133,
       "method": "POST",
       "path": "/api/fs/mkdir",
       "mirrorPath": "/fs/mkdir",
@@ -2245,7 +2511,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 120,
+      "registrationIndex": 134,
       "method": "POST",
       "path": "/fs/rename",
       "mirrorPath": "/api/fs/rename",
@@ -2262,7 +2528,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 121,
+      "registrationIndex": 135,
       "method": "POST",
       "path": "/api/fs/rename",
       "mirrorPath": "/fs/rename",
@@ -2279,7 +2545,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 122,
+      "registrationIndex": 136,
       "method": "GET",
       "path": "/fs/operations",
       "mirrorPath": "/api/fs/operations",
@@ -2296,7 +2562,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 123,
+      "registrationIndex": 137,
       "method": "GET",
       "path": "/api/fs/operations",
       "mirrorPath": "/fs/operations",
@@ -2313,7 +2579,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 124,
+      "registrationIndex": 138,
       "method": "GET",
       "path": "/fs/operations/:id",
       "mirrorPath": "/api/fs/operations/:id",
@@ -2330,7 +2596,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 125,
+      "registrationIndex": 139,
       "method": "GET",
       "path": "/api/fs/operations/:id",
       "mirrorPath": "/fs/operations/:id",
@@ -2347,7 +2613,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 126,
+      "registrationIndex": 140,
       "method": "POST",
       "path": "/fs/operations/:id/control",
       "mirrorPath": "/api/fs/operations/:id/control",
@@ -2364,7 +2630,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 127,
+      "registrationIndex": 141,
       "method": "POST",
       "path": "/api/fs/operations/:id/control",
       "mirrorPath": "/fs/operations/:id/control",
@@ -2381,7 +2647,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 128,
+      "registrationIndex": 142,
       "method": "POST",
       "path": "/fs/operations/upload",
       "mirrorPath": "/api/fs/operations/upload",
@@ -2398,7 +2664,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 129,
+      "registrationIndex": 143,
       "method": "POST",
       "path": "/api/fs/operations/upload",
       "mirrorPath": "/fs/operations/upload",
@@ -2415,7 +2681,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 130,
+      "registrationIndex": 144,
       "method": "POST",
       "path": "/fs/operations/:id/file",
       "mirrorPath": "/api/fs/operations/:id/file",
@@ -2432,7 +2698,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 131,
+      "registrationIndex": 145,
       "method": "POST",
       "path": "/api/fs/operations/:id/file",
       "mirrorPath": "/fs/operations/:id/file",
@@ -2449,7 +2715,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 132,
+      "registrationIndex": 146,
       "method": "POST",
       "path": "/fs/operations/:id/finalize",
       "mirrorPath": "/api/fs/operations/:id/finalize",
@@ -2466,7 +2732,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 133,
+      "registrationIndex": 147,
       "method": "POST",
       "path": "/api/fs/operations/:id/finalize",
       "mirrorPath": "/fs/operations/:id/finalize",
@@ -2483,7 +2749,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 134,
+      "registrationIndex": 148,
       "method": "POST",
       "path": "/fs/operations/transfer",
       "mirrorPath": "/api/fs/operations/transfer",
@@ -2500,7 +2766,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 135,
+      "registrationIndex": 149,
       "method": "POST",
       "path": "/api/fs/operations/transfer",
       "mirrorPath": "/fs/operations/transfer",
@@ -2517,7 +2783,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 136,
+      "registrationIndex": 150,
       "method": "POST",
       "path": "/fs/operations/delete",
       "mirrorPath": "/api/fs/operations/delete",
@@ -2534,7 +2800,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 137,
+      "registrationIndex": 151,
       "method": "POST",
       "path": "/api/fs/operations/delete",
       "mirrorPath": "/fs/operations/delete",
@@ -2551,7 +2817,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 138,
+      "registrationIndex": 152,
       "method": "POST",
       "path": "/fs/delete",
       "mirrorPath": "/api/fs/delete",
@@ -2568,7 +2834,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 139,
+      "registrationIndex": 153,
       "method": "POST",
       "path": "/api/fs/delete",
       "mirrorPath": "/fs/delete",
@@ -2585,7 +2851,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 140,
+      "registrationIndex": 154,
       "method": "GET",
       "path": "/fs/download",
       "mirrorPath": "/api/fs/download",
@@ -2602,7 +2868,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 141,
+      "registrationIndex": 155,
       "method": "GET",
       "path": "/api/fs/download",
       "mirrorPath": "/fs/download",
@@ -2619,7 +2885,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 142,
+      "registrationIndex": 156,
       "method": "POST",
       "path": "/fs/upload",
       "mirrorPath": "/api/fs/upload",
@@ -2638,7 +2904,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 143,
+      "registrationIndex": 157,
       "method": "POST",
       "path": "/api/fs/upload",
       "mirrorPath": "/fs/upload",
@@ -2657,7 +2923,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 144,
+      "registrationIndex": 158,
       "method": "POST",
       "path": "/fs/paste",
       "mirrorPath": "/api/fs/paste",
@@ -2674,7 +2940,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 145,
+      "registrationIndex": 159,
       "method": "POST",
       "path": "/api/fs/paste",
       "mirrorPath": "/fs/paste",
@@ -2691,7 +2957,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 146,
+      "registrationIndex": 160,
       "method": "GET",
       "path": "/ftp/defaults",
       "mirrorPath": "/api/ftp/defaults",
@@ -2710,7 +2976,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 147,
+      "registrationIndex": 161,
       "method": "GET",
       "path": "/api/ftp/defaults",
       "mirrorPath": "/ftp/defaults",
@@ -2729,7 +2995,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 148,
+      "registrationIndex": 162,
       "method": "GET",
       "path": "/ftp/favourites",
       "mirrorPath": "/api/ftp/favourites",
@@ -2748,7 +3014,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 149,
+      "registrationIndex": 163,
       "method": "GET",
       "path": "/api/ftp/favourites",
       "mirrorPath": "/ftp/favourites",
@@ -2767,7 +3033,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 150,
+      "registrationIndex": 164,
       "method": "POST",
       "path": "/ftp/favourites",
       "mirrorPath": "/api/ftp/favourites",
@@ -2786,7 +3052,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 151,
+      "registrationIndex": 165,
       "method": "POST",
       "path": "/api/ftp/favourites",
       "mirrorPath": "/ftp/favourites",
@@ -2805,7 +3071,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 152,
+      "registrationIndex": 166,
       "method": "PUT",
       "path": "/ftp/favourites/:id",
       "mirrorPath": "/api/ftp/favourites/:id",
@@ -2824,7 +3090,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 153,
+      "registrationIndex": 167,
       "method": "PUT",
       "path": "/api/ftp/favourites/:id",
       "mirrorPath": "/ftp/favourites/:id",
@@ -2843,7 +3109,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 154,
+      "registrationIndex": 168,
       "method": "DELETE",
       "path": "/ftp/favourites/:id",
       "mirrorPath": "/api/ftp/favourites/:id",
@@ -2862,7 +3128,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 155,
+      "registrationIndex": 169,
       "method": "DELETE",
       "path": "/api/ftp/favourites/:id",
       "mirrorPath": "/ftp/favourites/:id",
@@ -2881,7 +3147,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 156,
+      "registrationIndex": 170,
       "method": "POST",
       "path": "/ftp/favourites/:id/mount",
       "mirrorPath": "/api/ftp/favourites/:id/mount",
@@ -2900,7 +3166,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 157,
+      "registrationIndex": 171,
       "method": "POST",
       "path": "/api/ftp/favourites/:id/mount",
       "mirrorPath": "/ftp/favourites/:id/mount",
@@ -2919,7 +3185,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 158,
+      "registrationIndex": 172,
       "method": "POST",
       "path": "/ftp/favourites/:id/unmount",
       "mirrorPath": "/api/ftp/favourites/:id/unmount",
@@ -2938,7 +3204,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 159,
+      "registrationIndex": 173,
       "method": "POST",
       "path": "/api/ftp/favourites/:id/unmount",
       "mirrorPath": "/ftp/favourites/:id/unmount",
@@ -2957,7 +3223,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 160,
+      "registrationIndex": 174,
       "method": "POST",
       "path": "/ftp/list",
       "mirrorPath": "/api/ftp/list",
@@ -2976,7 +3242,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 161,
+      "registrationIndex": 175,
       "method": "POST",
       "path": "/api/ftp/list",
       "mirrorPath": "/ftp/list",
@@ -2995,7 +3261,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 162,
+      "registrationIndex": 176,
       "method": "POST",
       "path": "/ftp/download",
       "mirrorPath": "/api/ftp/download",
@@ -3014,7 +3280,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 163,
+      "registrationIndex": 177,
       "method": "POST",
       "path": "/api/ftp/download",
       "mirrorPath": "/ftp/download",
@@ -3033,7 +3299,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 164,
+      "registrationIndex": 178,
       "method": "POST",
       "path": "/ftp/upload",
       "mirrorPath": "/api/ftp/upload",
@@ -3052,7 +3318,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 165,
+      "registrationIndex": 179,
       "method": "POST",
       "path": "/api/ftp/upload",
       "mirrorPath": "/ftp/upload",
@@ -3071,7 +3337,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 166,
+      "registrationIndex": 180,
       "method": "POST",
       "path": "/ftp/mkdir",
       "mirrorPath": "/api/ftp/mkdir",
@@ -3090,7 +3356,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 167,
+      "registrationIndex": 181,
       "method": "POST",
       "path": "/api/ftp/mkdir",
       "mirrorPath": "/ftp/mkdir",
@@ -3109,7 +3375,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 168,
+      "registrationIndex": 182,
       "method": "POST",
       "path": "/media/torrents/add",
       "mirrorPath": "/api/media/torrents/add",
@@ -3128,7 +3394,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 169,
+      "registrationIndex": 183,
       "method": "POST",
       "path": "/api/media/torrents/add",
       "mirrorPath": "/media/torrents/add",
@@ -3147,7 +3413,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 170,
+      "registrationIndex": 184,
       "method": "GET",
       "path": "/llm/state",
       "mirrorPath": "/api/llm/state",
@@ -3166,7 +3432,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 171,
+      "registrationIndex": 185,
       "method": "GET",
       "path": "/api/llm/state",
       "mirrorPath": "/llm/state",
@@ -3185,7 +3451,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 172,
+      "registrationIndex": 186,
       "method": "POST",
       "path": "/llm/models/select",
       "mirrorPath": "/api/llm/models/select",
@@ -3204,7 +3470,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 173,
+      "registrationIndex": 187,
       "method": "POST",
       "path": "/api/llm/models/select",
       "mirrorPath": "/llm/models/select",
@@ -3223,7 +3489,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 174,
+      "registrationIndex": 188,
       "method": "POST",
       "path": "/llm/models/add-local",
       "mirrorPath": "/api/llm/models/add-local",
@@ -3242,7 +3508,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 175,
+      "registrationIndex": 189,
       "method": "POST",
       "path": "/api/llm/models/add-local",
       "mirrorPath": "/llm/models/add-local",
@@ -3261,7 +3527,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 176,
+      "registrationIndex": 190,
       "method": "POST",
       "path": "/llm/models/pull",
       "mirrorPath": "/api/llm/models/pull",
@@ -3280,7 +3546,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 177,
+      "registrationIndex": 191,
       "method": "POST",
       "path": "/api/llm/models/pull",
       "mirrorPath": "/llm/models/pull",
@@ -3299,7 +3565,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 178,
+      "registrationIndex": 192,
       "method": "GET",
       "path": "/llm/models/pull/:jobId",
       "mirrorPath": "/api/llm/models/pull/:jobId",
@@ -3318,7 +3584,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 179,
+      "registrationIndex": 193,
       "method": "GET",
       "path": "/api/llm/models/pull/:jobId",
       "mirrorPath": "/llm/models/pull/:jobId",
@@ -3337,7 +3603,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 180,
+      "registrationIndex": 194,
       "method": "POST",
       "path": "/llm/online/models/refresh",
       "mirrorPath": "/api/llm/online/models/refresh",
@@ -3356,7 +3622,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 181,
+      "registrationIndex": 195,
       "method": "POST",
       "path": "/api/llm/online/models/refresh",
       "mirrorPath": "/llm/online/models/refresh",
@@ -3375,7 +3641,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 182,
+      "registrationIndex": 196,
       "method": "POST",
       "path": "/llm/online/models/select",
       "mirrorPath": "/api/llm/online/models/select",
@@ -3394,7 +3660,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 183,
+      "registrationIndex": 197,
       "method": "POST",
       "path": "/api/llm/online/models/select",
       "mirrorPath": "/llm/online/models/select",
@@ -3413,7 +3679,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 184,
+      "registrationIndex": 198,
       "method": "GET",
       "path": "/llm/conversations",
       "mirrorPath": "/api/llm/conversations",
@@ -3432,7 +3698,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 185,
+      "registrationIndex": 199,
       "method": "GET",
       "path": "/api/llm/conversations",
       "mirrorPath": "/llm/conversations",
@@ -3451,7 +3717,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 186,
+      "registrationIndex": 200,
       "method": "GET",
       "path": "/llm/conversations/:id/messages",
       "mirrorPath": "/api/llm/conversations/:id/messages",
@@ -3470,7 +3736,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 187,
+      "registrationIndex": 201,
       "method": "GET",
       "path": "/api/llm/conversations/:id/messages",
       "mirrorPath": "/llm/conversations/:id/messages",
@@ -3489,7 +3755,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 188,
+      "registrationIndex": 202,
       "method": "DELETE",
       "path": "/llm/conversations/:id",
       "mirrorPath": "/api/llm/conversations/:id",
@@ -3508,7 +3774,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 189,
+      "registrationIndex": 203,
       "method": "DELETE",
       "path": "/api/llm/conversations/:id",
       "mirrorPath": "/llm/conversations/:id",
@@ -3527,7 +3793,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 190,
+      "registrationIndex": 204,
       "method": "POST",
       "path": "/llm/chat",
       "mirrorPath": "/api/llm/chat",
@@ -3546,7 +3812,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 191,
+      "registrationIndex": 205,
       "method": "POST",
       "path": "/api/llm/chat",
       "mirrorPath": "/llm/chat",
@@ -3565,7 +3831,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 192,
+      "registrationIndex": 206,
       "method": "POST",
       "path": "/llm/chat/stream",
       "mirrorPath": "/api/llm/chat/stream",
@@ -3584,7 +3850,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 193,
+      "registrationIndex": 207,
       "method": "POST",
       "path": "/api/llm/chat/stream",
       "mirrorPath": "/llm/chat/stream",
@@ -3603,7 +3869,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 194,
+      "registrationIndex": 208,
       "method": "GET",
       "path": "/openai/v1/models",
       "mirrorPath": "/api/openai/v1/models",
@@ -3620,7 +3886,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 195,
+      "registrationIndex": 209,
       "method": "GET",
       "path": "/api/openai/v1/models",
       "mirrorPath": "/openai/v1/models",
@@ -3637,7 +3903,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 196,
+      "registrationIndex": 210,
       "method": "POST",
       "path": "/openai/v1/chat/completions",
       "mirrorPath": "/api/openai/v1/chat/completions",
@@ -3654,7 +3920,7 @@
       "registrar": "dual-route"
     },
     {
-      "registrationIndex": 197,
+      "registrationIndex": 211,
       "method": "POST",
       "path": "/api/openai/v1/chat/completions",
       "mirrorPath": "/openai/v1/chat/completions",

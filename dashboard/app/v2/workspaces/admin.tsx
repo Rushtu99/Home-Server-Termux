@@ -469,9 +469,30 @@ export function AdminWorkspace({
                     {clusterServices.map((svc, svcIndex) => {
                       const svcName = String(svc.name || svc.service || `svc-${svcIndex}`);
                       const svcState = String(svc.state || (svc.running ? 'running' : 'stopped'));
+                      const healthState = String(svc.health || svc.lifecycle || svc.status || svcState);
                       return (
                         <p key={`${clusterName}-${svcName}-${svcIndex}`}>
                           <strong>{svcName}</strong>: {svcState}
+                          {' '}
+                          <StatusBadge tone={toneFromStatus(healthState)}>{healthState}</StatusBadge>
+                          {' '}
+                          <button
+                            className="ui-button dash2-ui-button--small"
+                            type="button"
+                            disabled={clusterBusyKey === `${svcName}:start`}
+                            onClick={() => void runServiceAction(svcName, 'start')}
+                          >
+                            Start
+                          </button>
+                          {' '}
+                          <button
+                            className="ui-button dash2-ui-button--small"
+                            type="button"
+                            disabled={clusterBusyKey === `${svcName}:stop`}
+                            onClick={() => void runServiceAction(svcName, 'stop')}
+                          >
+                            Stop
+                          </button>
                           {' '}
                           <button
                             className="ui-button dash2-ui-button--small"

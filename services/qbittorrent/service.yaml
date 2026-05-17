@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: qbittorrent
+label: "qBittorrent"
+type: service
+group: downloads
+surface: downloads
+description: "Torrent downloader with managed scratch download and session paths."
+aliases: [qbit]
+dependencies: [filesystem]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 8081
+route: "/qb/"
+powerProfile: qbittorrent0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

@@ -58,6 +58,9 @@ describe('service-manager', () => {
       resolveServiceInstall: async () => ({ available: true, label: 'jellyfin-service.sh' }),
       runCommand: async (command) => {
         calls.push(command);
+        if (command.includes('jellyfin-service.sh status')) {
+          throw new Error('stopped');
+        }
         return 'ok';
       },
       serviceStateCache,
@@ -138,6 +141,50 @@ describe('service-manager', () => {
       .rejects
       .toMatchObject({ code: 'blocked_by_storage' });
   });
+
+  it('starts descriptor dependencies before a dependent service', async () => {
+    const calls = [];
+    const running = new Set();
+    const manager = createServiceManager({
+      getManageableServiceNames: async () => ['filesystem', 'jellyfin'],
+      getStorageBlockForService: () => ({ blocked: false }),
+      readStorageProtectionState: () => ({ state: 'healthy' }),
+      resolveServiceInstall: async () => ({ available: true }),
+      runCommand: async (command) => {
+        calls.push(command);
+        if (command.endsWith(' status')) {
+          const service = command.split(' ')[0];
+          if (running.has(service)) return 'running';
+          throw new Error('stopped');
+        }
+        running.add(command.split(' ')[0]);
+        return 'ok';
+      },
+      serviceDependencies: {
+        jellyfin: ['filesystem'],
+      },
+      services: {
+        filesystem: {
+          check: 'filesystem status',
+          start: 'filesystem start',
+          stop: 'filesystem stop',
+        },
+        jellyfin: {
+          check: 'jellyfin status',
+          start: 'jellyfin start',
+          stop: 'jellyfin stop',
+        },
+      },
+      waitForServiceState: async (_service, expectedRunning) => expectedRunning,
+    });
+
+    const result = await manager.control({ action: 'start', service: 'jellyfin' });
+
+    expect(result.success).toBe(true);
+    expect(calls).toContain('filesystem start');
+    expect(calls).toContain('jellyfin start');
+    expect(calls.indexOf('filesystem start')).toBeLessThan(calls.indexOf('jellyfin start'));
+  });
 });
 
 describe('cluster-manager', () => {
@@ -166,8 +213,12 @@ describe('cluster-manager', () => {
     };
 
     const manager = createClusterManager({
+      clusterAliases: {
+        downloads: 'torrent',
+        streaming: 'media',
+      },
       clusterConfig: {
-        media: { services: ['jellyfin'], dependsOn: ['torrent'] },
+        media: { services: ['jellyfin'], dependsOn: ['downloads'] },
         torrent: { services: ['qbittorrent'], dependsOn: [] },
       },
       serviceManager,
@@ -177,11 +228,12 @@ describe('cluster-manager', () => {
     const validation = await manager.validateClusterConfig();
     expect(validation.valid).toBe(true);
 
-    await manager.startCluster('media');
+    await manager.startCluster('streaming');
     expect(calls).toEqual(['start:qbittorrent', 'start:jellyfin']);
 
-    const dependencies = manager.resolveDependencies('media', { includeSelf: true });
+    const dependencies = manager.resolveDependencies('streaming', { includeSelf: true });
     expect(dependencies).toEqual(['torrent', 'media']);
+    expect(manager.resolveClusterName('downloads')).toBe('torrent');
   });
 });
 

@@ -28,6 +28,7 @@ The stack is private-by-default: nginx is the public entrypoint, while dashboard
 
 - Main lifecycle entrypoint: `scripts/hmstx-control.sh`
 - Startup orchestrator: `start.sh`
+- v2 unified orchestration CLI: `./hs`
 - API service catalog and control metadata are backend-owned (frontend does not guess)
 - Media storage model is split into Vault (long-term) and Scratch (working set)
 
@@ -51,7 +52,15 @@ Primary roots:
 - `dashboard/` -> frontend app
 - `server/` -> backend runtime, routes, handlers
 - `scripts/` -> microservice wrappers + automation workers
+- `backend/` -> v2 descriptor registry, orchestration helpers, state/health/event/logging modules
+- `core/` -> reusable shell-first orchestration utilities
+- `services/` and `clusters/` -> v2 service and cluster descriptors/adapters
 - `runtime/` and `logs/` -> runtime state and diagnostics (ignored)
+
+The v2 orchestration layer is parallel and opt-in. Existing `start.sh` and
+`scripts/hmstx-control.sh` flows continue to work, while `./hs` and the backend
+control-plane APIs consume `services/<name>/service.yaml` and
+`clusters/<name>/cluster.yaml`.
 
 ## Microservices Inventory
 

@@ -13,3 +13,8 @@ This repo now uses a small docs hub instead of one long README. The structure is
 - [Runbooks](./runbooks/first-boot.md): first boot, drive replacement, recovery, and upgrade/rollback procedures
 
 Use the root [README](../README.md) for the short version and these pages for operator detail.
+
+## v2 Orchestration
+
+- [v2 Orchestration Platform](orchestration-v2.md)
+- [Migration Guide: Legacy Stack to v2](migration-v2.md)

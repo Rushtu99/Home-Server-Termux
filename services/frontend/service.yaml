@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: frontend
+label: "Dashboard"
+type: service
+group: platform
+surface: home
+description: "Next.js dashboard process served behind nginx."
+aliases: [nextjs-dashboard]
+dependencies: [backend]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 3000
+route: ""
+powerProfile: frontend0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: nginx
+label: "nginx Gateway"
+type: service
+group: platform
+surface: home
+description: "Single public reverse-proxy gateway for dashboard, API, and service UIs."
+aliases: []
+dependencies: [backend, frontend]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 8088
+route: "/"
+powerProfile: nginx0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

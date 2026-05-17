@@ -47,3 +47,5 @@ fs.writeFileSync(startupFixturePath, `${JSON.stringify(startupFixture, null, 2)}
 
 console.log(`wrote ${routeFixturePath}`);
 console.log(`wrote ${startupFixturePath}`);
+
+process.exit(0);

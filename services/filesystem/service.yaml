@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: filesystem
+label: "Filesystem"
+type: service
+group: platform
+surface: files
+description: "Discovers vault and scratch storage, validates writable roots, and prepares fallback paths."
+aliases: [mount-service, usb-mount-service]
+dependencies: []
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 0
+route: ""
+powerProfile: filesystem0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

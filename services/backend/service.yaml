@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: backend
+label: "Backend API"
+type: service
+group: platform
+surface: home
+description: "Home Server REST API and control-plane process."
+aliases: []
+dependencies: [filesystem]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 4000
+route: ""
+powerProfile: backend0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

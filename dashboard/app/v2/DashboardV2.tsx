@@ -345,14 +345,6 @@ export default function DashboardV2() {
           window.location.assign('/files');
         },
       },
-      {
-        id: 'action:legacy',
-        label: 'Open classic dashboard',
-        subtitle: 'Shortcut',
-        run: () => {
-          window.location.assign('/legacy');
-        },
-      },
     ].filter((item) => !query || `${item.label} ${item.subtitle}`.toLowerCase().includes(query));
     return [...navResults, ...actionResults].slice(0, 8);
   }, [nav, searchQuery, setActiveWorkspace]);
@@ -398,7 +390,6 @@ export default function DashboardV2() {
           <div className="dash2-sidebar__links">
             <Link href="/files" className="ui-button">Files</Link>
             <Link href="/term" className="ui-button">Terminal</Link>
-            <Link href="/legacy" className="ui-button">Classic</Link>
           </div>
         </div>
       </aside>

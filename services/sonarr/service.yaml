@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: sonarr
+label: "Sonarr"
+type: service
+group: arr
+surface: arr
+description: "Series automation service in the ARR stack."
+aliases: []
+dependencies: [filesystem, qbittorrent, prowlarr]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 8989
+route: "/sonarr/"
+powerProfile: sonarr0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

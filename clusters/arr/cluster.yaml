@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: arr
+label: "ARR Stack"
+aliases: [arrstack]
+description: "Media automation stack."
+dependsOn: []
+services: [filesystem, flarearr, prowlarr, sonarr, radarr, bazarr]
+restartPolicy: ordered
+stopBehavior: reverse

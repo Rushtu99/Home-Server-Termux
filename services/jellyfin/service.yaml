@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: jellyfin
+label: "Jellyfin"
+type: service
+group: media
+surface: media
+description: "Media streaming server backed by discovered vault libraries and scratch cache."
+aliases: []
+dependencies: [filesystem]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 8096
+route: "/jellyfin/"
+powerProfile: jellyfin0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

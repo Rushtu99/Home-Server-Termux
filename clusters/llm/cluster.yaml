@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: llm
+label: "LLM"
+aliases: [ai]
+description: "Local AI inference cluster."
+dependsOn: []
+services: [filesystem, llama_cpp]
+restartPolicy: ordered
+stopBehavior: reverse

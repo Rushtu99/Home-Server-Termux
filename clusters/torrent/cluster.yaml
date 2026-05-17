@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: torrent
+label: "Torrent"
+aliases: [downloads]
+description: "Torrent downloading cluster."
+dependsOn: []
+services: [filesystem, qbittorrent]
+restartPolicy: ordered
+stopBehavior: reverse

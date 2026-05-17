@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: media
+label: "Media"
+aliases: [streaming]
+description: "Media streaming cluster with ARR dependency."
+dependsOn: [arr]
+services: [filesystem, jellyfin]
+restartPolicy: ordered
+stopBehavior: reverse

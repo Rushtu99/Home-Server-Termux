@@ -3,7 +3,9 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const serverRoot = path.resolve(__dirname, '../..');
+const repoRoot = path.resolve(serverRoot, '..');
 const srcRoot = path.join(serverRoot, 'src');
+const backendRoot = path.join(repoRoot, 'backend');
 
 const listJsFiles = (rootDir) => {
   const files = [];
@@ -30,6 +32,7 @@ const listJsFiles = (rootDir) => {
 
 const targets = [
   ...listJsFiles(srcRoot),
+  ...listJsFiles(backendRoot),
   path.join(serverRoot, 'index.js'),
   path.join(serverRoot, 'app-db.js'),
 ];

@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: main
+label: "Main"
+aliases: [platform]
+description: "Prepare filesystem and serve backend/frontend through nginx."
+dependsOn: []
+services: [filesystem, backend, frontend, nginx]
+restartPolicy: ordered
+stopBehavior: reverse

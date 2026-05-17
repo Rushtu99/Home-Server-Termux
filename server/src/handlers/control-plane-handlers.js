@@ -24,6 +24,15 @@ const buildControlPlaneHandlers = ({ controlPlane, pushDebugEvent }) => {
     };
   }
 
+  const resolveActionFromRequest = (req) => {
+    const direct = String(req.params?.action || '').trim().toLowerCase();
+    if (['start', 'stop', 'restart'].includes(direct)) {
+      return direct;
+    }
+    const segments = String(req.path || req.originalUrl || '').split('/').map((entry) => entry.trim().toLowerCase());
+    return ['start', 'stop', 'restart'].find((token) => segments.includes(token)) || '';
+  };
+
   const catalogServicesHandler = async (req, res) => {
     const catalog = await controlPlane.buildCanonicalCatalog();
     const services = catalog.filter((entry) => entry.type === 'service');
@@ -198,8 +207,7 @@ const buildControlPlaneHandlers = ({ controlPlane, pushDebugEvent }) => {
   };
 
   const clusterActionHandler = async (req, res) => {
-    const routePath = String(req.params.action || req.path || req.originalUrl || '').trim().toLowerCase();
-    const action = ['start', 'stop', 'restart'].find((token) => routePath.endsWith(`/${token}`)) || String(req.params.action || '').trim().toLowerCase();
+    const action = resolveActionFromRequest(req);
     const name = String(req.params.name || '').trim();
     if (!name || !['start', 'stop', 'restart'].includes(action)) {
       return res.status(400).json({ error: 'Invalid cluster action' });
@@ -246,8 +254,7 @@ const buildControlPlaneHandlers = ({ controlPlane, pushDebugEvent }) => {
 
   const serviceActionHandler = async (req, res) => {
     const name = String(req.params.name || '').trim();
-    const routePath = String(req.params.action || req.path || req.originalUrl || '').trim().toLowerCase();
-    const action = ['start', 'stop', 'restart'].find((token) => routePath.endsWith(`/${token}`)) || String(req.params.action || '').trim().toLowerCase();
+    const action = resolveActionFromRequest(req);
     if (!name || !['start', 'stop', 'restart'].includes(action)) {
       return res.status(400).json({ error: 'Invalid service action' });
     }

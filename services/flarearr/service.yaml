@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: flarearr
+label: "FlareArr"
+type: service
+group: arr
+surface: arr
+description: "Cloudflare challenge bypass helper for indexer workflows."
+aliases: []
+dependencies: [filesystem]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 8191
+route: "/flarearr/"
+powerProfile: flarearr0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

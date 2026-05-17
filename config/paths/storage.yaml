@@ -1,0 +1,5 @@
+schemaVersion: 1
+primaryVault: "$MEDIA_VAULT_ROOT"
+primaryScratch: "$MEDIA_SCRATCH_ROOT"
+fallbackVault: "$PROJECT/runtime/vault-fallback"
+fallbackScratch: "$PROJECT/runtime/HmSTxScratch"

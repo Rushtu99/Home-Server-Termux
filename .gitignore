@@ -9,8 +9,20 @@ out/
 
 # Runtime logs and state
 *.log
-logs/
+logs/*
+!logs/services/
+!logs/clusters/
+!logs/orchestrator/
+!logs/services/.gitkeep
+!logs/clusters/.gitkeep
+!logs/orchestrator/.gitkeep
 runtime/
+state/services/*
+state/clusters/*
+state/events/*
+!state/services/.gitkeep
+!state/clusters/.gitkeep
+!state/events/.gitkeep
 *.pid
 nginx.pid
 

@@ -1,0 +1,28 @@
+schemaVersion: 1
+name: llama_cpp
+label: "llama.cpp"
+type: service
+group: ai
+surface: ai
+description: "Local GGUF inference service using llama.cpp or compatible llama-server."
+aliases: [llm, llama.cpp]
+dependencies: [filesystem]
+controlMode: optional
+binary: bash
+host: 127.0.0.1
+port: 11435
+route: "/llm/"
+powerProfile: llama_cpp0
+commands:
+  start: start.sh
+  stop: stop.sh
+  status: status.sh
+  health: health.sh
+  discover: discover.sh
+  config: config.sh
+health:
+  type: custom
+restart:
+  policy: on-failure
+  maxRestarts: 3
+  windowSeconds: 300

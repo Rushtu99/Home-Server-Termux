@@ -121,6 +121,10 @@ describe('control-plane handlers', () => {
     await handlers.clusterActionHandler({ params: { action: 'start', name: 'media' } }, clusterActionRes);
     expect(clusterActionRes.body.success).toBe(true);
 
+    const clusterActionAliasRes = createResponse();
+    await handlers.clusterActionHandler({ originalUrl: '/api/clusters/start/media', params: { name: 'media' }, path: '/clusters/start/media' }, clusterActionAliasRes);
+    expect(clusterActionAliasRes.body.success).toBe(true);
+
     const serviceRes = createResponse();
     await handlers.serviceDetailHandler({ params: { name: 'nginx' } }, serviceRes);
     expect(serviceRes.body.running).toBe(true);
@@ -128,6 +132,10 @@ describe('control-plane handlers', () => {
     const serviceActionRes = createResponse();
     await handlers.serviceActionHandler({ params: { action: 'restart', name: 'nginx' } }, serviceActionRes);
     expect(serviceActionRes.body.success).toBe(true);
+
+    const serviceActionAliasRes = createResponse();
+    await handlers.serviceActionHandler({ originalUrl: '/api/services/start/nginx', params: { name: 'nginx' }, path: '/services/start/nginx' }, serviceActionAliasRes);
+    expect(serviceActionAliasRes.body.success).toBe(true);
 
     const metricsRes = createResponse();
     await handlers.metricsHandler({ query: {} }, metricsRes);

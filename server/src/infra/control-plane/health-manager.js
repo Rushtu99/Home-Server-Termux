@@ -141,7 +141,7 @@ const createHealthManager = ({
       return {
         generatedAt: new Date(now()).toISOString(),
         services: {},
-        summary: { down: 0, healthy: 0, recovering: 0, unknown: 0 },
+        summary: { down: 0, healthy: 0, recovering: 0, stopped: 0, unknown: 0 },
       };
     }
 
@@ -149,7 +149,7 @@ const createHealthManager = ({
     const snapshot = {
       generatedAt: new Date(now()).toISOString(),
       services: {},
-      summary: { down: 0, healthy: 0, recovering: 0, unknown: 0 },
+      summary: { down: 0, healthy: 0, recovering: 0, stopped: 0, unknown: 0 },
     };
 
     for (const target of targets) {
@@ -173,10 +173,14 @@ const createHealthManager = ({
       const previous = serviceState.get(name) || 'unknown';
       let current = classify(statusPayload);
       let recovering = false;
+      const desired = serviceManager.supervisedServices && typeof serviceManager.supervisedServices.get === 'function'
+        ? serviceManager.supervisedServices.get(name)
+        : null;
+      const expectedRunning = desired?.expectedRunning === true;
 
       if (current === 'down') {
         const budget = getRestartBudgetState(name);
-        if (budget.remaining > 0) {
+        if (expectedRunning && budget.remaining > 0) {
           try {
             recordRestart(name);
             await serviceManager.restartService(name);
@@ -198,6 +202,10 @@ const createHealthManager = ({
           } catch (restartError) {
             statusPayload.error = String(restartError?.message || restartError || 'restart failed');
           }
+        }
+
+        if (!expectedRunning) {
+          current = 'stopped';
         }
 
         if (current === 'down' && previous !== 'down') {
@@ -243,6 +251,8 @@ const createHealthManager = ({
         snapshot.summary.healthy += 1;
       } else if (current === 'down') {
         snapshot.summary.down += 1;
+      } else if (current === 'stopped') {
+        snapshot.summary.stopped += 1;
       } else {
         snapshot.summary.unknown += 1;
       }
