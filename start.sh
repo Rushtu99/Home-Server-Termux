@@ -95,6 +95,7 @@ START_WAIT_TIMEOUT_SECONDS="${START_WAIT_TIMEOUT_SECONDS:-180}"
 START_WAIT_ARR_TIMEOUT_SECONDS="${START_WAIT_ARR_TIMEOUT_SECONDS:-240}"
 START_WAIT_POSTGRES_TIMEOUT_SECONDS="${START_WAIT_POSTGRES_TIMEOUT_SECONDS:-120}"
 START_WAIT_PID_EXIT_GRACE_SECONDS="${START_WAIT_PID_EXIT_GRACE_SECONDS:-45}"
+START_WAIT_HELPER_FAIL_TIMEOUT_SECONDS="${START_WAIT_HELPER_FAIL_TIMEOUT_SECONDS:-25}"
 SERVICE_FAIL_MODE="${SERVICE_FAIL_MODE:-fail_quiet}"
 SERVICE_RETRY_MAX_PER_HOUR="${SERVICE_RETRY_MAX_PER_HOUR:-4}"
 SERVICE_BACKOFF_STEPS="${SERVICE_BACKOFF_STEPS:-60,300,900,3600}"
@@ -2160,6 +2161,8 @@ start_service_helper() {
     local helper_log=""
     local service_key=""
     local wait_timeout="$START_WAIT_TIMEOUT_SECONDS"
+    local helper_fail_wait_timeout="$START_WAIT_HELPER_FAIL_TIMEOUT_SECONDS"
+    local cooldown_left=0
 
     if [ ! -x "$script_path" ]; then
         log_warn "Skipping $name (helper not found: $script_path)"
@@ -2176,9 +2179,15 @@ start_service_helper() {
         postgresql)
             wait_timeout="$START_WAIT_POSTGRES_TIMEOUT_SECONDS"
             ;;
+        jellyseerr)
+            # Request service: don't block startup for long when dependencies are degraded.
+            helper_fail_wait_timeout=10
+            ;;
     esac
+    if ! [[ "$helper_fail_wait_timeout" =~ ^[0-9]+$ ]]; then
+        helper_fail_wait_timeout=25
+    fi
     if type sfq_is_cooldown_active >/dev/null 2>&1 && sfq_is_cooldown_active "$RUNTIME_DIR" "$service_key"; then
-        local cooldown_left=0
         cooldown_left="$(sfq_remaining_cooldown "$RUNTIME_DIR" "$service_key" 2>/dev/null || echo 0)"
         log_warn "Skipping $name due to fail-quiet cooldown (${cooldown_left}s remaining)"
         return 0
@@ -2186,8 +2195,15 @@ start_service_helper() {
 
     log_info "Starting $name (debug log: $helper_log)"
     if ! run_logged_command "$name" "$helper_log" "$script_path" start; then
+        if type sfq_is_cooldown_active >/dev/null 2>&1 && sfq_is_cooldown_active "$RUNTIME_DIR" "$service_key"; then
+            cooldown_left="$(sfq_remaining_cooldown "$RUNTIME_DIR" "$service_key" 2>/dev/null || echo 0)"
+            log_warn "$name start failed and entered fail-quiet cooldown (${cooldown_left}s remaining); skipping listener wait"
+            log_recent_tail "$name" "$helper_log"
+            return 0
+        fi
+
         log_warn "$name start helper returned non-zero; verifying listener health before marking failure"
-        if wait_for_port "$port" "$name" "$pid_file" "$host" "$wait_timeout" "$script_path"; then
+        if wait_for_port "$port" "$name" "$pid_file" "$host" "$helper_fail_wait_timeout" "$script_path"; then
             log_warn "$name appears healthy despite helper non-zero exit; continuing"
             if type sfq_mark_success >/dev/null 2>&1; then
                 sfq_mark_success "$RUNTIME_DIR" "$service_key"
