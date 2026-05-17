@@ -17,7 +17,7 @@ Backend runtime contract stability is guarded by parity tests under `server/test
 - runtime API contract checks
 - control-plane handler and route tests
 
-Dashboard workspace contract stability is guarded by `dashboard/app/v2/*` tests and shared API client typing.
+Dashboard contract stability is guarded by focused utility, polling, filesystem, and demo-mode tests.
 
 ## Request Flow
 

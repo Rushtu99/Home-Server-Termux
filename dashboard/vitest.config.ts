@@ -15,9 +15,6 @@ export default defineConfig({
       reporter: ['text', 'json-summary'],
       include: [
         'app/dashboard-utils.ts',
-        'app/v2/workspaceMap.ts',
-        'app/v2/errors.ts',
-        'app/v2/llm-stream.ts',
         'app/demo-mode.ts',
         'app/useGatewayBase.ts',
         'app/usePolling.ts',

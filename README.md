@@ -2,6 +2,11 @@
 
 HmSTx is a Termux-first home server control plane for an Android-hosted NAS.
 
+This `v1` branch preserves the legacy frontend and backend. The default
+dashboard route renders `DashboardClient`, and the backend remains the
+monolithic `server/index.js` runtime. Use `main` for the V2 orchestration
+platform.
+
 It combines:
 - a Next.js dashboard (`dashboard/`)
 - an Express backend API (`server/`)
@@ -39,23 +44,19 @@ Request flow:
 3. Backend API serves from Express (`:4000`, loopback by default).
 4. Backend invokes service wrappers in `scripts/` for host-level control.
 
-Control-plane modules (`server/src/infra/control-plane/`):
-- `service-catalog.js`: canonical backend-owned service/worker metadata
-- `service-manager.js`: unified service/worker command control
-- `workflow-engine.js`: resumable workflow execution with explicit events
-- `event-bus.js`: operation/workflow event stream
-- `state-store.js`: persisted workflow runs/events and service snapshots
-- `health-manager.js`: lifecycle normalization and service-state rollups
+The V1 backend control-plane logic lives in `server/index.js`. It owns the
+service catalog, route registration, auth/session state, health probes, and
+script-wrapper command dispatch in one runtime file.
 
 Primary roots:
-- `dashboard/` -> frontend app
-- `server/` -> backend runtime, routes, handlers
+- `dashboard/` -> legacy frontend app
+- `server/` -> monolithic backend runtime
 - `scripts/` -> microservice wrappers + automation workers
 - `runtime/` and `logs/` -> runtime state and diagnostics (ignored)
 
 ## Microservices Inventory
 
-The backend service catalog is defined in `server/src/main/kernel.js` (`BASE_SERVICE_CATALOG_META`) and runtime controls map to wrappers in `scripts/`.
+The backend service catalog is defined in `server/index.js` and runtime controls map to wrappers in `scripts/`.
 
 ### Core platform services
 
@@ -114,7 +115,7 @@ The backend service catalog is defined in `server/src/main/kernel.js` (`BASE_SER
 
 ## API Overview (Backend)
 
-API routes are registered in `server/src/routes/register-api-routes.js` and exposed as both `/<path>` and `/api/<path>` through `registerDualRoute(...)`.
+API routes are registered in `server/index.js` and exposed as both `/<path>` and `/api/<path>` through the backend dual-route helper.
 
 Major API domains:
 - Auth/session: `/auth/*`
@@ -140,18 +141,15 @@ Major API domains:
 
 ### Frontend (`dashboard/`)
 
-- `dashboard/app/page.tsx`: V2 dashboard shell entry
-- `dashboard/app/v2/`: workspace UI, data shaping, component composition
+- `dashboard/app/page.tsx`: legacy dashboard entry
+- `dashboard/app/DashboardClient.tsx`: legacy all-in-one dashboard UI preserved for V1
 - `dashboard/app/files/page.tsx`: dedicated filesystem UI
 - `dashboard/app/term/page.tsx`: dedicated terminal UI
 - `dashboard/app/demo-api.ts`: static demo data adapter used for Pages build
 
 ### Backend (`server/`)
 
-- `server/index.js`: stable backend entrypoint
-- `server/src/main/kernel.js`: runtime kernel, service command map, service catalog metadata, environment wiring
-- `server/src/routes/register-api-routes.js`: canonical route registration
-- `server/src/handlers/`: route handlers split by domain (`service`, `files`, `ftp`, `llm`)
+- `server/index.js`: backend runtime, route registration, service command map, service catalog metadata, and environment wiring
 - `server/lib/`: shared backend utilities (`storage-*`, `torrent` helpers)
 
 ### Runtime scripts (`scripts/`)
