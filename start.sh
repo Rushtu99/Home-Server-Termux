@@ -90,12 +90,21 @@ SV_BIN="${SV_BIN:-$TERMUX_PREFIX/bin/sv}"
 SSHD_MANAGED_CONFIG_PATH="${SSHD_MANAGED_CONFIG_PATH:-$TERMUX_PREFIX/etc/ssh/sshd_config.d/50-home-server-managed.conf}"
 SSHD_SERVICE_LOG_PATH="${SSHD_SERVICE_LOG_PATH:-$LOGDIR_PATH/sv/sshd/current}"
 START_LOCK_WAIT_SECONDS="${START_LOCK_WAIT_SECONDS:-30}"
-START_MEDIA_STAGE_DELAY_SECONDS="${START_MEDIA_STAGE_DELAY_SECONDS:-15}"
+START_MEDIA_STAGE_DELAY_SECONDS="${START_MEDIA_STAGE_DELAY_SECONDS:-3}"
 START_WAIT_TIMEOUT_SECONDS="${START_WAIT_TIMEOUT_SECONDS:-180}"
 START_WAIT_ARR_TIMEOUT_SECONDS="${START_WAIT_ARR_TIMEOUT_SECONDS:-240}"
 START_WAIT_POSTGRES_TIMEOUT_SECONDS="${START_WAIT_POSTGRES_TIMEOUT_SECONDS:-120}"
 START_WAIT_PID_EXIT_GRACE_SECONDS="${START_WAIT_PID_EXIT_GRACE_SECONDS:-45}"
 START_WAIT_HELPER_FAIL_TIMEOUT_SECONDS="${START_WAIT_HELPER_FAIL_TIMEOUT_SECONDS:-25}"
+START_USB_SCAN_TIMEOUT_SECONDS="${START_USB_SCAN_TIMEOUT_SECONDS:-8}"
+START_CLOUD_SYNC_TIMEOUT_SECONDS="${START_CLOUD_SYNC_TIMEOUT_SECONDS:-6}"
+START_PARALLEL_ARR_START="${START_PARALLEL_ARR_START:-true}"
+START_ARR_RECONCILE_BACKGROUND="${START_ARR_RECONCILE_BACKGROUND:-true}"
+START_WORKERS_BACKGROUND="${START_WORKERS_BACKGROUND:-true}"
+START_LLM_BACKGROUND="${START_LLM_BACKGROUND:-true}"
+START_MEDIA_STACK_BACKGROUND="${START_MEDIA_STACK_BACKGROUND:-true}"
+START_MIRROR_REFRESH_BACKGROUND="${START_MIRROR_REFRESH_BACKGROUND:-true}"
+START_POSTGRES_BACKGROUND="${START_POSTGRES_BACKGROUND:-true}"
 SERVICE_FAIL_MODE="${SERVICE_FAIL_MODE:-fail_quiet}"
 SERVICE_RETRY_MAX_PER_HOUR="${SERVICE_RETRY_MAX_PER_HOUR:-4}"
 SERVICE_BACKOFF_STEPS="${SERVICE_BACKOFF_STEPS:-60,300,900,3600}"
@@ -362,6 +371,27 @@ run_logged_command() {
     emit_new_debug_lines "$name" "$log_path" "$start_line"
     log_recent_issues "$name" "$log_path" "$start_line"
     return "$status"
+}
+
+run_with_timeout() {
+    local timeout_seconds="$1"
+    shift
+
+    if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]]; then
+        timeout_seconds=0
+    fi
+
+    if [ "$timeout_seconds" -le 0 ]; then
+        "$@"
+        return $?
+    fi
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_seconds" "$@"
+        return $?
+    fi
+
+    "$@"
 }
 
 HOTKEY_PID=""
@@ -710,7 +740,7 @@ sync_cloud_mount_links() {
     fi
 
     while [ "$attempt" -lt "$max_attempts" ]; do
-        if "$TERMUX_CLOUD_MOUNT_CMD" sync-links >/dev/null 2>&1; then
+        if run_with_timeout "$START_CLOUD_SYNC_TIMEOUT_SECONDS" "$TERMUX_CLOUD_MOUNT_CMD" sync-links >/dev/null 2>&1; then
             log_info "termux-cloud-mount synced FTP drive links"
             return 0
         fi
@@ -776,7 +806,7 @@ bootstrap_drive_mounts() {
     fi
 
     log_info "Running USB mount scan for vault/scratch external drives"
-    if ! "$USB_MOUNT_SERVICE_CMD" --scan-now >/dev/null 2>&1; then
+    if ! run_with_timeout "$START_USB_SCAN_TIMEOUT_SECONDS" "$USB_MOUNT_SERVICE_CMD" --scan-now >/dev/null 2>&1; then
         log_warn "USB mount scan failed; using fallback drive paths"
     fi
 
@@ -1064,7 +1094,12 @@ build_pool_roots() {
             esac
         done
         if [ "${#fallback_first_drives[@]}" -gt 0 ]; then
-            all_drives=("${fallback_first_drives[@]}" "${nonfallback_drives[@]}")
+            if [ "$EXTERNAL_ROLE_MOUNTS_READY" != "true" ]; then
+                # No external mounts: avoid probing non-mounted candidate drives on the startup critical path.
+                all_drives=("${fallback_first_drives[@]}")
+            else
+                all_drives=("${fallback_first_drives[@]}" "${nonfallback_drives[@]}")
+            fi
         fi
     fi
 
@@ -2263,9 +2298,49 @@ start_worker_helper() {
     return 0
 }
 
+wait_for_background_helpers() {
+    local phase="$1"
+    shift
+    local helper_pid=""
+    local failed=0
+
+    for helper_pid in "$@"; do
+        [ -n "$helper_pid" ] || continue
+        if ! wait "$helper_pid"; then
+            failed=1
+        fi
+    done
+
+    if [ "$failed" -eq 1 ]; then
+        log_warn "One or more background tasks failed during ${phase}"
+    fi
+    return 0
+}
+
+start_arr_stack_reconcile() {
+    local arr_log=""
+
+    [ -x "$CONFIGURE_ARR_STACK_CMD" ] || return 0
+
+    arr_log="$(service_log_path "arr-stack-reconcile")"
+    log_info "Reconciling ARR, subtitles, and request-stack integrations"
+    if ! run_logged_command "ARR stack reconcile" "$arr_log" "$CONFIGURE_ARR_STACK_CMD"; then
+        log_warn "ARR stack reconciliation failed (see $arr_log)"
+        log_recent_tail "ARR stack reconcile" "$arr_log"
+    fi
+    return 0
+}
+
 start_media_stack_services() {
+    local start_pids=()
+    local pid=""
+
     start_service_helper "Redis" "$REDIS_SERVICE_CMD" 6379 "$REDIS_PID_PATH" "127.0.0.1"
-    start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
+    if [ "$START_POSTGRES_BACKGROUND" = "true" ]; then
+        start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1" &
+    else
+        start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
+    fi
 
     if [ "$START_MEDIA_STAGE_DELAY_SECONDS" -gt 0 ]; then
         log_info "Staging non-core media stack startup delay (${START_MEDIA_STAGE_DELAY_SECONDS}s)"
@@ -2273,40 +2348,77 @@ start_media_stack_services() {
     fi
 
     if [ "$EXTERNAL_ROLE_MOUNTS_READY" = "true" ]; then
-        start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1"
+        if [ "$START_PARALLEL_ARR_START" = "true" ]; then
+            start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1" &
+            start_pids+=("$!")
+        else
+            start_service_helper "Jellyfin" "$JELLYFIN_SERVICE_CMD" 8096 "$JELLYFIN_PID_PATH" "127.0.0.1"
+        fi
     else
         log_warn "Skipping Jellyfin (external vault drive not mounted)"
     fi
-    start_service_helper "qBittorrent" "$QBITTORRENT_SERVICE_CMD" 8081 "$QBITTORRENT_PID_PATH" "127.0.0.1"
-
-    start_service_helper "Sonarr" "$SONARR_SERVICE_CMD" 8989 "$SONARR_PID_PATH" "127.0.0.1"
-    start_service_helper "Radarr" "$RADARR_SERVICE_CMD" 7878 "$RADARR_PID_PATH" "127.0.0.1"
-    start_service_helper "Prowlarr" "$PROWLARR_SERVICE_CMD" 9696 "$PROWLARR_PID_PATH" "127.0.0.1"
+    if [ "$START_PARALLEL_ARR_START" = "true" ]; then
+        start_service_helper "qBittorrent" "$QBITTORRENT_SERVICE_CMD" 8081 "$QBITTORRENT_PID_PATH" "127.0.0.1" &
+        start_pids+=("$!")
+        start_service_helper "Sonarr" "$SONARR_SERVICE_CMD" 8989 "$SONARR_PID_PATH" "127.0.0.1" &
+        start_pids+=("$!")
+        start_service_helper "Radarr" "$RADARR_SERVICE_CMD" 7878 "$RADARR_PID_PATH" "127.0.0.1" &
+        start_pids+=("$!")
+        start_service_helper "Prowlarr" "$PROWLARR_SERVICE_CMD" 9696 "$PROWLARR_PID_PATH" "127.0.0.1" &
+        start_pids+=("$!")
+    else
+        start_service_helper "qBittorrent" "$QBITTORRENT_SERVICE_CMD" 8081 "$QBITTORRENT_PID_PATH" "127.0.0.1"
+        start_service_helper "Sonarr" "$SONARR_SERVICE_CMD" 8989 "$SONARR_PID_PATH" "127.0.0.1"
+        start_service_helper "Radarr" "$RADARR_SERVICE_CMD" 7878 "$RADARR_PID_PATH" "127.0.0.1"
+        start_service_helper "Prowlarr" "$PROWLARR_SERVICE_CMD" 9696 "$PROWLARR_PID_PATH" "127.0.0.1"
+    fi
 
     if [ "$EXTERNAL_ROLE_MOUNTS_READY" = "true" ]; then
-        start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1"
+        if [ "$START_PARALLEL_ARR_START" = "true" ]; then
+            start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1" &
+            start_pids+=("$!")
+        else
+            start_service_helper "Bazarr" "$BAZARR_SERVICE_CMD" 6767 "$BAZARR_PID_PATH" "127.0.0.1"
+        fi
     else
         log_warn "Skipping Bazarr (vault drive not mounted)"
     fi
 
-    start_service_helper "FlareArr" "$FLAREARR_SERVICE_CMD" 8191 "$FLAREARR_PID_PATH" "127.0.0.1"
-
-    if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
-        start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
+    if [ "$START_PARALLEL_ARR_START" = "true" ]; then
+        start_service_helper "FlareArr" "$FLAREARR_SERVICE_CMD" 8191 "$FLAREARR_PID_PATH" "127.0.0.1" &
+        start_pids+=("$!")
+    else
+        start_service_helper "FlareArr" "$FLAREARR_SERVICE_CMD" 8191 "$FLAREARR_PID_PATH" "127.0.0.1"
     fi
 
-    if [ -x "$CONFIGURE_ARR_STACK_CMD" ]; then
-        local arr_log=""
-        arr_log="$(service_log_path "arr-stack-reconcile")"
-        log_info "Reconciling ARR, subtitles, and request-stack integrations"
-        if ! run_logged_command "ARR stack reconcile" "$arr_log" "$CONFIGURE_ARR_STACK_CMD"; then
-            log_warn "ARR stack reconciliation failed (see $arr_log)"
-            log_recent_tail "ARR stack reconcile" "$arr_log"
+    if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
+        if [ "$START_PARALLEL_ARR_START" = "true" ]; then
+            start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1" &
+            start_pids+=("$!")
+        else
+            start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
         fi
     fi
 
-    start_worker_helper "Storage watchdog" "$STORAGE_WATCHDOG_SERVICE_CMD" "$STORAGE_WATCHDOG_PID_PATH"
-    start_worker_helper "Media workflow sweeper" "$MEDIA_WORKFLOW_SERVICE_CMD" "$MEDIA_WORKFLOW_PID_PATH"
+    if [ "$START_PARALLEL_ARR_START" = "true" ]; then
+        wait_for_background_helpers "media service startup" "${start_pids[@]}"
+    fi
+
+    if [ "$START_ARR_RECONCILE_BACKGROUND" = "true" ]; then
+        start_arr_stack_reconcile &
+        pid="$!"
+        log_info "ARR stack reconciliation running in background (pid $pid)"
+    else
+        start_arr_stack_reconcile
+    fi
+
+    if [ "$START_WORKERS_BACKGROUND" = "true" ]; then
+        start_worker_helper "Storage watchdog" "$STORAGE_WATCHDOG_SERVICE_CMD" "$STORAGE_WATCHDOG_PID_PATH" &
+        start_worker_helper "Media workflow sweeper" "$MEDIA_WORKFLOW_SERVICE_CMD" "$MEDIA_WORKFLOW_PID_PATH" &
+    else
+        start_worker_helper "Storage watchdog" "$STORAGE_WATCHDOG_SERVICE_CMD" "$STORAGE_WATCHDOG_PID_PATH"
+        start_worker_helper "Media workflow sweeper" "$MEDIA_WORKFLOW_SERVICE_CMD" "$MEDIA_WORKFLOW_PID_PATH"
+    fi
 }
 
 detect_host_ip() {
@@ -2412,15 +2524,34 @@ if printf '%s\n' "$DRIVE_MIRROR_ALIASES_JSON" | grep -Fq 'conflict-active-mount'
     log_warn "Legacy D/E alias cleanup found active conflicting mountpoints under $DRIVES_DIR"
 fi
 sync_cloud_mount_links
-ensure_termux_drive_mirror DRIVE_MIRROR_MODE DRIVE_MIRROR_ENTRIES_JSON DRIVE_MIRROR_ALIASES_JSON DRIVE_MIRROR_REASON
-case "$DRIVE_MIRROR_MODE" in
-    preferred-mirror)
-        log_info "Host drive mirror refreshed after FTP link sync"
-        ;;
-    *)
-        log_warn "Host drive mirror refresh after FTP link sync fell back to $DRIVES_DIR${DRIVE_MIRROR_REASON:+ ($DRIVE_MIRROR_REASON)}"
-        ;;
-esac
+if [ "$START_MIRROR_REFRESH_BACKGROUND" = "true" ]; then
+    log_info "Scheduling host drive mirror refresh after FTP link sync in background"
+    (
+        refresh_mode=""
+        refresh_entries="[]"
+        refresh_aliases="[]"
+        refresh_reason=""
+        ensure_termux_drive_mirror refresh_mode refresh_entries refresh_aliases refresh_reason
+        case "$refresh_mode" in
+            preferred-mirror)
+                log_info "Host drive mirror refreshed after FTP link sync"
+                ;;
+            *)
+                log_warn "Host drive mirror refresh after FTP link sync fell back to $DRIVES_DIR${refresh_reason:+ ($refresh_reason)}"
+                ;;
+        esac
+    ) &
+else
+    ensure_termux_drive_mirror DRIVE_MIRROR_MODE DRIVE_MIRROR_ENTRIES_JSON DRIVE_MIRROR_ALIASES_JSON DRIVE_MIRROR_REASON
+    case "$DRIVE_MIRROR_MODE" in
+        preferred-mirror)
+            log_info "Host drive mirror refreshed after FTP link sync"
+            ;;
+        *)
+            log_warn "Host drive mirror refresh after FTP link sync fell back to $DRIVES_DIR${DRIVE_MIRROR_REASON:+ ($DRIVE_MIRROR_REASON)}"
+            ;;
+    esac
+fi
 ensure_media_layout
 apply_loopback_lockdown
 
@@ -2454,8 +2585,17 @@ start_background_command \
     "mkdir -p '$LOG_DIR'; exec env NODE_OPTIONS='$SERVER_NODE_OPTIONS' BACKEND_BIND_HOST='$BACKEND_BIND_HOST' PORT='$BACKEND_PORT' npm --prefix '$PROJECT/server' run start --silent > '$LOG_DIR/backend.log' 2>&1" \
     "$BACKEND_BIND_HOST"
 
-start_media_stack_services
-start_llm_service
+if [ "$START_MEDIA_STACK_BACKGROUND" = "true" ]; then
+    log_info "Starting media stack in background"
+    start_media_stack_services &
+else
+    start_media_stack_services
+fi
+if [ "$START_LLM_BACKGROUND" = "true" ]; then
+    start_llm_service &
+else
+    start_llm_service
+fi
 
 log_info "Starting nginx"
 if command -v nginx >/dev/null 2>&1; then
