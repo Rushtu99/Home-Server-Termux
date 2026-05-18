@@ -3319,6 +3319,30 @@ const getDriveSnapshot = async () => {
   };
 };
 
+const getDriveStateMtimeMs = () => {
+  try {
+    return fs.statSync(DRIVE_STATE_PATH).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+
+const runManualDriveScan = async () => {
+  const beforeMtimeMs = getDriveStateMtimeMs();
+  await runCommand(`"${USB_MOUNT_SERVICE_CMD}" --scan-now`, {
+    timeoutMs: 120000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (getDriveStateMtimeMs() > beforeMtimeMs) {
+      return;
+    }
+    await sleep(200);
+  }
+};
+
 const getDashboardSnapshot = async (sessionId) => {
   const [services, monitor, storage, controlledServiceNames, serviceCatalog, networkExposure] = await Promise.all([
     getServicesSnapshot(),
@@ -7203,7 +7227,7 @@ const drivesCheckHandler = async (req, res) => {
   }
 
   try {
-    await runCommand(`"${USB_MOUNT_SERVICE_CMD}" --scan-now`);
+    await runManualDriveScan();
     ensureMediaCompatibilityLayout();
     const watchdogHelperAvailable = fileIsExecutable(STORAGE_WATCHDOG_SERVICE_CMD) || await commandExists(STORAGE_WATCHDOG_SERVICE_CMD);
     if (watchdogHelperAvailable) {

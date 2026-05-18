@@ -90,11 +90,11 @@ SV_BIN="${SV_BIN:-$TERMUX_PREFIX/bin/sv}"
 SSHD_MANAGED_CONFIG_PATH="${SSHD_MANAGED_CONFIG_PATH:-$TERMUX_PREFIX/etc/ssh/sshd_config.d/50-home-server-managed.conf}"
 SSHD_SERVICE_LOG_PATH="${SSHD_SERVICE_LOG_PATH:-$LOGDIR_PATH/sv/sshd/current}"
 START_LOCK_WAIT_SECONDS="${START_LOCK_WAIT_SECONDS:-30}"
-START_MEDIA_STAGE_DELAY_SECONDS="${START_MEDIA_STAGE_DELAY_SECONDS:-15}"
-START_WAIT_TIMEOUT_SECONDS="${START_WAIT_TIMEOUT_SECONDS:-180}"
-START_WAIT_ARR_TIMEOUT_SECONDS="${START_WAIT_ARR_TIMEOUT_SECONDS:-240}"
-START_WAIT_POSTGRES_TIMEOUT_SECONDS="${START_WAIT_POSTGRES_TIMEOUT_SECONDS:-120}"
-START_WAIT_PID_EXIT_GRACE_SECONDS="${START_WAIT_PID_EXIT_GRACE_SECONDS:-45}"
+START_MEDIA_STAGE_DELAY_SECONDS="${START_MEDIA_STAGE_DELAY_SECONDS:-5}"
+START_WAIT_TIMEOUT_SECONDS="${START_WAIT_TIMEOUT_SECONDS:-120}"
+START_WAIT_ARR_TIMEOUT_SECONDS="${START_WAIT_ARR_TIMEOUT_SECONDS:-150}"
+START_WAIT_POSTGRES_TIMEOUT_SECONDS="${START_WAIT_POSTGRES_TIMEOUT_SECONDS:-60}"
+START_WAIT_PID_EXIT_GRACE_SECONDS="${START_WAIT_PID_EXIT_GRACE_SECONDS:-25}"
 SERVICE_FAIL_MODE="${SERVICE_FAIL_MODE:-fail_quiet}"
 SERVICE_RETRY_MAX_PER_HOUR="${SERVICE_RETRY_MAX_PER_HOUR:-4}"
 SERVICE_BACKOFF_STEPS="${SERVICE_BACKOFF_STEPS:-60,300,900,3600}"
@@ -384,6 +384,11 @@ acquire_start_lock() {
                 return 0
             fi
             if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+                if port_is_open 8088 || port_is_open "$FRONTEND_PORT" || port_is_open "$BACKEND_PORT"; then
+                    log_info "Home Server is already running (pid $existing_pid); startup request is a no-op"
+                    log_info "Use 'bash $PROJECT/scripts/hmstx-control.sh restart' to restart services"
+                    exit 0
+                fi
                 if [ "$waited" -ge "$START_LOCK_WAIT_SECONDS" ]; then
                     log_error "Another start.sh instance is still running after ${START_LOCK_WAIT_SECONDS}s (pid $existing_pid)"
                     exit 1
@@ -2216,6 +2221,24 @@ start_service_helper() {
     fi
 }
 
+start_service_helper_async() {
+    local name="$1"
+    local script_path="$2"
+    local port="$3"
+    local pid_file="$4"
+    local host="$5"
+
+    if [ ! -x "$script_path" ]; then
+        log_warn "Skipping $name (helper not found: $script_path)"
+        return 0
+    fi
+
+    log_info "Starting $name asynchronously"
+    (
+        start_service_helper "$name" "$script_path" "$port" "$pid_file" "$host"
+    ) &
+}
+
 start_worker_helper() {
     local name="$1"
     local script_path="$2"
@@ -2249,7 +2272,7 @@ start_worker_helper() {
 
 start_media_stack_services() {
     start_service_helper "Redis" "$REDIS_SERVICE_CMD" 6379 "$REDIS_PID_PATH" "127.0.0.1"
-    start_service_helper "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
+    start_service_helper_async "PostgreSQL" "$POSTGRES_SERVICE_CMD" 5432 "$POSTGRES_PID_PATH" "127.0.0.1"
 
     if [ "$START_MEDIA_STAGE_DELAY_SECONDS" -gt 0 ]; then
         log_info "Staging non-core media stack startup delay (${START_MEDIA_STAGE_DELAY_SECONDS}s)"
@@ -2276,7 +2299,7 @@ start_media_stack_services() {
     start_service_helper "FlareArr" "$FLAREARR_SERVICE_CMD" 8191 "$FLAREARR_PID_PATH" "127.0.0.1"
 
     if [ -f "$HOME/services/jellyseerr/app/dist/index.js" ]; then
-        start_service_helper "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
+        start_service_helper_async "Jellyseerr" "$JELLYSEERR_SERVICE_CMD" 5055 "$JELLYSEERR_PID_PATH" "127.0.0.1"
     fi
 
     if [ -x "$CONFIGURE_ARR_STACK_CMD" ]; then

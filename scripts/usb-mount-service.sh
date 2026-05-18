@@ -85,6 +85,22 @@ is_truthy() {
     esac
 }
 
+normalize_uuid_token() {
+    local token="$1"
+
+    token="$(printf '%s' "$token" | tr -d '[:space:]-{}')"
+    token="$(printf '%s' "$token" | tr '[:lower:]' '[:upper:]')"
+    printf '%s\n' "$token"
+}
+
+normalize_label_token() {
+    local token="$1"
+
+    token="$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')"
+    token="$(printf '%s' "$token" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    printf '%s\n' "$token"
+}
+
 get_usb_device_rows() {
     local -a usb_parts=()
     local disk=""
@@ -119,15 +135,67 @@ get_usb_device_rows() {
 
     # Fallback path for hosts where lsblk transport metadata is unavailable.
     blkid_cache="$(su -c "blkid 2>/dev/null" 2>/dev/null || true)"
+    local -a match_keys=()
     local role_uuid=""
+    local role_label=""
+    local key=""
+    local device=""
+    local -A seen_parts=()
+
     for role_uuid in "$USB_MOUNT_VAULT_UUID" "$USB_MOUNT_SCRATCH_UUID"; do
         [ -n "$role_uuid" ] || continue
-        line="$(printf '%s\n' "$blkid_cache" | awk -v uuid="$role_uuid" 'index($0, "UUID=\"" uuid "\"") { print; exit }')"
+        key="$(normalize_uuid_token "$role_uuid")"
+        [ -n "$key" ] || continue
+        match_keys+=("uuid:$key")
+    done
+    for role_label in "$USB_MOUNT_VAULT_LABEL" "$USB_MOUNT_SCRATCH_LABEL"; do
+        [ -n "$role_label" ] || continue
+        key="$(normalize_label_token "$role_label")"
+        [ -n "$key" ] || continue
+        match_keys+=("label:$key")
+    done
+
+    for key in "${match_keys[@]}"; do
+        case "$key" in
+            uuid:*)
+                role_uuid="${key#uuid:}"
+                line="$(printf '%s\n' "$blkid_cache" | awk -v uuid_norm="$role_uuid" '
+                    {
+                        line = $0
+                        if (match(line, /UUID="[^"]+"/) == 0) { next }
+                        value = substr(line, RSTART + 6, RLENGTH - 7)
+                        gsub(/[^[:alnum:]]/, "", value)
+                        value = toupper(value)
+                        if (value == uuid_norm) { print line; exit }
+                    }'
+                )"
+                ;;
+            label:*)
+                role_label="${key#label:}"
+                line="$(printf '%s\n' "$blkid_cache" | awk -v label_norm="$role_label" '
+                    {
+                        line = $0
+                        if (match(line, /LABEL="[^"]+"/) == 0) { next }
+                        value = substr(line, RSTART + 7, RLENGTH - 8)
+                        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                        value = tolower(value)
+                        if (value == label_norm) { print line; exit }
+                    }'
+                )"
+                ;;
+            *)
+                line=""
+                ;;
+        esac
         [ -n "$line" ] || continue
 
-        local device=""
         device="$(printf '%s\n' "$line" | sed 's/:.*//')"
         part="${device##*/}"
+        [ -n "$part" ] || continue
+        if [ -n "${seen_parts[$part]:-}" ]; then
+            continue
+        fi
+        seen_parts["$part"]=1
         disk="$(printf '%s\n' "$part" | sed 's/p\{0,1\}[0-9]\+$//')"
         [ -z "$disk" ] && disk="$part"
 
@@ -141,14 +209,36 @@ get_usb_device_rows() {
     done
 }
 
-role_for_uuid() {
+role_for_identity() {
     local uuid="$1"
+    local label="${2:-}"
+    local normalized_uuid=""
+    local normalized_label=""
+    local vault_uuid=""
+    local scratch_uuid=""
+    local vault_label=""
+    local scratch_label=""
 
-    if [ "$uuid" = "$USB_MOUNT_VAULT_UUID" ]; then
+    normalized_uuid="$(normalize_uuid_token "$uuid")"
+    normalized_label="$(normalize_label_token "$label")"
+    vault_uuid="$(normalize_uuid_token "$USB_MOUNT_VAULT_UUID")"
+    scratch_uuid="$(normalize_uuid_token "$USB_MOUNT_SCRATCH_UUID")"
+    vault_label="$(normalize_label_token "$USB_MOUNT_VAULT_LABEL")"
+    scratch_label="$(normalize_label_token "$USB_MOUNT_SCRATCH_LABEL")"
+
+    if [ -n "$normalized_uuid" ] && [ -n "$vault_uuid" ] && [ "$normalized_uuid" = "$vault_uuid" ]; then
         printf 'VAULT\n'
         return 0
     fi
-    if [ "$uuid" = "$USB_MOUNT_SCRATCH_UUID" ]; then
+    if [ -n "$normalized_uuid" ] && [ -n "$scratch_uuid" ] && [ "$normalized_uuid" = "$scratch_uuid" ]; then
+        printf 'SCRATCH\n'
+        return 0
+    fi
+    if [ -n "$normalized_label" ] && [ -n "$vault_label" ] && [ "$normalized_label" = "$vault_label" ]; then
+        printf 'VAULT\n'
+        return 0
+    fi
+    if [ -n "$normalized_label" ] && [ -n "$scratch_label" ] && [ "$normalized_label" = "$scratch_label" ]; then
         printf 'SCRATCH\n'
         return 0
     fi
@@ -338,7 +428,7 @@ scan_once() {
         detected=$((detected + 1))
 
         local role=""
-        role="$(role_for_uuid "$uuid")"
+        role="$(role_for_identity "$uuid" "$label")"
 
         local mount_role="usb"
         local letter=""
