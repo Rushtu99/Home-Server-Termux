@@ -14,6 +14,7 @@ FRONTEND_LOG_PATH="${FRONTEND_LOG_PATH:-$LOG_DIR/frontend.log}"
 DASHBOARD_NODE_OPTIONS="${DASHBOARD_NODE_OPTIONS:---max-old-space-size=384}"
 ALLOWED_DEV_ORIGINS="${ALLOWED_DEV_ORIGINS:-127.0.0.1,localhost,http://127.0.0.1:3000,http://127.0.0.1:8088,http://localhost:3000,http://localhost:8088}"
 FRONTEND_START_TIMEOUT_SECONDS="${FRONTEND_START_TIMEOUT_SECONDS:-120}"
+FRONTEND_AUTO_BUILD="${FRONTEND_AUTO_BUILD:-1}"
 SERVICE_NAME="frontend"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
@@ -66,6 +67,41 @@ is_running() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+needs_dashboard_build() {
+  local build_id="$DASHBOARD_DIR/.next/BUILD_ID"
+  local watch_paths=(
+    "$DASHBOARD_DIR/app"
+    "$DASHBOARD_DIR/public"
+    "$DASHBOARD_DIR/package.json"
+    "$DASHBOARD_DIR/package-lock.json"
+    "$DASHBOARD_DIR/next.config.ts"
+    "$DASHBOARD_DIR/tsconfig.json"
+  )
+
+  if [ ! -f "$build_id" ]; then
+    return 0
+  fi
+
+  for path in "${watch_paths[@]}"; do
+    if [ ! -e "$path" ]; then
+      continue
+    fi
+
+    if [ -d "$path" ]; then
+      if find "$path" -type f -newer "$build_id" -print -quit 2>/dev/null | grep -q .; then
+        return 0
+      fi
+      continue
+    fi
+
+    if [ "$path" -nt "$build_id" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 start_service() {
   local pid=""
   local launch_cmd=""
@@ -78,6 +114,18 @@ start_service() {
   if is_running && is_listening; then
     echo "frontend already running"
     return 0
+  fi
+
+  if [ "$FRONTEND_AUTO_BUILD" = "1" ] && needs_dashboard_build; then
+    echo "dashboard build is missing or stale, running npm run build" >> "$FRONTEND_LOG_PATH"
+    if ! (
+      cd "$DASHBOARD_DIR" &&
+      export NODE_OPTIONS="$DASHBOARD_NODE_OPTIONS" FRONTEND_BIND_HOST="$FRONTEND_BIND_HOST" ALLOWED_DEV_ORIGINS="$ALLOWED_DEV_ORIGINS" &&
+      npm run build
+    ) >> "$FRONTEND_LOG_PATH" 2>&1; then
+      echo "dashboard build failed; see $FRONTEND_LOG_PATH" >&2
+      return 1
+    fi
   fi
 
   if [ -f "$DASHBOARD_DIR/.next/BUILD_ID" ]; then

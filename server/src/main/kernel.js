@@ -348,7 +348,7 @@ const UI_SNAPSHOT_WORKSPACE_DEFAULT_TTL_MS = Math.max(1000, Number(process.env.U
 const UI_SNAPSHOT_BOOTSTRAP_MAX_STALE_MS = Math.max(UI_SNAPSHOT_BOOTSTRAP_TTL_MS, Number(process.env.UI_SNAPSHOT_BOOTSTRAP_MAX_STALE_MS || 45000) || 45000);
 const UI_SNAPSHOT_INITIAL_MAX_STALE_MS = Math.max(UI_SNAPSHOT_INITIAL_TTL_MS, Number(process.env.UI_SNAPSHOT_INITIAL_MAX_STALE_MS || 15000) || 15000);
 const UI_SNAPSHOT_WORKSPACE_MAX_STALE_MS = Math.max(UI_SNAPSHOT_WORKSPACE_DEFAULT_TTL_MS, Number(process.env.UI_SNAPSHOT_WORKSPACE_MAX_STALE_MS || 15000) || 15000);
-const UI_SNAPSHOT_BUILD_TIMEOUT_MS = Math.max(800, Number(process.env.UI_SNAPSHOT_BUILD_TIMEOUT_MS || 2200) || 2200);
+const UI_SNAPSHOT_BUILD_TIMEOUT_MS = Math.max(2000, Number(process.env.UI_SNAPSHOT_BUILD_TIMEOUT_MS || 15000) || 15000);
 const UI_SNAPSHOT_MAX_CONCURRENT_BUILDERS = Math.max(1, Number(process.env.UI_SNAPSHOT_MAX_CONCURRENT_BUILDERS || 8) || 8);
 const UI_SNAPSHOT_CACHE_MAX_ENTRIES = Math.max(32, Number(process.env.UI_SNAPSHOT_CACHE_MAX_ENTRIES || 1024) || 1024);
 const UI_SNAPSHOT_CACHE_PRUNE_INTERVAL_MS = Math.max(1000, Number(process.env.UI_SNAPSHOT_CACHE_PRUNE_INTERVAL_MS || 30000) || 30000);
@@ -356,6 +356,11 @@ const UI_ENDPOINT_METRICS_WINDOW_MS = Math.max(60000, Number(process.env.UI_ENDP
 const UI_ENDPOINT_METRICS_MAX_SAMPLES = Math.max(100, Number(process.env.UI_ENDPOINT_METRICS_MAX_SAMPLES || 2000) || 2000);
 const UI_SERVICE_CATALOG_TTL_MS = Math.max(1000, Number(process.env.UI_SERVICE_CATALOG_TTL_MS || 15000) || 15000);
 const UI_SERVICE_CATALOG_MAX_STALE_MS = Math.max(UI_SERVICE_CATALOG_TTL_MS, Number(process.env.UI_SERVICE_CATALOG_MAX_STALE_MS || 120000) || 120000);
+const UI_BOOTSTRAP_SERVICE_CATALOG_WAIT_MS = Math.max(300, Number(process.env.UI_BOOTSTRAP_SERVICE_CATALOG_WAIT_MS || 1400) || 1400);
+const UI_BOOTSTRAP_FILES_ACCESS_TIMEOUT_MS = Math.max(150, Number(process.env.UI_BOOTSTRAP_FILES_ACCESS_TIMEOUT_MS || 700) || 700);
+const UI_BOOTSTRAP_MONITOR_TIMEOUT_MS = Math.max(150, Number(process.env.UI_BOOTSTRAP_MONITOR_TIMEOUT_MS || 700) || 700);
+const UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS = Math.max(300, Number(process.env.UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS || 1400) || 1400);
+const UI_TELEMETRY_SERVICE_CATALOG_WAIT_MS = Math.max(300, Number(process.env.UI_TELEMETRY_SERVICE_CATALOG_WAIT_MS || 1200) || 1200);
 const UI_NETWORK_EXPOSURE_TTL_MS = Math.max(1000, Number(process.env.UI_NETWORK_EXPOSURE_TTL_MS || 45000) || 45000);
 const UI_NETWORK_EXPOSURE_MAX_STALE_MS = Math.max(UI_NETWORK_EXPOSURE_TTL_MS, Number(process.env.UI_NETWORK_EXPOSURE_MAX_STALE_MS || 300000) || 300000);
 const NGINX_CMD = `nginx -p "${ROOT_DIR}" -c "${ROOT_DIR}/nginx.conf"`;
@@ -2319,6 +2324,23 @@ const getUiServiceCatalog = async ({ force = false, allowStale = true } = {}) =>
   return uiServiceCatalogCache.promise;
 };
 
+const getUiServiceCatalogWithinBudget = async ({
+  allowStale = true,
+  fallbackValue = [],
+  force = false,
+  timeoutMs = 0,
+} = {}) => {
+  try {
+    const catalogPromise = getUiServiceCatalog({ force, allowStale });
+    if (timeoutMs > 0) {
+      return await withPromiseTimeout(catalogPromise, timeoutMs, 'UI service catalog');
+    }
+    return await catalogPromise;
+  } catch {
+    return fallbackValue;
+  }
+};
+
 const uiNetworkExposureCache = { expiresAt: 0, staleUntil: 0, promise: null, value: null };
 const uiDiagnosticBreaker = {
   state: 'closed',
@@ -3761,10 +3783,14 @@ const getDashboardSnapshot = async (sessionId) => {
   };
 };
 
-const getTelemetrySnapshot = async (sessionId) => {
+const getTelemetrySnapshot = async (sessionId, { serviceCatalogTimeoutMs = 0 } = {}) => {
   const [monitor, serviceCatalog, networkExposure] = await Promise.all([
     getMonitorSnapshot(),
-    getUiServiceCatalog({ allowStale: true }).catch(() => []),
+    getUiServiceCatalogWithinBudget({
+      allowStale: true,
+      fallbackValue: [],
+      timeoutMs: serviceCatalogTimeoutMs,
+    }),
     getNetworkExposureSnapshot({ allowStale: true }).catch(() => EMPTY_NETWORK_EXPOSURE_SNAPSHOT),
   ]);
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
@@ -6309,11 +6335,31 @@ const buildUiInitialSectionMeta = (ok, payload, fallbackMessage) => ({
   ...(ok ? {} : { error: { code: 'UNKNOWN', message: String(fallbackMessage || 'Unavailable') } }),
 });
 
-const buildMinimalUiBootstrapPayload = async (sessionUser) => {
-  const [hasFilesAccess, monitor] = await Promise.all([
-    syncManagedShares().then((shares) => shares.length > 0).catch(() => false),
+const getUiBootstrapContext = async (sessionUser) => {
+  const isAdmin = sessionUser?.role === 'admin';
+  const hasFilesAccessPromise = isAdmin
+    ? Promise.resolve(true)
+    : withPromiseTimeout(
+      syncManagedShares().then((shares) => shares.length > 0).catch(() => false),
+      UI_BOOTSTRAP_FILES_ACCESS_TIMEOUT_MS,
+      'UI bootstrap file-access probe'
+    ).catch(() => false);
+
+  const monitorPromise = withPromiseTimeout(
     getMonitorSnapshot().catch(() => null),
-  ]);
+    UI_BOOTSTRAP_MONITOR_TIMEOUT_MS,
+    'UI bootstrap monitor probe'
+  ).catch(() => null);
+
+  const [hasFilesAccess, monitor] = await Promise.all([hasFilesAccessPromise, monitorPromise]);
+  return {
+    hasFilesAccess: Boolean(hasFilesAccess || isAdmin),
+    monitor,
+  };
+};
+
+const buildMinimalUiBootstrapPayload = async (sessionUser) => {
+  const { hasFilesAccess, monitor } = await getUiBootstrapContext(sessionUser);
   const lifecycle = {
     state: 'degraded',
     summary: 'Shared diagnostics are unavailable; showing the shell with minimal navigation metadata.',
@@ -6356,16 +6402,17 @@ const buildMinimalUiBootstrapPayload = async (sessionUser) => {
 const buildUiBootstrapPayload = async (sessionUser, serviceCatalogOverride = null) => {
   const serviceCatalog = Array.isArray(serviceCatalogOverride)
     ? serviceCatalogOverride
-    : await getUiServiceCatalog({ allowStale: true }).catch(() => null);
-  if (!serviceCatalog) {
+    : await getUiServiceCatalogWithinBudget({
+      allowStale: true,
+      fallbackValue: null,
+      timeoutMs: UI_BOOTSTRAP_SERVICE_CATALOG_WAIT_MS,
+    });
+  if (!Array.isArray(serviceCatalog) || serviceCatalog.length === 0) {
     return buildMinimalUiBootstrapPayload(sessionUser);
   }
   const lifecycle = buildStackLifecycleSummary(serviceCatalog);
   const serviceByKey = new Map(serviceCatalog.map((entry) => [entry.key, entry]));
-  const [hasFilesAccess, monitor] = await Promise.all([
-    syncManagedShares().then((shares) => shares.length > 0).catch(() => false),
-    getMonitorSnapshot().catch(() => null),
-  ]);
+  const { hasFilesAccess, monitor } = await getUiBootstrapContext(sessionUser);
   const transferService = serviceByKey.get('ftp');
   const torrentTransferService = serviceByKey.get('qbittorrent');
   const aiService = serviceByKey.get('llm');
@@ -6583,14 +6630,11 @@ const buildAdminDesignTelemetry = ({ dashboard }) => {
 };
 
 const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride = null) => {
-  const serviceCatalog = serviceCatalogOverride || await getUiServiceCatalog();
   const now = new Date().toISOString();
-  const mediaEntries = serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(entry.group));
-  const transferEntries = serviceCatalog.filter((entry) => ['access', 'downloads'].includes(entry.group));
 
   if (workspaceKey === 'overview') {
     const [telemetry, connections, storage, drives, storageProtection] = await Promise.all([
-      getTelemetrySnapshot(req.session?.id),
+      getTelemetrySnapshot(req.session?.id, { serviceCatalogTimeoutMs: UI_TELEMETRY_SERVICE_CATALOG_WAIT_MS }),
       Promise.resolve(getConnectionsSnapshot()),
       getStorageSnapshot(),
       getDriveSnapshot(),
@@ -6605,29 +6649,6 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
       drives,
       storageProtection,
       designTelemetry: buildOverviewDesignTelemetry({ telemetry, connections, storage, drives }),
-    };
-  }
-
-  if (workspaceKey === 'media') {
-    const mediaWorkflow = buildMediaWorkflowSnapshot(serviceCatalog);
-    const [mediaHealth, qbDiagnostics] = await Promise.all([
-      getJellyfinMediaHealthSnapshot(),
-      buildQbittorrentUiDiagnostics(serviceCatalog),
-    ]);
-    return {
-      generatedAt: now,
-      workspaceKey,
-      arrDiagnostics: buildArrDiagnostics(serviceCatalog),
-      lifecycle: buildStackLifecycleSummary(serviceCatalog),
-      mediaWorkflow,
-      mediaHealth,
-      qbDiagnostics,
-      services: mediaEntries,
-      designTelemetry: buildMediaDesignTelemetry({
-        mediaHealth,
-        services: mediaEntries,
-        mediaWorkflow,
-      }),
     };
   }
 
@@ -6656,6 +6677,14 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
   }
 
   if (workspaceKey === 'transfers') {
+    const serviceCatalog = Array.isArray(serviceCatalogOverride)
+      ? serviceCatalogOverride
+      : await getUiServiceCatalogWithinBudget({
+        allowStale: true,
+        fallbackValue: [],
+        timeoutMs: UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS,
+      });
+    const transferEntries = serviceCatalog.filter((entry) => ['access', 'downloads'].includes(entry.group));
     const qbittorrentConfig = probeQbittorrentConfig();
     const qbittorrentService = serviceCatalog.find((entry) => entry.key === 'qbittorrent') || null;
     const qbDiagnostics = await buildQbittorrentUiDiagnostics(serviceCatalog);
@@ -6722,12 +6751,51 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
   }
 
   if (workspaceKey === 'terminal') {
+    const serviceCatalog = Array.isArray(serviceCatalogOverride)
+      ? serviceCatalogOverride
+      : await getUiServiceCatalogWithinBudget({
+        allowStale: true,
+        fallbackValue: [],
+        timeoutMs: UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS,
+      });
     const terminal = serviceCatalog.find((entry) => entry.key === 'ttyd') || null;
     return {
       generatedAt: now,
       workspaceKey,
       terminal,
       designTelemetry: buildTerminalDesignTelemetry({ terminal }),
+    };
+  }
+
+  const serviceCatalog = Array.isArray(serviceCatalogOverride)
+    ? serviceCatalogOverride
+    : await getUiServiceCatalogWithinBudget({
+      allowStale: true,
+      fallbackValue: [],
+      timeoutMs: UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS,
+    });
+
+  if (workspaceKey === 'media') {
+    const mediaEntries = serviceCatalog.filter((entry) => ['media', 'arr', 'downloads', 'data'].includes(entry.group));
+    const mediaWorkflow = buildMediaWorkflowSnapshot(serviceCatalog);
+    const [mediaHealth, qbDiagnostics] = await Promise.all([
+      getJellyfinMediaHealthSnapshot(),
+      buildQbittorrentUiDiagnostics(serviceCatalog),
+    ]);
+    return {
+      generatedAt: now,
+      workspaceKey,
+      arrDiagnostics: buildArrDiagnostics(serviceCatalog),
+      lifecycle: buildStackLifecycleSummary(serviceCatalog),
+      mediaWorkflow,
+      mediaHealth,
+      qbDiagnostics,
+      services: mediaEntries,
+      designTelemetry: buildMediaDesignTelemetry({
+        mediaHealth,
+        services: mediaEntries,
+        mediaWorkflow,
+      }),
     };
   }
 
