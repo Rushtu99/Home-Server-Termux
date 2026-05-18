@@ -13,6 +13,7 @@ LOG_DIR="${LOG_DIR:-$PROJECT/logs}"
 STORAGE_WATCHDOG_INTERVAL_SEC="${STORAGE_WATCHDOG_INTERVAL_SEC:-30}"
 STORAGE_WATCHDOG_STABLE_HEALTH_CHECKS="${STORAGE_WATCHDOG_STABLE_HEALTH_CHECKS:-2}"
 STORAGE_WATCHDOG_PID_PATH="${STORAGE_WATCHDOG_PID_PATH:-$RUNTIME_DIR/storage-watchdog.pid}"
+STORAGE_WATCHDOG_RUN_LOCK_FILE="${STORAGE_WATCHDOG_RUN_LOCK_FILE:-$RUNTIME_DIR/storage-watchdog.run-loop.lock}"
 STORAGE_WATCHDOG_LOG_PATH="${STORAGE_WATCHDOG_LOG_PATH:-$LOG_DIR/storage-watchdog.log}"
 STORAGE_WATCHDOG_STATE_FILE="${STORAGE_WATCHDOG_STATE_FILE:-$RUNTIME_DIR/storage-watchdog-state.json}"
 STORAGE_WATCHDOG_EVENTS_FILE="${STORAGE_WATCHDOG_EVENTS_FILE:-$RUNTIME_DIR/storage-watchdog-events.jsonl}"
@@ -1169,6 +1170,10 @@ is_running() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+list_matching_pids() {
+    pgrep -af "scripts/storage-watchdog-service.sh run-loop" | awk '!/pgrep -af/ { print $1 }' || true
+}
+
 status_service() {
     local mode="${1:-text}"
     local running=0
@@ -1198,6 +1203,14 @@ status_service() {
 }
 
 run_loop() {
+    if command -v flock >/dev/null 2>&1; then
+        exec 8>"$STORAGE_WATCHDOG_RUN_LOCK_FILE"
+        if ! flock -n 8; then
+            log WARN "Another storage-watchdog run-loop already holds lock; exiting duplicate loop"
+            return 0
+        fi
+    fi
+
     load_existing_state
     while true; do
         run_health_cycle
@@ -1206,7 +1219,15 @@ run_loop() {
 }
 
 start_service() {
+    local pid=""
+
     if is_running; then
+        return 0
+    fi
+
+    pid="$(list_matching_pids | head -n 1 || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        printf '%s\n' "$pid" > "$STORAGE_WATCHDOG_PID_PATH"
         return 0
     fi
 
@@ -1220,10 +1241,7 @@ start_service() {
 
 stop_service() {
     local pid=""
-
-    if [ ! -f "$STORAGE_WATCHDOG_PID_PATH" ]; then
-        return 0
-    fi
+    local extra_pid=""
 
     pid="$(cat "$STORAGE_WATCHDOG_PID_PATH" 2>/dev/null || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -1233,6 +1251,15 @@ stop_service() {
             kill -9 "$pid" >/dev/null 2>&1 || true
         fi
     fi
+
+    list_matching_pids | while read -r extra_pid; do
+        [ -n "$extra_pid" ] || continue
+        kill "$extra_pid" >/dev/null 2>&1 || true
+        sleep 1
+        if kill -0 "$extra_pid" 2>/dev/null; then
+            kill -9 "$extra_pid" >/dev/null 2>&1 || true
+        fi
+    done
 
     rm -f "$STORAGE_WATCHDOG_PID_PATH"
 }

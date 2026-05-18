@@ -12,7 +12,7 @@ const GROUP_MAP = {
 
 const SERVICE_OVERRIDES = {
   ftp: { group: 'fileshare', type: 'service' },
-  jellyfin: { dependencies: ['redis', 'postgres'], type: 'service' },
+  jellyfin: { dependencies: ['redis'], type: 'service' },
   jellyseerr: { dependencies: ['jellyfin', 'sonarr', 'radarr', 'prowlarr'], type: 'service' },
   llm: { group: 'ai', type: 'service' },
   nginx: { group: 'platform', type: 'service' },

@@ -27,6 +27,7 @@ const {
   createSystemRouteHandlers,
 } = require('../routes/route-handlers');
 const { createControlPlane } = require('../infra/control-plane');
+const { createServerLifecycle } = require('./server-lifecycle');
 const { createAppDb, normalizeUsername, verifyPassword } = require('../../app-db');
 const { parseDurationMs } = require('../../lib/time');
 const {
@@ -339,7 +340,7 @@ const UI_DIAGNOSTIC_BREAKER_FAILURE_THRESHOLD = Math.max(1, Number(process.env.U
 const UI_DIAGNOSTIC_BREAKER_WINDOW_MS = Math.max(1000, Number(process.env.UI_DIAGNOSTIC_BREAKER_WINDOW_MS || 30000) || 30000);
 const UI_DIAGNOSTIC_BREAKER_RESET_MS = Math.max(1000, Number(process.env.UI_DIAGNOSTIC_BREAKER_RESET_MS || 20000) || 20000);
 const UI_DIAGNOSTIC_BREAKER_HALF_OPEN_SUCCESS = Math.max(1, Number(process.env.UI_DIAGNOSTIC_BREAKER_HALF_OPEN_SUCCESS || 3) || 3);
-const UI_SNAPSHOT_ENGINE = String(process.env.UI_SNAPSHOT_ENGINE || 'off').trim().toLowerCase();
+const UI_SNAPSHOT_ENGINE = String(process.env.UI_SNAPSHOT_ENGINE || 'cache').trim().toLowerCase();
 const UI_SNAPSHOT_DIFF_LOG = String(process.env.UI_SNAPSHOT_DIFF_LOG || 'false').toLowerCase() === 'true';
 const UI_SNAPSHOT_BOOTSTRAP_TTL_MS = Math.max(1000, Number(process.env.UI_SNAPSHOT_BOOTSTRAP_TTL_MS || 3000) || 3000);
 const UI_SNAPSHOT_INITIAL_TTL_MS = Math.max(1000, Number(process.env.UI_SNAPSHOT_INITIAL_TTL_MS || 2000) || 2000);
@@ -805,7 +806,7 @@ const BASE_SERVICE_CATALOG_META = {
     surface: 'media',
   },
   postgres: {
-    controlMode: 'always_on',
+    controlMode: 'optional',
     description: 'Persistent database for IPTV services and future media metadata.',
     group: 'data',
     label: 'PostgreSQL',
@@ -943,6 +944,7 @@ const OPTIONAL_SERVICE_NAMES = [
   'copyparty',
   'syncthing',
   'samba',
+  'postgres',
   'sshd',
   'llm',
   'flarearr',
@@ -1955,20 +1957,25 @@ const buildStackLifecycleSummary = (serviceCatalog = []) => {
 
 const checkServiceHealth = async (serviceName, svc) => {
   const startedAt = Date.now();
+  let checkFailed = false;
 
   try {
     await runCommand(svc.check);
   } catch {
+    checkFailed = true;
+  }
+
+  if (!svc.port && !checkFailed) {
     return {
-      latencyMs: null,
-      running: false,
+      latencyMs: Date.now() - startedAt,
+      running: true,
     };
   }
 
   if (!svc.port) {
     return {
-      latencyMs: Date.now() - startedAt,
-      running: true,
+      latencyMs: null,
+      running: false,
     };
   }
 
@@ -3742,11 +3749,15 @@ const getDriveSnapshot = async () => {
   };
 };
 
-const getDashboardSnapshot = async (sessionId) => {
+const getDashboardSnapshot = async (sessionId, { serviceCatalogTimeoutMs = 0 } = {}) => {
   const [monitor, storage, serviceCatalog, networkExposure] = await Promise.all([
     getMonitorSnapshot(),
     getStorageSnapshot(),
-    getUiServiceCatalog({ allowStale: true }).catch(() => []),
+    getUiServiceCatalogWithinBudget({
+      allowStale: true,
+      fallbackValue: [],
+      timeoutMs: serviceCatalogTimeoutMs,
+    }),
     getNetworkExposureSnapshot({ allowStale: true }).catch(() => EMPTY_NETWORK_EXPOSURE_SNAPSHOT),
   ]);
   const services = serviceCatalog.reduce((acc, entry) => {
@@ -5976,7 +5987,7 @@ const {
   pushAuditEvent,
 });
 
-const POLL_INTERVAL_MS = 10000;
+const POLL_INTERVAL_MS = Math.max(10000, Number(process.env.POLL_INTERVAL_MS) || 30000);
 const FS_UPLOAD_RAW_PARSER = express.raw({ type: '*/*', limit: '128mb' });
 const routeRegistry = createRouteRegistry({
   app,
@@ -6799,16 +6810,15 @@ const buildUiWorkspacePayload = async (req, workspaceKey, serviceCatalogOverride
     };
   }
 
-  const [dashboard, services] = await Promise.all([
-    getDashboardSnapshot(req.session?.id),
-    getServicesSnapshot(),
-  ]);
+  const dashboard = await getDashboardSnapshot(req.session?.id, {
+    serviceCatalogTimeoutMs: UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS,
+  });
   return {
     generatedAt: now,
     arrEvidence: buildArrEvidence(serviceCatalog),
     workspaceKey,
     dashboard,
-    services,
+    services: dashboard.services || {},
     designTelemetry: buildAdminDesignTelemetry({ dashboard }),
   };
 };
@@ -6907,7 +6917,12 @@ const uiInitialHandler = async (req, res) => {
   const requestId = crypto.randomUUID();
   const force = shouldForceUiSnapshotRefresh(req);
   try {
-    const serviceCatalog = await getUiServiceCatalog({ allowStale: true, force }).catch(() => null);
+    const serviceCatalog = await getUiServiceCatalogWithinBudget({
+      allowStale: true,
+      fallbackValue: null,
+      force,
+      timeoutMs: UI_WORKSPACE_SERVICE_CATALOG_WAIT_MS,
+    });
     if (!UI_INITIAL_PARTIAL_SUCCESS) {
       const [bootstrap, workspace] = await Promise.all([
         getCachedUiBootstrapPayload(req, { force, serviceCatalogOverride: serviceCatalog }),
@@ -8261,30 +8276,6 @@ app.use((err, req, res, next) => {
   return next();
 });
 
-const runtimeState = {
-  server: null,
-  pollIntervalId: null,
-};
-
-const startPolling = () => {
-  if (runtimeState.pollIntervalId) {
-    return;
-  }
-  runtimeState.pollIntervalId = setInterval(() => {
-    pollServiceStateTransitions().catch((err) => {
-      pushDebugEvent('error', 'Service state polling failed', { error: String(err) }, true);
-    });
-  }, POLL_INTERVAL_MS);
-};
-
-const stopPolling = () => {
-  if (!runtimeState.pollIntervalId) {
-    return;
-  }
-  clearInterval(runtimeState.pollIntervalId);
-  runtimeState.pollIntervalId = null;
-};
-
 const buildRouteManifestSnapshot = () => routeRegistry.buildRouteManifestSnapshot();
 const buildStartupInvariantsSnapshot = () => routeRegistry.buildStartupInvariantsSnapshot();
 
@@ -8308,71 +8299,17 @@ const createApp = (options = {}) => {
   };
 };
 
-const startServer = async (options = {}) => {
-  if (runtimeState.server) {
-    const currentAddress = runtimeState.server.address();
-    return {
-      server: runtimeState.server,
-      appRuntime: createApp(options),
-      host: typeof currentAddress === 'object' && currentAddress ? currentAddress.address : (options.host || BACKEND_BIND_HOST),
-      port: typeof currentAddress === 'object' && currentAddress ? currentAddress.port : (Number(options.port) || PORT),
-    };
-  }
+const lifecycle = createServerLifecycle({
+  app,
+  createApp,
+  pollServiceStateTransitions,
+  pushDebugEvent,
+  pollIntervalMs: POLL_INTERVAL_MS,
+  defaultHost: BACKEND_BIND_HOST,
+  defaultPort: PORT,
+});
 
-  const host = options.host || BACKEND_BIND_HOST;
-  const requestedPort = Number(options.port);
-  const port = Number.isFinite(requestedPort) ? requestedPort : PORT;
-  const enablePolling = options.enablePolling !== false;
-  const appRuntime = createApp({ ...options, enablePolling });
-
-  const server = await new Promise((resolve, reject) => {
-    const instance = app.listen(port, host, () => resolve(instance));
-    instance.on('error', reject);
-  });
-  runtimeState.server = server;
-
-  const address = server.address();
-  const resolvedHost = typeof address === 'object' && address ? address.address : host;
-  const resolvedPort = typeof address === 'object' && address ? address.port : port;
-
-  if (enablePolling) {
-    startPolling();
-  } else {
-    stopPolling();
-  }
-
-  if (!options.silent) {
-    console.log(`🚀 Backend running on ${resolvedHost}:${resolvedPort}`);
-  }
-  pushDebugEvent('info', 'Backend loaded', { host: resolvedHost, port: resolvedPort }, true);
-
-  return {
-    server,
-    appRuntime,
-    host: resolvedHost,
-    port: resolvedPort,
-  };
-};
-
-const stopServer = async (runtime = null) => {
-  stopPolling();
-  const server = runtime?.server || runtimeState.server;
-  if (!server) {
-    return;
-  }
-  await new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-  if (server === runtimeState.server) {
-    runtimeState.server = null;
-  }
-};
+const { runtimeState, startPolling, stopPolling, startServer, stopServer } = lifecycle;
 
 module.exports = {
   createApp,

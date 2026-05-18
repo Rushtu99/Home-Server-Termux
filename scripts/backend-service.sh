@@ -67,7 +67,13 @@ is_running() {
 start_service() {
   local pid=""
 
-  if is_running && is_listening; then
+  if is_listening; then
+    if ! is_running; then
+      pid="$(list_matching_pids | head -n 1 || true)"
+      if [ -n "$pid" ]; then
+        printf '%s\n' "$pid" > "$BACKEND_PID_PATH"
+      fi
+    fi
     echo "backend already running"
     return 0
   fi
@@ -116,7 +122,7 @@ status_json() {
   local status="stopped"
   local status_code=1
 
-  if is_running && is_listening; then
+  if is_listening; then
     running=true
     status="running"
     status_code=0
@@ -146,7 +152,7 @@ case "${1:-status}" in
     if [ "${2:-}" = "--json" ]; then
       status_json
     else
-      if is_running && is_listening; then
+      if is_listening; then
         echo "running"
       else
         echo "stopped"

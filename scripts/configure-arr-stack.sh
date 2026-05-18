@@ -208,7 +208,13 @@ def wait_for_url(url: str, headers=None, timeout=60):
         except Exception as exc:  # noqa: BLE001
             last_error = exc
         time.sleep(1)
-    raise SystemExit(f"Timed out waiting for {url}: {last_error}")
+    raise TimeoutError(f"Timed out waiting for {url}: {last_error}")
+
+def wait_for_url_soft(url: str, headers=None, timeout=60):
+    try:
+        return wait_for_url(url, headers=headers, timeout=timeout), None
+    except BaseException as exc:  # noqa: BLE001
+        return None, str(exc)
 
 def request_json(method: str, url: str, headers=None, payload=None):
     request_headers = {"Accept": "application/json"}
@@ -572,57 +578,75 @@ def configure_jellyseerr_safe(sonarr_key: str, radarr_key: str, series_root: str
             "skipped": True,
         }
 
-sonarr_key = read_api_key(SONARR_CONFIG)
-radarr_key = read_api_key(RADARR_CONFIG)
-prowlarr_key = read_api_key(PROWLARR_CONFIG)
-
-sonarr_base = f"http://127.0.0.1:{SONARR_PORT}{SONARR_BASE_PATH}/api/v3"
-radarr_base = f"http://127.0.0.1:{RADARR_PORT}{RADARR_BASE_PATH}/api/v3"
-prowlarr_base = f"http://127.0.0.1:{PROWLARR_PORT}{PROWLARR_BASE_PATH}/api/v1"
-
-wait_for_url(f"http://127.0.0.1:{QBITTORRENT_PORT}/api/v2/app/version")
-wait_for_url(f"{sonarr_base}/system/status", {"X-Api-Key": sonarr_key})
-wait_for_url(f"{radarr_base}/system/status", {"X-Api-Key": radarr_key})
-wait_for_url(f"{prowlarr_base}/health", {"X-Api-Key": prowlarr_key})
-
-series_root = path_in_chroot(MEDIA_SERIES_DIR)
-movies_root = path_in_chroot(MEDIA_MOVIES_DIR)
-downloads_series_remote = os.environ.get("MEDIA_DOWNLOADS_SERIES_DIR", "")
-downloads_movies_remote = os.environ.get("MEDIA_DOWNLOADS_MOVIES_DIR", "")
-
-ensure_root_folder(sonarr_base, sonarr_key, series_root)
-ensure_root_folder(radarr_base, radarr_key, movies_root)
-ensure_download_client(sonarr_base, sonarr_key, "tvCategory", "series")
-ensure_download_client(radarr_base, radarr_key, "movieCategory", "movies")
-
-if downloads_series_remote:
-    ensure_remote_path_mapping(sonarr_base, sonarr_key, QBITTORRENT_BIND_HOST, downloads_series_remote, path_in_chroot(downloads_series_remote))
-if downloads_movies_remote:
-    ensure_remote_path_mapping(radarr_base, radarr_key, QBITTORRENT_BIND_HOST, downloads_movies_remote, path_in_chroot(downloads_movies_remote))
-
-ensure_prowlarr_app(prowlarr_base, prowlarr_key, "Sonarr", f"http://127.0.0.1:{SONARR_PORT}{SONARR_BASE_PATH}", sonarr_key)
-ensure_prowlarr_app(prowlarr_base, prowlarr_key, "Radarr", f"http://127.0.0.1:{RADARR_PORT}{RADARR_BASE_PATH}", radarr_key)
-
-bazarr_summary = configure_bazarr(sonarr_key, radarr_key)
-jellyseerr_summary = configure_jellyseerr_safe(sonarr_key, radarr_key, series_root, movies_root)
-
 summary = {
-    "sonarr": {
-        "rootFolders": len(request_json("GET", f"{sonarr_base}/rootfolder", {"X-Api-Key": sonarr_key})),
-        "downloadClients": len(request_json("GET", f"{sonarr_base}/downloadclient", {"X-Api-Key": sonarr_key})),
-        "remotePathMappings": len(request_json("GET", f"{sonarr_base}/remotepathmapping", {"X-Api-Key": sonarr_key})),
-    },
-    "radarr": {
-        "rootFolders": len(request_json("GET", f"{radarr_base}/rootfolder", {"X-Api-Key": radarr_key})),
-        "downloadClients": len(request_json("GET", f"{radarr_base}/downloadclient", {"X-Api-Key": radarr_key})),
-        "remotePathMappings": len(request_json("GET", f"{radarr_base}/remotepathmapping", {"X-Api-Key": radarr_key})),
-    },
-    "prowlarr": {
-        "applications": len(request_json("GET", f"{prowlarr_base}/applications", {"X-Api-Key": prowlarr_key})),
-    },
-    "bazarr": bazarr_summary,
-    "jellyseerr": jellyseerr_summary,
+    "sonarr": {"rootFolders": 0, "downloadClients": 0, "remotePathMappings": 0},
+    "radarr": {"rootFolders": 0, "downloadClients": 0, "remotePathMappings": 0},
+    "prowlarr": {"applications": 0},
+    "bazarr": {"configured": False, "reason": "arr dependencies unavailable", "skipped": True},
+    "jellyseerr": {"configured": False, "reason": "arr dependencies unavailable", "skipped": True},
+    "warnings": [],
 }
+
+try:
+    sonarr_key = read_api_key(SONARR_CONFIG)
+    radarr_key = read_api_key(RADARR_CONFIG)
+    prowlarr_key = read_api_key(PROWLARR_CONFIG)
+
+    sonarr_base = f"http://127.0.0.1:{SONARR_PORT}{SONARR_BASE_PATH}/api/v3"
+    radarr_base = f"http://127.0.0.1:{RADARR_PORT}{RADARR_BASE_PATH}/api/v3"
+    prowlarr_base = f"http://127.0.0.1:{PROWLARR_PORT}{PROWLARR_BASE_PATH}/api/v1"
+
+    _, qb_error = wait_for_url_soft(f"http://127.0.0.1:{QBITTORRENT_PORT}/api/v2/app/version")
+    _, sonarr_error = wait_for_url_soft(f"{sonarr_base}/system/status", {"X-Api-Key": sonarr_key})
+    _, radarr_error = wait_for_url_soft(f"{radarr_base}/system/status", {"X-Api-Key": radarr_key})
+    _, prowlarr_error = wait_for_url_soft(f"{prowlarr_base}/health", {"X-Api-Key": prowlarr_key})
+    for service_name, error_text in (
+        ("qbittorrent", qb_error),
+        ("sonarr", sonarr_error),
+        ("radarr", radarr_error),
+        ("prowlarr", prowlarr_error),
+    ):
+        if error_text:
+            summary["warnings"].append(f"{service_name} unavailable: {error_text}")
+
+    if not any((qb_error, sonarr_error, radarr_error, prowlarr_error)):
+        series_root = path_in_chroot(MEDIA_SERIES_DIR)
+        movies_root = path_in_chroot(MEDIA_MOVIES_DIR)
+        downloads_series_remote = os.environ.get("MEDIA_DOWNLOADS_SERIES_DIR", "")
+        downloads_movies_remote = os.environ.get("MEDIA_DOWNLOADS_MOVIES_DIR", "")
+
+        ensure_root_folder(sonarr_base, sonarr_key, series_root)
+        ensure_root_folder(radarr_base, radarr_key, movies_root)
+        ensure_download_client(sonarr_base, sonarr_key, "tvCategory", "series")
+        ensure_download_client(radarr_base, radarr_key, "movieCategory", "movies")
+
+        if downloads_series_remote:
+            ensure_remote_path_mapping(sonarr_base, sonarr_key, QBITTORRENT_BIND_HOST, downloads_series_remote, path_in_chroot(downloads_series_remote))
+        if downloads_movies_remote:
+            ensure_remote_path_mapping(radarr_base, radarr_key, QBITTORRENT_BIND_HOST, downloads_movies_remote, path_in_chroot(downloads_movies_remote))
+
+        ensure_prowlarr_app(prowlarr_base, prowlarr_key, "Sonarr", f"http://127.0.0.1:{SONARR_PORT}{SONARR_BASE_PATH}", sonarr_key)
+        ensure_prowlarr_app(prowlarr_base, prowlarr_key, "Radarr", f"http://127.0.0.1:{RADARR_PORT}{RADARR_BASE_PATH}", radarr_key)
+
+        summary["bazarr"] = configure_bazarr(sonarr_key, radarr_key)
+        summary["jellyseerr"] = configure_jellyseerr_safe(sonarr_key, radarr_key, series_root, movies_root)
+
+        summary["sonarr"] = {
+            "rootFolders": len(request_json("GET", f"{sonarr_base}/rootfolder", {"X-Api-Key": sonarr_key})),
+            "downloadClients": len(request_json("GET", f"{sonarr_base}/downloadclient", {"X-Api-Key": sonarr_key})),
+            "remotePathMappings": len(request_json("GET", f"{sonarr_base}/remotepathmapping", {"X-Api-Key": sonarr_key})),
+        }
+        summary["radarr"] = {
+            "rootFolders": len(request_json("GET", f"{radarr_base}/rootfolder", {"X-Api-Key": radarr_key})),
+            "downloadClients": len(request_json("GET", f"{radarr_base}/downloadclient", {"X-Api-Key": radarr_key})),
+            "remotePathMappings": len(request_json("GET", f"{radarr_base}/remotepathmapping", {"X-Api-Key": radarr_key})),
+        }
+        summary["prowlarr"] = {
+            "applications": len(request_json("GET", f"{prowlarr_base}/applications", {"X-Api-Key": prowlarr_key})),
+        }
+except Exception as exc:  # noqa: BLE001
+    summary["warnings"].append(f"arr-stack reconcile fallback: {exc}")
+
 print(json.dumps(summary))
 PY
 
@@ -665,7 +689,7 @@ def wait_for_url(url: str, timeout=90):
         except Exception as exc:  # noqa: BLE001
             last_error = exc
         time.sleep(1)
-    raise SystemExit(f"Timed out waiting for {url}: {last_error}")
+    raise TimeoutError(f"Timed out waiting for {url}: {last_error}")
 
 def probe_url(url: str, timeout=90):
     try:

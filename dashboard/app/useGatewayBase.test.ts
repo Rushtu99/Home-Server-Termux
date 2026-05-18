@@ -26,7 +26,7 @@ describe('resolveGatewayBase', () => {
     expect(value).toBe('https://example.com/Home-Server-Termux');
   });
 
-  it('maps local dev port 3000 to gateway 8088', () => {
+  it('maps local dev port 3000 to backend 4000', () => {
     const value = resolveGatewayBase({
       origin: 'http://127.0.0.1:3000',
       protocol: 'http:',
@@ -35,7 +35,22 @@ describe('resolveGatewayBase', () => {
       port: '3000',
     });
 
-    expect(value).toBe('http://127.0.0.1:8088');
+    expect(value).toBe('http://127.0.0.1:4000');
+  });
+
+  it('prefers explicit backend origin override', () => {
+    const value = resolveGatewayBase(
+      {
+        origin: 'http://127.0.0.1:3000',
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        host: '127.0.0.1:3000',
+        port: '3000',
+      },
+      { backendOrigin: 'https://api.example.net/' }
+    );
+
+    expect(value).toBe('https://api.example.net');
   });
 
   it('keeps same origin for non-dev ports', () => {

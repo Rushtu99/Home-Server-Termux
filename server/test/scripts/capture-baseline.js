@@ -31,7 +31,7 @@ const startupFixture = {
     jsonBodyLimit: String(startup.invariants?.jsonBodyLimit || '256kb'),
     authRoutesBeforeDualRoutes: Boolean(startup.invariants?.authRoutesBeforeDualRoutes),
     errorMiddlewareLast: Boolean(startup.invariants?.errorMiddlewareLast),
-    pollIntervalMs: Number(startup.invariants?.pollIntervalMs || 10000),
+    pollIntervalMs: Number(startup.invariants?.pollIntervalMs || 30000),
   },
   registrationOrder: {
     firstAuthRouteIndex: Number(startup.registrationOrder?.firstAuthRouteIndex ?? -1),

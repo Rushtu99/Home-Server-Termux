@@ -15,6 +15,8 @@ JELLYSEERR_NEXT_BUILD_ID_PATH="${JELLYSEERR_NEXT_BUILD_ID_PATH:-$JELLYSEERR_APP_
 JELLYSEERR_BIND_HOST="${JELLYSEERR_BIND_HOST:-127.0.0.1}"
 JELLYSEERR_PORT="${JELLYSEERR_PORT:-5055}"
 JELLYSEERR_BASE_PATH="${JELLYSEERR_BASE_PATH:-/requests}"
+JELLYSEERR_CPUSET="${JELLYSEERR_CPUSET:-6}"
+JELLYSEERR_NICE="${JELLYSEERR_NICE:-10}"
 JELLYSEERR_PID_PATH="${JELLYSEERR_PID_PATH:-$RUNTIME_DIR/jellyseerr.pid}"
 JELLYSEERR_LOG_PATH="${JELLYSEERR_LOG_PATH:-$LOG_DIR/jellyseerr.log}"
 JELLYSEERR_DATA_DIR="${JELLYSEERR_DATA_DIR:-$JELLYSEERR_HOME/data}"
@@ -278,6 +280,7 @@ PY
 start_service() {
     local node_options=""
     local cooldown_left=0
+    local -a launch_prefix=()
 
     if is_running; then
         if type sfq_mark_success >/dev/null 2>&1; then
@@ -313,10 +316,16 @@ start_service() {
     if [ -d "$JELLYSEERR_NODE_SHIMS_DIR" ]; then
         runtime_path="$JELLYSEERR_NODE_SHIMS_DIR:$runtime_path"
     fi
+    if [ -n "$JELLYSEERR_CPUSET" ] && command -v taskset >/dev/null 2>&1; then
+        launch_prefix+=(taskset -c "$JELLYSEERR_CPUSET")
+    fi
+    if command -v nice >/dev/null 2>&1; then
+        launch_prefix+=(nice -n "$JELLYSEERR_NICE")
+    fi
     if command -v setsid >/dev/null 2>&1; then
         (
             cd "$JELLYSEERR_APP_DIR"
-            exec setsid env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
+            exec setsid "${launch_prefix[@]}" env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
             DB_TYPE="$JELLYSEERR_DB_TYPE" DB_HOST="$JELLYSEERR_DB_HOST" DB_PORT="$JELLYSEERR_DB_PORT" DB_NAME="$JELLYSEERR_DB_NAME" DB_USER="$JELLYSEERR_DB_USER" DB_PASS="$JELLYSEERR_DB_PASS" \
             NODE_OPTIONS="$node_options" \
             "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1 < /dev/null
@@ -324,7 +333,7 @@ start_service() {
     else
         (
             cd "$JELLYSEERR_APP_DIR"
-            exec nohup env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
+            exec nohup "${launch_prefix[@]}" env NODE_ENV=production PORT="$JELLYSEERR_PORT" HOST="$JELLYSEERR_BIND_HOST" CONFIG_DIRECTORY="$JELLYSEERR_DATA_DIR" BASE_URL="$JELLYSEERR_BASE_PATH" PATH="$runtime_path" \
             DB_TYPE="$JELLYSEERR_DB_TYPE" DB_HOST="$JELLYSEERR_DB_HOST" DB_PORT="$JELLYSEERR_DB_PORT" DB_NAME="$JELLYSEERR_DB_NAME" DB_USER="$JELLYSEERR_DB_USER" DB_PASS="$JELLYSEERR_DB_PASS" \
             NODE_OPTIONS="$node_options" \
             "$JELLYSEERR_NODE_BIN" "$JELLYSEERR_DIST_PATH" > "$JELLYSEERR_LOG_PATH" 2>&1

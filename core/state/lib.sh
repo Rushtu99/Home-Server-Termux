@@ -15,6 +15,35 @@ hs_state_pid_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+hs_state_json_field_string() {
+  local file="$1" key="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$file" | head -n 1
+}
+
+hs_state_json_field_number() {
+  local file="$1" key="$2" value=""
+  [ -f "$file" ] || {
+    printf '0\n'
+    return 0
+  }
+  value="$(sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p" "$file" | head -n 1)"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '0\n'
+  fi
+}
+
+hs_state_iso_to_epoch() {
+  local iso="$1"
+  [ -n "$iso" ] || {
+    printf '0\n'
+    return 0
+  }
+  date -u -d "$iso" '+%s' 2>/dev/null || printf '0\n'
+}
+
 hs_state_write_service() {
   local service="$1" status="$2" pid="${3:-}" health="${4:-unknown}" reason="${5:-}"
   local root="${PROJECT:-$(pwd)}" dir="" now="" started_at="" uptime="0" restart_count="0" current_json=""
@@ -23,15 +52,20 @@ hs_state_write_service() {
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   current_json="$dir/$service.json"
 
-  if [ -f "$current_json" ] && command -v node >/dev/null 2>&1; then
-    started_at="$(node -e 'const fs=require("fs"); const p=process.argv[1]; try { console.log(JSON.parse(fs.readFileSync(p,"utf8")).startedAt || ""); } catch { console.log(""); }' "$current_json")"
-    restart_count="$(node -e 'const fs=require("fs"); const p=process.argv[1]; try { console.log(Number(JSON.parse(fs.readFileSync(p,"utf8")).restartCount || 0)); } catch { console.log(0); }' "$current_json")"
+  if [ -f "$current_json" ]; then
+    started_at="$(hs_state_json_field_string "$current_json" "startedAt")"
+    restart_count="$(hs_state_json_field_number "$current_json" "restartCount")"
   fi
 
   if [ "$status" = "running" ]; then
+    local started_epoch="0" now_epoch="0"
     [ -n "$started_at" ] || started_at="$now"
-    if command -v node >/dev/null 2>&1; then
-      uptime="$(node -e 'const t=Date.parse(process.argv[1]); console.log(Number.isFinite(t) ? Math.max(0, Math.floor((Date.now()-t)/1000)) : 0)' "$started_at")"
+    started_epoch="$(hs_state_iso_to_epoch "$started_at")"
+    now_epoch="$(date -u '+%s')"
+    if [ "$started_epoch" -gt 0 ] && [ "$now_epoch" -ge "$started_epoch" ]; then
+      uptime="$((now_epoch - started_epoch))"
+    else
+      uptime="0"
     fi
   else
     started_at=""

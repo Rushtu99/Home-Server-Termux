@@ -68,6 +68,7 @@ export default function DashboardV2() {
     setActiveWorkspace,
     transitionLabel,
     reloadWorkspace,
+    prefetchWorkspaceIntent,
     workspaceData,
     workspaceError,
     loadingWorkspace,
@@ -365,6 +366,8 @@ export default function DashboardV2() {
                 key={item.key}
                 type="button"
                 className={`dash2-nav__item ${isActive ? 'dash2-nav__item--active' : ''}`}
+                onMouseEnter={() => prefetchWorkspaceIntent(item.key as WorkspaceKey)}
+                onFocus={() => prefetchWorkspaceIntent(item.key as WorkspaceKey)}
                 onClick={() => {
                   setActiveWorkspace(item.key as WorkspaceKey);
                   if (isNarrowScreen) {

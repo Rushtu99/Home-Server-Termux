@@ -12,8 +12,10 @@ LLM_MODELS_DIR="${LLM_MODELS_DIR:-$LLM_HOME/models}"
 LLM_BIND_HOST="${LLM_BIND_HOST:-127.0.0.1}"
 LLM_PORT="${LLM_PORT:-11435}"
 LLM_CTX_SIZE="${LLM_CTX_SIZE:-4096}"
-LLM_THREADS="${LLM_THREADS:-4}"
+LLM_THREADS="${LLM_THREADS:-2}"
 LLM_GPU_LAYERS="${LLM_GPU_LAYERS:-0}"
+LLM_CPUSET="${LLM_CPUSET:-3-4}"
+LLM_NICE="${LLM_NICE:-5}"
 LLM_DEFAULT_MODEL_PATH="${LLM_DEFAULT_MODEL_PATH:-}"
 LLM_ACTIVE_MODEL_FILE="${LLM_ACTIVE_MODEL_FILE:-$RUNTIME_DIR/llm-active-model.txt}"
 LLM_PID_PATH="${LLM_PID_PATH:-$RUNTIME_DIR/llm.pid}"
@@ -48,6 +50,7 @@ resolve_model_path() {
 }
 
 start_service() {
+    local -a launch_prefix=()
     [ -n "$LLM_SERVER_BIN" ] || {
         echo "llama-server is not installed" >&2
         return 1
@@ -68,8 +71,15 @@ start_service() {
         return 1
     }
 
+    if [ -n "$LLM_CPUSET" ] && command -v taskset >/dev/null 2>&1; then
+        launch_prefix+=(taskset -c "$LLM_CPUSET")
+    fi
+    if command -v nice >/dev/null 2>&1; then
+        launch_prefix+=(nice -n "$LLM_NICE")
+    fi
+
     if command -v setsid >/dev/null 2>&1; then
-        setsid "$LLM_SERVER_BIN" \
+        setsid "${launch_prefix[@]}" "$LLM_SERVER_BIN" \
             --host "$LLM_BIND_HOST" \
             --port "$LLM_PORT" \
             --model "$model_path" \
@@ -79,7 +89,7 @@ start_service() {
             --jinja \
             > "$LLM_LOG_PATH" 2>&1 < /dev/null &
     else
-        nohup "$LLM_SERVER_BIN" \
+        nohup "${launch_prefix[@]}" "$LLM_SERVER_BIN" \
             --host "$LLM_BIND_HOST" \
             --port "$LLM_PORT" \
             --model "$model_path" \

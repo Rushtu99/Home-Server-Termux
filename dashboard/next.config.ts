@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 
-const LOCAL_API_ORIGIN = process.env.LOCAL_API_ORIGIN || 'http://127.0.0.1:4000';
+const LOCAL_API_ORIGIN = process.env.LOCAL_API_ORIGIN || process.env.NEXT_PUBLIC_BACKEND_ORIGIN || 'http://127.0.0.1:4000';
 const isDemoBuild = process.env.NEXT_PUBLIC_DEMO_MODE === 'true' || process.env.DEMO_EXPORT === 'true';
 const basePath = (process.env.NEXT_PUBLIC_BASE_PATH || '').replace(/\/$/, '');
 const allowedDevOrigins = (process.env.ALLOWED_DEV_ORIGINS || '127.0.0.1,localhost')

@@ -8,15 +8,24 @@ type GatewayLocation = {
 
 export const resolveGatewayBase = (
   location: GatewayLocation,
-  { basePath = '', demoMode = false }: { basePath?: string; demoMode?: boolean } = {}
+  {
+    basePath = '',
+    backendOrigin = '',
+    demoMode = false,
+  }: { basePath?: string; backendOrigin?: string; demoMode?: boolean } = {}
 ) => {
   if (demoMode) {
     return `${location.origin}${basePath}`;
   }
 
+  const normalizedBackendOrigin = String(backendOrigin || '').trim().replace(/\/+$/, '');
+  if (normalizedBackendOrigin) {
+    return normalizedBackendOrigin;
+  }
+
   const normalizedPort = String(location.port || '').trim();
   if (normalizedPort === '3000') {
-    return `${location.protocol}//${location.hostname}:8088`;
+    return `${location.protocol}//${location.hostname}:4000`;
   }
 
   return `${location.protocol}//${location.host}`;

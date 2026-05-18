@@ -57,6 +57,9 @@ MEDIA_TRANSCODE_DIR="${MEDIA_TRANSCODE_DIR:-$MEDIA_SCRATCH_ROOT/cache/jellyfin}"
 MEDIA_MISC_CACHE_DIR="${MEDIA_MISC_CACHE_DIR:-$MEDIA_SCRATCH_ROOT/cache/misc}"
 JELLYFIN_BIND_HOST="${JELLYFIN_BIND_HOST:-127.0.0.1}"
 JELLYFIN_PORT="${JELLYFIN_PORT:-8096}"
+JELLYFIN_CPUSET="${JELLYFIN_CPUSET:-0-2}"
+JELLYFIN_NICE="${JELLYFIN_NICE:-5}"
+JELLYFIN_STARTUP_TIMEOUT="${JELLYFIN_STARTUP_TIMEOUT:-180}"
 JELLYFIN_PID_PATH="${JELLYFIN_PID_PATH:-$RUNTIME_DIR/jellyfin.pid}"
 JELLYFIN_LOG_PATH="${JELLYFIN_LOG_PATH:-$LOG_DIR/jellyfin.log}"
 JELLYFIN_BIN="${JELLYFIN_BIN:-$(command -v jellyfin-server || command -v jellyfin || true)}"
@@ -106,10 +109,29 @@ is_running() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+listener_ready() {
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsS --max-time 2 "http://$JELLYFIN_BIND_HOST:$JELLYFIN_PORT/health" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$JELLYFIN_PORT$" && return 0
+    fi
+
+    if command -v nc >/dev/null 2>&1; then
+        nc -z -w 2 "$JELLYFIN_BIND_HOST" "$JELLYFIN_PORT" >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
 start_service() {
     local command_str=""
     local pid=""
     local launch_script=""
+    local -a launch_prefix=()
 
     [ -n "$JELLYFIN_BIN" ] || {
         echo "jellyfin-server is not installed" >&2
@@ -126,8 +148,15 @@ start_service() {
 
     rm -f "$JELLYFIN_PID_PATH"
     launch_script="$RUNTIME_DIR/jellyfin-launch.sh"
+    if [ -n "$JELLYFIN_CPUSET" ] && command -v taskset >/dev/null 2>&1; then
+        launch_prefix+=(taskset -c "$JELLYFIN_CPUSET")
+    fi
+    if command -v nice >/dev/null 2>&1; then
+        launch_prefix+=(nice -n "$JELLYFIN_NICE")
+    fi
 
     printf -v command_str '%q ' \
+        "${launch_prefix[@]}" \
         env \
         HOME="$JELLYFIN_HOME" \
         XDG_CACHE_HOME="$JELLYFIN_MISC_CACHE_DIR" \
@@ -158,12 +187,39 @@ EOF
         nohup "$launch_script" < /dev/null &
         printf '%s\n' "$!" > "$JELLYFIN_PID_PATH"
     fi
-    sleep 2
+    local waited=0
+    local timeout=0
+    timeout="$JELLYFIN_STARTUP_TIMEOUT"
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        timeout=180
+    fi
+
+    while [ "$waited" -lt "$timeout" ]; do
+        pid="$(read_pid || true)"
+        if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+            break
+        fi
+        if listener_ready; then
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+
     pid="$(read_pid || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" >/dev/null 2>&1 || true
+        sleep 1
+        kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+    if tmux_session_exists; then
+        tmux kill-session -t "$JELLYFIN_TMUX_SESSION" 2>/dev/null || true
+    fi
+    rm -f "$JELLYFIN_PID_PATH"
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
         rm -f "$JELLYFIN_PID_PATH"
-        return 1
     fi
+    return 1
 }
 
 stop_service() {
@@ -197,17 +253,24 @@ stop_service() {
 status_json() {
     local running=false
     local status="stopped"
+    local listener=false
     local checked_at=""
 
     if is_running; then
-        running=true
-        status="running"
+        if listener_ready; then
+            running=true
+            listener=true
+            status="running"
+        else
+            status="starting"
+        fi
     fi
 
     checked_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    printf '{"service":"%s","running":%s,"status":"%s","checkedAt":"%s"}\n' \
+    printf '{"service":"%s","running":%s,"listenerReady":%s,"status":"%s","checkedAt":"%s"}\n' \
         "$SERVICE_NAME" \
         "$running" \
+        "$listener" \
         "$status" \
         "$checked_at"
 }

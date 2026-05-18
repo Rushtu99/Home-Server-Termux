@@ -91,6 +91,7 @@ const createHealthManager = ({
   const serviceState = new Map();
   const restartHistory = new Map();
   let timer = null;
+  let runCheckPromise = null;
 
   const log = (message, meta = {}) => {
     if (logger && typeof logger.info === 'function') {
@@ -137,6 +138,11 @@ const createHealthManager = ({
   };
 
   const runCheck = async () => {
+    if (runCheckPromise) {
+      return runCheckPromise;
+    }
+
+    runCheckPromise = (async () => {
     if (!serviceManager || typeof serviceManager.listControlTargets !== 'function') {
       return {
         generatedAt: new Date(now()).toISOString(),
@@ -263,6 +269,12 @@ const createHealthManager = ({
     }
 
     return snapshot;
+    })()
+      .finally(() => {
+        runCheckPromise = null;
+      });
+
+    return runCheckPromise;
   };
 
   const start = () => {

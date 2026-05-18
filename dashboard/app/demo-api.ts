@@ -2594,7 +2594,11 @@ const handleDemoRequest = async (path: string, init?: RequestInit) => {
 
 export const appFetch = async (input: string, init?: RequestInit) => {
   if (!isDemoMode()) {
-    return fetch(input, { ...init, credentials: init?.credentials || 'include' });
+    const normalizedInput = String(input || '');
+    const resolvedInput = normalizedInput.startsWith('/api/')
+      ? withBasePath(normalizedInput)
+      : normalizedInput;
+    return fetch(resolvedInput, { ...init, credentials: init?.credentials || 'include' });
   }
 
   return handleDemoRequest(input, init);

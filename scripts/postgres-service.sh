@@ -94,21 +94,75 @@ is_healthy() {
     is_running && is_listening
 }
 
+cleanup_orphaned_postgres() {
+    local pids=""
+    local pid=""
+
+    pids="$(pgrep -f "postgres -D $POSTGRES_DATA_DIR" 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+
+    if is_listening; then
+        return 0
+    fi
+
+    for pid in $pids; do
+        kill "$pid" >/dev/null 2>&1 || true
+    done
+    sleep 2
+    for pid in $pids; do
+        kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
+    done
+    rm -f "$POSTGRES_DATA_DIR/postmaster.pid"
+}
+
+force_cleanup_postgres() {
+    local pid=""
+    cleanup_orphaned_postgres || true
+
+    if [ -f "$POSTGRES_DATA_DIR/postmaster.pid" ]; then
+        pid="$(sed -n '1p' "$POSTGRES_DATA_DIR/postmaster.pid" 2>/dev/null || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" >/dev/null 2>&1; then
+            kill "$pid" >/dev/null 2>&1 || true
+            sleep 2
+            kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
+        fi
+        rm -f "$POSTGRES_DATA_DIR/postmaster.pid"
+    fi
+}
+
 start_service() {
+    local pg_ctl_rc=0
+    local attempts=0
+    local max_attempts=120
+    local started=false
+
     ensure_cluster
+    cleanup_orphaned_postgres
     if is_healthy; then
         return 0
     fi
 
     if is_running && ! is_listening; then
         "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" stop -m fast >/dev/null 2>&1 || true
+        force_cleanup_postgres
         sleep 1
     fi
 
-    "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" -l "$POSTGRES_LOG_PATH" -o "-h $POSTGRES_BIND_HOST -p $POSTGRES_PORT -k $POSTGRES_SOCKET_DIR" start >/dev/null
+    if ! "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" -l "$POSTGRES_LOG_PATH" -o "-h $POSTGRES_BIND_HOST -p $POSTGRES_PORT -k $POSTGRES_SOCKET_DIR" start >/dev/null; then
+        pg_ctl_rc=$?
+        if ! is_listening; then
+            force_cleanup_postgres
+            pg_ctl_rc=0
+            if "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" -l "$POSTGRES_LOG_PATH" -o "-h $POSTGRES_BIND_HOST -p $POSTGRES_PORT -k $POSTGRES_SOCKET_DIR" start >/dev/null; then
+                started=true
+            else
+                pg_ctl_rc=$?
+            fi
+        fi
+    else
+        started=true
+    fi
 
-    local attempts=0
-    local max_attempts=60
     while [ "$attempts" -lt "$max_attempts" ]; do
         if is_healthy; then
             "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" status | awk '/PID:/ { print $2 }' | tr -d ',' > "$POSTGRES_PID_PATH" || true
@@ -120,6 +174,12 @@ start_service() {
     done
 
     "$PG_CTL_BIN" -D "$POSTGRES_DATA_DIR" status | awk '/PID:/ { print $2 }' | tr -d ',' > "$POSTGRES_PID_PATH" || true
+    if [ "$pg_ctl_rc" -ne 0 ]; then
+        return "$pg_ctl_rc"
+    fi
+    if [ "$started" = false ]; then
+        return 1
+    fi
     return 1
 }
 

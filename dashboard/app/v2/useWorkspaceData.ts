@@ -5,6 +5,8 @@ import { fetchControlPlaneSnapshot, fetchUiBootstrap, fetchUiInitialPayload, fet
 import { DEFAULT_WORKSPACE, resolveWorkspaceFromQuery } from './workspaceMap';
 import type { NormalizedUiInitial, UiBootstrapResponse, UiWorkspaceResponse, WorkspaceKey } from './types';
 
+const CONTROL_PLANE_CACHE_TTL_MS = 15000;
+
 type UseWorkspaceDataResult = {
   activeWorkspace: WorkspaceKey;
   displayedWorkspace: WorkspaceKey;
@@ -17,6 +19,7 @@ type UseWorkspaceDataResult = {
   setActiveWorkspace: (workspace: WorkspaceKey) => void;
   transitionLabel: string;
   reloadWorkspace: () => void;
+  prefetchWorkspaceIntent: (workspace: WorkspaceKey) => void;
   workspaceData: UiWorkspaceResponse | null;
   workspaceError: string;
   loadingWorkspace: boolean;
@@ -39,10 +42,13 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
   const workspaceRequestRef = useRef(0);
   const loadedWorkspaceKeyRef = useRef('');
   const workspaceCacheRef = useRef<Map<string, UiWorkspaceResponse>>(new Map());
+  const prefetchedWorkspacesRef = useRef<Set<string>>(new Set());
   const controlPlaneRef = useRef<UiWorkspaceResponse['controlPlane'] | null>(null);
+  const controlPlaneFetchedAtRef = useRef(0);
   const controlPlaneInFlightRef = useRef<Promise<UiWorkspaceResponse['controlPlane']> | null>(null);
-  const workspaceFetchInFlightRef = useRef<Promise<[UiWorkspaceResponse, UiWorkspaceResponse['controlPlane'] | null]> | null>(null);
-  const workspaceFetchKeyRef = useRef<WorkspaceKey | ''>('');
+  const workspaceFetchInFlightRef = useRef<Map<string, Promise<UiWorkspaceResponse>>>(new Map());
+  const prefetchQueueRef = useRef<string[]>([]);
+  const prefetchInFlightCountRef = useRef(0);
 
   const mergeControlPlane = useCallback(
     (workspace: UiWorkspaceResponse, controlPlane: UiWorkspaceResponse['controlPlane'] | null): UiWorkspaceResponse => ({
@@ -98,6 +104,89 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     [mergeControlPlane]
   );
 
+  const requestWorkspacePayload = useCallback((workspace: WorkspaceKey): Promise<UiWorkspaceResponse> => {
+    const key = String(workspace);
+    const existing = workspaceFetchInFlightRef.current.get(key);
+    if (existing) {
+      return existing;
+    }
+    const request = fetchWorkspacePayload(workspace)
+      .finally(() => {
+        const current = workspaceFetchInFlightRef.current.get(key);
+        if (current === request) {
+          workspaceFetchInFlightRef.current.delete(key);
+        }
+      });
+    workspaceFetchInFlightRef.current.set(key, request);
+    return request;
+  }, []);
+
+  const flushPrefetchQueue = useCallback((maxConcurrent = 2) => {
+    while (prefetchInFlightCountRef.current < maxConcurrent && prefetchQueueRef.current.length > 0) {
+      const normalized = String(prefetchQueueRef.current.shift() || '').trim();
+      if (!normalized || workspaceCacheRef.current.has(normalized) || prefetchedWorkspacesRef.current.has(normalized)) {
+        continue;
+      }
+      prefetchedWorkspacesRef.current.add(normalized);
+      prefetchInFlightCountRef.current += 1;
+      void requestWorkspacePayload(normalized as WorkspaceKey)
+        .then((payload) => {
+          const resolvedKey = String(payload.workspaceKey || normalized);
+          const mergedPayload = mergeControlPlane(payload, controlPlaneRef.current);
+          workspaceCacheRef.current.set(resolvedKey, mergedPayload);
+        })
+        .catch(() => {
+          prefetchedWorkspacesRef.current.delete(normalized);
+        })
+        .finally(() => {
+          prefetchInFlightCountRef.current = Math.max(0, prefetchInFlightCountRef.current - 1);
+          flushPrefetchQueue(maxConcurrent);
+        });
+    }
+  }, [mergeControlPlane, requestWorkspacePayload]);
+
+  const queueWorkspacePrefetch = useCallback((workspace: WorkspaceKey, { prioritize = false } = {}) => {
+    const normalized = String(workspace || '').trim();
+    if (!normalized || workspaceCacheRef.current.has(normalized) || prefetchedWorkspacesRef.current.has(normalized)) {
+      return;
+    }
+    if (prefetchQueueRef.current.includes(normalized)) {
+      if (prioritize) {
+        prefetchQueueRef.current = [normalized, ...prefetchQueueRef.current.filter((entry) => entry !== normalized)];
+      }
+      return;
+    }
+    if (prioritize) {
+      prefetchQueueRef.current.unshift(normalized);
+    } else {
+      prefetchQueueRef.current.push(normalized);
+    }
+  }, []);
+
+  const prefetchWorkspaces = useCallback((workspaceKeys: WorkspaceKey[]) => {
+    if (!workspaceKeys.length) {
+      return;
+    }
+    const priorityOrder = ['overview', 'media', 'files', 'transfers'];
+    const secondaryOrder = ['ai', 'terminal'];
+    for (const key of priorityOrder) {
+      if (workspaceKeys.includes(key as WorkspaceKey)) {
+        queueWorkspacePrefetch(key as WorkspaceKey);
+      }
+    }
+    for (const key of secondaryOrder) {
+      if (workspaceKeys.includes(key as WorkspaceKey)) {
+        queueWorkspacePrefetch(key as WorkspaceKey);
+      }
+    }
+    flushPrefetchQueue(2);
+  }, [flushPrefetchQueue, queueWorkspacePrefetch]);
+
+  const prefetchWorkspaceIntent = useCallback((workspace: WorkspaceKey) => {
+    queueWorkspacePrefetch(workspace, { prioritize: true });
+    flushPrefetchQueue(2);
+  }, [flushPrefetchQueue, queueWorkspacePrefetch]);
+
   const setActiveWorkspace = useCallback((workspace: WorkspaceKey) => {
     setActiveWorkspaceState(workspace);
     if (typeof window === 'undefined') {
@@ -120,7 +209,17 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     setWorkspaceReloadTick((current) => current + 1);
   }, []);
 
-  const loadControlPlaneSnapshot = useCallback(async () => {
+  const loadControlPlaneSnapshot = useCallback(async (force = false) => {
+    const now = Date.now();
+    if (
+      !force
+      && controlPlaneRef.current
+      && controlPlaneFetchedAtRef.current > 0
+      && now - controlPlaneFetchedAtRef.current < CONTROL_PLANE_CACHE_TTL_MS
+    ) {
+      return controlPlaneRef.current;
+    }
+
     if (controlPlaneInFlightRef.current) {
       return controlPlaneInFlightRef.current;
     }
@@ -139,6 +238,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
         workflows: snapshot.workflows,
       };
       controlPlaneRef.current = controlPlane;
+      controlPlaneFetchedAtRef.current = Date.now();
       return controlPlane;
     }).finally(() => {
       if (controlPlaneInFlightRef.current === request) {
@@ -154,10 +254,13 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
     setSessionInactive(true);
     loadedWorkspaceKeyRef.current = '';
     workspaceCacheRef.current.clear();
+    prefetchedWorkspacesRef.current.clear();
+    prefetchQueueRef.current = [];
+    prefetchInFlightCountRef.current = 0;
     controlPlaneRef.current = null;
+    controlPlaneFetchedAtRef.current = 0;
     controlPlaneInFlightRef.current = null;
-    workspaceFetchInFlightRef.current = null;
-    workspaceFetchKeyRef.current = '';
+    workspaceFetchInFlightRef.current.clear();
     setBootstrap(null);
     setBootstrapError('Login required');
     setDisplayedWorkspace(DEFAULT_WORKSPACE);
@@ -219,10 +322,18 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
           return;
         }
         applyInitialPayload(requestedWorkspace, payload);
-        const controlPlane = await loadControlPlaneSnapshot().catch(() => null);
-        if (!cancelled && controlPlane) {
+        const navWorkspaces = Array.isArray(payload.bootstrap?.nav)
+          ? payload.bootstrap.nav
+            .map((entry) => String(entry?.key || '').trim())
+            .filter(Boolean) as WorkspaceKey[]
+          : [];
+        prefetchWorkspaces(navWorkspaces);
+        void loadControlPlaneSnapshot().then((controlPlane) => {
+          if (cancelled || !controlPlane) {
+            return;
+          }
           setWorkspaceData((current) => (current ? mergeControlPlane(current, controlPlane) : current));
-        }
+        }).catch(() => null);
       } catch (error) {
         if (cancelled) {
           return;
@@ -265,7 +376,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       cancelled = true;
       window.clearInterval(bootstrapTimer);
     };
-  }, [applyInitialPayload, bootstrapReloadTick, isHidden, loadControlPlaneSnapshot, mergeControlPlane, sessionInactive]);
+  }, [applyInitialPayload, bootstrapReloadTick, isHidden, loadControlPlaneSnapshot, mergeControlPlane, prefetchWorkspaces, sessionInactive]);
 
   useEffect(() => {
     if (sessionInactive) {
@@ -291,31 +402,31 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       setLoadingWorkspace(!hasDisplayedWorkspace);
       setIsWorkspaceStale(hasDisplayedWorkspace && !cachedWorkspace);
       try {
-        let request = workspaceFetchInFlightRef.current;
-        if (!request || workspaceFetchKeyRef.current !== activeWorkspace) {
-          workspaceFetchKeyRef.current = activeWorkspace;
-          request = Promise.all([
-            fetchWorkspacePayload(activeWorkspace),
-            loadControlPlaneSnapshot().catch(() => controlPlaneRef.current),
-          ]).finally(() => {
-            if (workspaceFetchInFlightRef.current === request) {
-              workspaceFetchInFlightRef.current = null;
-            }
-          });
-          workspaceFetchInFlightRef.current = request;
-        }
-
-        const [payload, controlPlane] = await request;
+        const payload = await requestWorkspacePayload(activeWorkspace);
         if (cancelled || requestId !== workspaceRequestRef.current) {
           return;
         }
-        const mergedPayload = mergeControlPlane(payload, controlPlane);
+        const mergedPayload = mergeControlPlane(payload, controlPlaneRef.current);
         workspaceCacheRef.current.set(String(payload.workspaceKey || activeWorkspace), mergedPayload);
         setWorkspaceData(mergedPayload);
         loadedWorkspaceKeyRef.current = String(payload.workspaceKey || activeWorkspace);
         setDisplayedWorkspace(String(payload.workspaceKey || activeWorkspace) as WorkspaceKey);
         setWorkspaceError('');
         setIsWorkspaceStale(false);
+        void loadControlPlaneSnapshot(activeWorkspace === 'admin').then((controlPlane) => {
+          if (cancelled || requestId !== workspaceRequestRef.current || !controlPlane) {
+            return;
+          }
+          setWorkspaceData((current) => {
+            if (!current) {
+              return current;
+            }
+            if (String(current.workspaceKey || '') !== String(payload.workspaceKey || activeWorkspace)) {
+              return current;
+            }
+            return mergeControlPlane(current, controlPlane);
+          });
+        }).catch(() => null);
       } catch (error) {
         if (cancelled || requestId !== workspaceRequestRef.current) {
           return;
@@ -341,7 +452,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       cancelled = true;
       window.clearInterval(workspaceTimer);
     };
-  }, [activeWorkspace, isHidden, loadControlPlaneSnapshot, mergeControlPlane, sessionInactive, workspaceReloadTick, workspaceData]);
+  }, [activeWorkspace, isHidden, loadControlPlaneSnapshot, mergeControlPlane, requestWorkspacePayload, sessionInactive, workspaceReloadTick, workspaceData]);
 
   const transitionLabel = useMemo(() => {
     if (!isWorkspaceStale || displayedWorkspace === activeWorkspace) {
@@ -363,6 +474,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       setActiveWorkspace,
       transitionLabel,
       reloadWorkspace,
+      prefetchWorkspaceIntent,
       workspaceData,
       workspaceError,
       loadingWorkspace,
@@ -378,6 +490,7 @@ export function useWorkspaceData(): UseWorkspaceDataResult {
       reloadBootstrap,
       loadingWorkspace,
       reloadWorkspace,
+      prefetchWorkspaceIntent,
       setActiveWorkspace,
       transitionLabel,
       workspaceData,

@@ -39,13 +39,19 @@ const buildServiceHandlers = ({
   };
 
   const servicesHandler = async (req, res) => {
-    const [result, controlledServiceNames, serviceCatalog] = await Promise.all([
-      getServicesSnapshot(),
+    const [controlledServiceNames, serviceCatalog] = await Promise.all([
       getControlledServiceNames(),
       controlPlane && typeof controlPlane.buildCanonicalCatalog === 'function'
         ? controlPlane.buildCanonicalCatalog()
         : buildServiceCatalog(),
     ]);
+    const result = serviceCatalog.reduce((acc, entry) => {
+      if (entry.type !== 'service' || !entry.available) {
+        return acc;
+      }
+      acc[entry.key] = entry.status === 'working' || entry.status === 'external';
+      return acc;
+    }, {});
 
     pushDebugEvent('info', 'Services snapshot served', { count: Object.keys(result).length });
     res.json({

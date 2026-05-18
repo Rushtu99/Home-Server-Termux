@@ -16,6 +16,8 @@ BAZARR_PID_PATH="${BAZARR_PID_PATH:-$RUNTIME_DIR/bazarr.pid}"
 BAZARR_LOG_PATH="${BAZARR_LOG_PATH:-$LOG_DIR/bazarr.log}"
 BAZARR_CONFIG_DIR="${BAZARR_CONFIG_DIR:-$BAZARR_HOME/data}"
 BAZARR_TMUX_SESSION="${BAZARR_TMUX_SESSION:-hmstx-bazarr}"
+BAZARR_CPUSET="${BAZARR_CPUSET:-5}"
+BAZARR_NICE="${BAZARR_NICE:-10}"
 SYSTEM_PYTHON_SITE_PACKAGES="${SYSTEM_PYTHON_SITE_PACKAGES:-/data/data/com.termux/files/usr/lib/python3.13/site-packages}"
 BAZARR_PYTHONPATH="${BAZARR_PYTHONPATH:-$SYSTEM_PYTHON_SITE_PACKAGES}"
 BAZARR_MEDIA_BIN_DIR="${BAZARR_MEDIA_BIN_DIR:-/data/data/com.termux/files/usr/opt/jellyfin/bin}"
@@ -92,6 +94,7 @@ start_service() {
     local runtime_path=""
     local runtime_pythonpath=""
     local pid=""
+    local -a launch_prefix=()
 
     if is_running; then
         return 0
@@ -107,8 +110,15 @@ start_service() {
     if [ -n "${PYTHONPATH:-}" ]; then
         runtime_pythonpath="$runtime_pythonpath:$PYTHONPATH"
     fi
+    if [ -n "$BAZARR_CPUSET" ] && command -v taskset >/dev/null 2>&1; then
+        launch_prefix+=(taskset -c "$BAZARR_CPUSET")
+    fi
+    if command -v nice >/dev/null 2>&1; then
+        launch_prefix+=(nice -n "$BAZARR_NICE")
+    fi
 
     printf -v command_str '%q ' \
+        "${launch_prefix[@]}" \
         env \
         BAZARR_HOST="$BAZARR_BIND_HOST" \
         BAZARR_PORT="$BAZARR_PORT" \

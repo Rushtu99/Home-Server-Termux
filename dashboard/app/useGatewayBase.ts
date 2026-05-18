@@ -9,6 +9,7 @@ export function useGatewayBase() {
   }
 
   return resolveGatewayBase(window.location, {
+    backendOrigin: process.env.NEXT_PUBLIC_BACKEND_ORIGIN || '',
     basePath: getBasePath(),
     demoMode: isDemoMode(),
   });

@@ -36,6 +36,73 @@ load_shell_env_file() {
 }
 
 load_shell_env_file "$SERVER_ENV_FILE"
+
+if [ "${1:-run}" = "status" ]; then
+    STATUS_JSON_FAST=0
+    if [ "${2:-}" = "--json" ]; then
+        STATUS_JSON_FAST=1
+    fi
+
+    MEDIA_IMPORT_LOG_DIR_FAST="${MEDIA_IMPORT_LOG_DIR:-}"
+    if [ -z "$MEDIA_IMPORT_LOG_DIR_FAST" ] && [ -n "${MEDIA_SCRATCH_ROOT:-}" ]; then
+        MEDIA_IMPORT_LOG_DIR_FAST="$MEDIA_SCRATCH_ROOT/logs"
+    fi
+    if [ -z "$MEDIA_IMPORT_LOG_DIR_FAST" ]; then
+        MEDIA_IMPORT_LOG_DIR_FAST="$PROJECT/runtime/HmSTxScratch/logs"
+    fi
+
+    first_existing_file_fast() {
+        local fallback="$1"
+        shift || true
+        local candidate=""
+        for candidate in "$@"; do
+            [ -n "$candidate" ] || continue
+            if [ -f "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        done
+        printf '%s\n' "$fallback"
+        return 1
+    }
+
+    MEDIA_IMPORT_STATUS_FILE_FAST="$(first_existing_file_fast \
+        "${MEDIA_IMPORT_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR_FAST/import-status.json}" \
+        "${MEDIA_IMPORT_STATUS_FILE:-}" \
+        "$MEDIA_IMPORT_LOG_DIR_FAST/import-status.json" \
+        "${MEDIA_SCRATCH_ROOT:-}/logs/import-status.json" \
+        "$PROJECT/runtime/HmSTxScratch/logs/import-status.json")"
+    MEDIA_CLEANUP_STATUS_FILE_FAST="$(first_existing_file_fast \
+        "${MEDIA_CLEANUP_STATUS_FILE:-$MEDIA_IMPORT_LOG_DIR_FAST/cleanup-status.json}" \
+        "${MEDIA_CLEANUP_STATUS_FILE:-}" \
+        "$MEDIA_IMPORT_LOG_DIR_FAST/cleanup-status.json" \
+        "${MEDIA_SCRATCH_ROOT:-}/logs/cleanup-status.json" \
+        "$PROJECT/runtime/HmSTxScratch/logs/cleanup-status.json")"
+
+    import_payload_fast="$(cat "$MEDIA_IMPORT_STATUS_FILE_FAST" 2>/dev/null || true)"
+    cleanup_payload_fast="$(cat "$MEDIA_CLEANUP_STATUS_FILE_FAST" 2>/dev/null || true)"
+
+    if [ "$STATUS_JSON_FAST" -eq 1 ]; then
+        printf '{\n'
+        printf '  "import": %s,\n' "${import_payload_fast:-null}"
+        printf '  "cleanup": %s\n' "${cleanup_payload_fast:-null}"
+        printf '}\n'
+    else
+        if [ -n "$import_payload_fast" ]; then
+            printf 'Import status:\n%s\n' "$import_payload_fast"
+        else
+            printf 'Import status: none\n'
+        fi
+
+        if [ -n "$cleanup_payload_fast" ]; then
+            printf '\nCleanup status:\n%s\n' "$cleanup_payload_fast"
+        else
+            printf '\nCleanup status: none\n'
+        fi
+    fi
+    exit 0
+fi
+
 . "$PROJECT/scripts/drive-common.sh"
 
 if type ensure_primary_mounts_checked_cached >/dev/null 2>&1; then

@@ -174,10 +174,14 @@ const createControlPlane = ({
   };
 
   const snapshotServiceState = async () => {
-    const [catalog, servicesSnapshot] = await Promise.all([
-      buildCanonicalCatalog(),
-      getLegacyServicesSnapshot(),
-    ]);
+    const catalog = await buildCanonicalCatalog();
+    const servicesSnapshot = catalog.reduce((acc, entry) => {
+      if (entry.type !== 'service' || !entry.available) {
+        return acc;
+      }
+      acc[entry.key] = entry.status === 'working' || entry.status === 'external';
+      return acc;
+    }, {});
 
     const snapshot = buildServiceStateSnapshot({
       catalog,

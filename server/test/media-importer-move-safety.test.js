@@ -51,13 +51,34 @@ const createHarness = (extraEnv = {}) => {
   fs.mkdirSync(downloadsDir, { recursive: true });
   fs.mkdirSync(moviesDir, { recursive: true });
 
+  const isolatedEnv = { ...process.env };
+  for (const key of Object.keys(isolatedEnv)) {
+    if (
+      key.startsWith('MEDIA_')
+      || key.startsWith('QBITTORRENT_')
+      || key === 'SERVER_ENV_FILE'
+      || key === 'PROJECT'
+      || key === 'RUNTIME_DIR'
+    ) {
+      delete isolatedEnv[key];
+    }
+  }
+
   const baseEnv = {
-    ...process.env,
+    ...isolatedEnv,
     PROJECT: repoRoot,
     SERVER_ENV_FILE: path.join(root, 'server.env.missing'),
     RUNTIME_DIR: runtimeDir,
     MEDIA_VAULT_ROOT: vaultRoot,
+    MEDIA_VAULT_ROOTS: vaultRoot,
     MEDIA_SCRATCH_ROOT: scratchRoot,
+    MEDIA_SCRATCH_ROOTS: scratchRoot,
+    MEDIA_DOWNLOADS_DIR: downloadsDir,
+    MEDIA_DOWNLOADS_MOVIES_DIR: path.join(downloadsDir, 'movies'),
+    MEDIA_DOWNLOADS_SERIES_DIR: path.join(downloadsDir, 'series'),
+    MEDIA_DOWNLOADS_MANUAL_DIR: path.join(downloadsDir, 'manual'),
+    MEDIA_DOWNLOADS_TORRENT_DIR: path.join(downloadsDir, 'torrent'),
+    MEDIA_DOWNLOADS_TORRENT_QBIT_DIR: path.join(downloadsDir, 'torrent', 'qbit'),
     MEDIA_SMALL_DOWNLOADS_DIR: path.join(scratchRoot, 'small'),
     MEDIA_IMPORT_REVIEW_DIR: path.join(scratchRoot, 'review'),
     MEDIA_IMPORT_LOG_DIR: logsDir,
@@ -69,6 +90,8 @@ const createHarness = (extraEnv = {}) => {
     MEDIA_IMPORT_ABORT_FREE_GB: '0',
     MEDIA_SCRATCH_MIN_FREE_GB: '0',
     MEDIA_SCRATCH_CLEANUP_ENABLED: 'false',
+    QBITTORRENT_BIND_HOST: '127.0.0.1',
+    QBITTORRENT_PORT: '1',
     ...extraEnv,
   };
 
@@ -115,7 +138,7 @@ afterEach(async () => {
       await removeDirWithRetry(root);
     }
   }
-});
+}, 30000);
 
 describe('media importer move safety', () => {
   it('moves content with verification and removes source (forced copy-move path)', () => {

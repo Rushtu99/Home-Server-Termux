@@ -36,6 +36,13 @@ load_shell_env_file() {
 
 load_shell_env_file "$SERVER_ENV_FILE"
 
+ORIGINAL_MEDIA_DOWNLOADS_DIR="${MEDIA_DOWNLOADS_DIR:-}"
+ORIGINAL_MEDIA_DOWNLOADS_MOVIES_DIR="${MEDIA_DOWNLOADS_MOVIES_DIR:-}"
+ORIGINAL_MEDIA_DOWNLOADS_SERIES_DIR="${MEDIA_DOWNLOADS_SERIES_DIR:-}"
+ORIGINAL_MEDIA_DOWNLOADS_MANUAL_DIR="${MEDIA_DOWNLOADS_MANUAL_DIR:-}"
+ORIGINAL_MEDIA_DOWNLOADS_TORRENT_DIR="${MEDIA_DOWNLOADS_TORRENT_DIR:-}"
+ORIGINAL_MEDIA_DOWNLOADS_TORRENT_QBIT_DIR="${MEDIA_DOWNLOADS_TORRENT_QBIT_DIR:-}"
+
 if [ -f "$PROJECT/scripts/drive-common.sh" ]; then
     . "$PROJECT/scripts/drive-common.sh"
 fi
@@ -68,9 +75,13 @@ QBITTORRENT_LOG_PATH="${QBITTORRENT_LOG_PATH:-$LOG_DIR/qbittorrent.log}"
 QBITTORRENT_BIN="${QBITTORRENT_BIN:-$(command -v qbittorrent-nox || true)}"
 QBITTORRENT_CONFIG_PATH="${QBITTORRENT_CONFIG_PATH:-$QBITTORRENT_HOME/qBittorrent/config/qBittorrent.conf}"
 QBITTORRENT_CONFIG_BACKUP_PATH="${QBITTORRENT_CONFIG_BACKUP_PATH:-$QBITTORRENT_HOME/qBittorrent/config/qBittorrent.conf.bak}"
-QBITTORRENT_FINISHED_CMD="${QBITTORRENT_FINISHED_CMD:-$MEDIA_IMPORTER_CMD import --trigger qb-finish --source \"%F\"}"
+QBITTORRENT_FINISHED_CMD="${QBITTORRENT_FINISHED_CMD-$MEDIA_IMPORTER_CMD import --trigger qb-finish --source \"%F\"}"
 SERVICE_NAME="qbittorrent"
 MEDIA_FALLBACK_ROOT="${MEDIA_FALLBACK_ROOT:-$PROJECT/runtime/HmSTxScratch}"
+CUSTOM_DOWNLOAD_PATHS=false
+if [ -n "$ORIGINAL_MEDIA_DOWNLOADS_DIR" ] || [ -n "$ORIGINAL_MEDIA_DOWNLOADS_MOVIES_DIR" ] || [ -n "$ORIGINAL_MEDIA_DOWNLOADS_SERIES_DIR" ] || [ -n "$ORIGINAL_MEDIA_DOWNLOADS_MANUAL_DIR" ] || [ -n "$ORIGINAL_MEDIA_DOWNLOADS_TORRENT_DIR" ] || [ -n "$ORIGINAL_MEDIA_DOWNLOADS_TORRENT_QBIT_DIR" ]; then
+    CUSTOM_DOWNLOAD_PATHS=true
+fi
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$(dirname "$QBITTORRENT_CONFIG_PATH")"
 
@@ -89,6 +100,23 @@ ensure_download_paths() {
         MEDIA_DOWNLOADS_TORRENT_QBIT_DIR="$MEDIA_DOWNLOADS_TORRENT_DIR/qbit"
         MEDIA_QBIT_TMP_DIR="$try_root/tmp/qbittorrent"
     }
+
+    if [ "$CUSTOM_DOWNLOAD_PATHS" = "true" ]; then
+        for path in \
+            "$MEDIA_DOWNLOADS_DIR" \
+            "$MEDIA_DOWNLOADS_MOVIES_DIR" \
+            "$MEDIA_DOWNLOADS_SERIES_DIR" \
+            "$MEDIA_DOWNLOADS_MANUAL_DIR" \
+            "$MEDIA_DOWNLOADS_TORRENT_DIR" \
+            "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR" \
+            "$MEDIA_QBIT_TMP_DIR"; do
+            mkdir -p "$path" >/dev/null 2>&1 || {
+                echo "qBittorrent custom path is unavailable: $path" >&2
+                return 1
+            }
+        done
+        return 0
+    fi
 
     while :; do
         retry_required=0
@@ -246,11 +274,12 @@ EOF
     upsert_config_key 'Categories\series\SavePath' "$MEDIA_DOWNLOADS_SERIES_DIR"
     upsert_config_key 'Categories\manual\SavePath' "$MEDIA_DOWNLOADS_MANUAL_DIR"
     upsert_config_key 'Categories\standalone\SavePath' "$MEDIA_DOWNLOADS_TORRENT_QBIT_DIR"
-    if [ -x "$MEDIA_IMPORTER_CMD" ]; then
+    if [ -n "$QBITTORRENT_FINISHED_CMD" ] && [ -x "$MEDIA_IMPORTER_CMD" ]; then
         upsert_config_key 'Session\TorrentFinishedCmdEnabled' "true"
         upsert_config_key 'Session\TorrentFinishedCmd' "$QBITTORRENT_FINISHED_CMD"
     else
         upsert_config_key 'Session\TorrentFinishedCmdEnabled' "false"
+        remove_config_key 'Session\TorrentFinishedCmd'
     fi
     upsert_config_key 'WebUI\Address' "$QBITTORRENT_BIND_HOST"
     upsert_config_key 'WebUI\Port' "$QBITTORRENT_PORT"

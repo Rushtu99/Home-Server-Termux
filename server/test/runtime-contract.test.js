@@ -24,6 +24,7 @@ const applyTestEnv = (tmpRoot) => {
   process.env.ADMIN_ACTION_PASSWORD = 'test-admin-password';
   process.env.COOKIE_SECURE = 'false';
   process.env.ENABLE_SSHD = 'false';
+  delete process.env.POLL_INTERVAL_MS;
 };
 
 describe('runtime contract', () => {
@@ -56,10 +57,26 @@ describe('runtime contract', () => {
     expect(runtime).toBeTruthy();
     expect(runtime.app).toBeTruthy();
     expect(typeof runtime.app.listen).toBe('function');
-    expect(runtime.polling.intervalMs).toBe(10000);
+    expect(runtime.polling.intervalMs).toBe(30000);
     expect(runtime.polling.enabled).toBe(false);
     expect(runtime.routeManifest).toBeTruthy();
     expect(runtime.startupInvariants).toBeTruthy();
+  });
+
+  it('respects POLL_INTERVAL_MS override when valid', () => {
+    process.env.POLL_INTERVAL_MS = '45000';
+    resetRuntimeModuleCache({ repoRoot });
+    const { createApp } = require('../src/main/create-app');
+    const runtime = createApp({ enablePolling: false });
+    expect(runtime.polling.intervalMs).toBe(45000);
+  });
+
+  it('clamps POLL_INTERVAL_MS override to minimum 10000', () => {
+    process.env.POLL_INTERVAL_MS = '5000';
+    resetRuntimeModuleCache({ repoRoot });
+    const { createApp } = require('../src/main/create-app');
+    const runtime = createApp({ enablePolling: false });
+    expect(runtime.polling.intervalMs).toBe(10000);
   });
 
   it('startServer supports enablePolling=false and stopServer closes cleanly', async () => {

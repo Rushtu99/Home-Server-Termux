@@ -8,7 +8,7 @@
     "jsonBodyLimit": "256kb",
     "authRoutesBeforeDualRoutes": true,
     "errorMiddlewareLast": true,
-    "pollIntervalMs": 10000
+    "pollIntervalMs": 30000
   },
   "registrationOrder": {
     "firstAuthRouteIndex": 0,

@@ -14,6 +14,7 @@ import type {
 
 const API = '/api';
 const DEFAULT_REQUEST_TIMEOUT_MS = 20000;
+const DEFAULT_ACTION_REQUEST_TIMEOUT_MS = 120000;
 
 const parseError = async (response: Response) => {
   const payload = await response.json().catch(() => ({} as Record<string, unknown>));
@@ -280,7 +281,7 @@ const postJson = async <T>(url: string, body: Record<string, unknown> = {}): Pro
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  });
+  }, DEFAULT_ACTION_REQUEST_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -291,7 +292,7 @@ const deleteJson = async <T>(url: string): Promise<T> => {
   const response = await appFetchWithTimeout(url, {
     method: 'DELETE',
     credentials: 'include',
-  });
+  }, DEFAULT_ACTION_REQUEST_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -401,10 +402,10 @@ export const updateFtpFavourite = (id: number, payload: Record<string, unknown>)
       method: 'PUT',
       credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
+      'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-    });
+    }, DEFAULT_ACTION_REQUEST_TIMEOUT_MS);
     if (!response.ok) {
       throw new Error(await parseError(response));
     }
